@@ -19,6 +19,12 @@ private let elementIDParam = stringParam(
     "Element id from the latest get_app_state result. Prefer this over coordinates."
 )
 
+private let allowGlobalCursorParam = boolParam(
+    "Escape hatch (default false). When true, uses the real system cursor to deliver "
+        + "the action — this MOVES the pointer and may change focus. Only set it if "
+        + "background delivery did not land for a stubborn app."
+)
+
 let toolCatalog: [ToolSpec] = [
     ToolSpec(
         name: "list_apps",
@@ -65,6 +71,7 @@ let toolCatalog: [ToolSpec] = [
                 "y": numberParam("Y pixel coordinate in the latest screenshot (fallback when no element_id)."),
                 "click_count": integerParam("Number of clicks: 1 (default) or 2 for double-click."),
                 "mouse_button": enumParam(["left", "right", "middle"], "Mouse button. Defaults to left."),
+                "allow_global_cursor": allowGlobalCursorParam,
             ],
             required: ["app"]
         ),
@@ -99,6 +106,7 @@ let toolCatalog: [ToolSpec] = [
             [
                 "app": appParam,
                 "key": stringParam("Key or combination in xdotool syntax, e.g. \"Return\", \"cmd+n\"."),
+                "allow_global_cursor": allowGlobalCursorParam,
             ],
             required: ["app", "key"]
         ),
@@ -118,6 +126,7 @@ let toolCatalog: [ToolSpec] = [
                 "y": numberParam("Y pixel coordinate in the latest screenshot (fallback when no element_id)."),
                 "delta_x": integerParam("Horizontal scroll amount in pixels."),
                 "delta_y": integerParam("Vertical scroll amount in pixels."),
+                "allow_global_cursor": allowGlobalCursorParam,
             ],
             required: ["app"]
         ),
@@ -137,6 +146,7 @@ let toolCatalog: [ToolSpec] = [
                 "from_y": numberParam("Start Y pixel coordinate in the latest screenshot."),
                 "to_x": numberParam("End X pixel coordinate in the latest screenshot."),
                 "to_y": numberParam("End Y pixel coordinate in the latest screenshot."),
+                "allow_global_cursor": allowGlobalCursorParam,
             ],
             required: ["app", "from_x", "from_y", "to_x", "to_y"]
         ),
