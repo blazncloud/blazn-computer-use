@@ -6,9 +6,6 @@ signed Swift binary that exposes macOS computer use as a standard
 CLI, or your own agent at it and the agent can **see and operate the apps on your Mac —
 in the background, without hijacking your cursor or stealing focus.**
 
-Unlike the computer-use capability locked inside tools like OpenAI's Codex app, this runs
-on the Mac you're already using and works with any agent. MIT licensed.
-
 > **Status:** early development. macOS only. Local use while the Mac is unlocked.
 
 ## Why it's different
