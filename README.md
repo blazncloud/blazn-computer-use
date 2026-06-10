@@ -80,7 +80,7 @@ a recoverable `Confirmation required: …` error until the caller retries with
 
 | Variable | Effect |
 | --- | --- |
-| `COMPUTER_USE_MCP_CURSOR=1` | Show the animated agent-cursor overlay (off by default). |
+| `COMPUTER_USE_MCP_CURSOR=0` | Hide the animated agent-cursor overlay (on by default; set 0 for headless/CI). |
 | `COMPUTER_USE_MCP_NO_SAFETY=1` | Disable the safety policy entirely. |
 | `COMPUTER_USE_MCP_CONFIRM_APPS=a,b` | Apps (name or bundle id) where every action needs `confirm`. |
 | `COMPUTER_USE_MCP_DESTRUCTIVE=pat,pat` | Extra destructive label substrings to gate. |

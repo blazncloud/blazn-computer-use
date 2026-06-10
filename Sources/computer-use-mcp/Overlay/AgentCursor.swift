@@ -1,11 +1,11 @@
 // Server-side client for the agent-cursor overlay helper process.
 //
-// Opt-in (off by default) via COMPUTER_USE_MCP_CURSOR=1, so the headless server
-// pays nothing for the overlay in production. When enabled, the server spawns
-// the `overlay` helper once and, before each spatial action, tells it to glide
-// to the target and waits the animation duration — the animate-then-act
-// choreography. The overlay is purely cosmetic; it never moves the real cursor,
-// and a dead/failed helper never blocks or fails the action.
+// On by default; opt out for headless/CI use with COMPUTER_USE_MCP_CURSOR=0.
+// When enabled, the server spawns the `overlay` helper once and, before each
+// spatial action, tells it to glide to the target and waits the animation
+// duration — the animate-then-act choreography. The overlay is purely
+// cosmetic; it never moves the real cursor, and a dead/failed helper never
+// blocks or fails the action.
 
 import Foundation
 
@@ -14,7 +14,7 @@ actor AgentCursor {
 
     private var process: Process?
     private var stdinPipe: Pipe?
-    private let enabled = ProcessInfo.processInfo.environment["COMPUTER_USE_MCP_CURSOR"] == "1"
+    private let enabled = ProcessInfo.processInfo.environment["COMPUTER_USE_MCP_CURSOR"] != "0"
     private let glideDuration = Duration.milliseconds(300)
 
     /// Glide the overlay cursor to a global top-left point, then return so the
