@@ -4,11 +4,11 @@
 import MCP
 
 func listApps(_ args: [String: Value]) async throws -> CallTool.Result {
-    throw ToolError.notImplemented("list_apps")
+    try await listAppsImpl(args)
 }
 
 func getAppState(_ args: [String: Value]) async throws -> CallTool.Result {
-    throw ToolError.notImplemented("get_app_state")
+    try await getAppStateImpl(args)
 }
 
 func click(_ args: [String: Value]) async throws -> CallTool.Result {

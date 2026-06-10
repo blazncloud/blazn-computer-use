@@ -1,6 +1,12 @@
 // computer-use-mcp — entry point.
 
+import CoreGraphics
 import Foundation
+
+// Establish the window-server connection on the main thread before any
+// CoreGraphics/ScreenCaptureKit call runs on a worker thread; without this,
+// CG asserts (CGS_REQUIRE_INIT) in headless CLI processes.
+_ = CGMainDisplayID()
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 
