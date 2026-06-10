@@ -27,7 +27,16 @@ func stateResult(
     // Give the UI a beat to settle after whatever just happened.
     try? await Task.sleep(for: .milliseconds(80))
 
-    let window = try targetWindow(for: app, title: windowTitle)
+    // Actions can close or replace the window they acted in (dialogs,
+    // sheets); fall back to the front window rather than failing.
+    let window: TargetWindow
+    var windowNote: String?
+    do {
+        window = try targetWindow(for: app, title: windowTitle)
+    } catch where windowTitle != nil {
+        window = try targetWindow(for: app, title: nil)
+        windowNote = "Window \"\(windowTitle!)\" is gone; showing the front window instead."
+    }
 
     var capture: WindowCapture?
     var captureNote: String?
@@ -68,6 +77,9 @@ func stateResult(
     var text = ""
     if let note {
         text += note + "\n\n"
+    }
+    if let windowNote {
+        text += windowNote + "\n\n"
     }
     text += "App: \(app.name) (\(app.bundleIdentifier), pid \(app.pid))\n"
     text += "Window: \"\(window.title ?? "untitled")\""
