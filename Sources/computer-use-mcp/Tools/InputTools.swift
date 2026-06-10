@@ -18,7 +18,7 @@ func pressKeyImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         app: app, confirmed: confirmed
     )
 
-    let window = try? targetWindow(for: app, title: SnapshotStore.load(forPid: app.pid)?.windowTitle)
+    let window = try? targetWindow(for: app, title: await SnapshotStore.shared.load(forPid: app.pid)?.windowTitle)
     let context = DeliveryContext(
         pid: app.pid,
         windowNumber: window.flatMap { windowID(for: $0.element) },
@@ -37,7 +37,7 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
     try requireAccessibilityTrusted()
     try SafetyPolicy.check(app: app, confirmed: SafetyPolicy.confirmed(args))
-    let target = try resolvePointTarget(args, app: app)
+    let target = try await resolvePointTarget(args, app: app)
     let deltaX = args.integer("delta_x") ?? 0
     let deltaY = args.integer("delta_y") ?? 0
     guard deltaX != 0 || deltaY != 0 else {
@@ -58,7 +58,7 @@ func dragImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
     try requireAccessibilityTrusted()
     try SafetyPolicy.check(app: app, confirmed: SafetyPolicy.confirmed(args))
-    guard let snapshot = SnapshotStore.load(forPid: app.pid) else {
+    guard let snapshot = await SnapshotStore.shared.load(forPid: app.pid) else {
         throw ToolError.failed("Call get_app_state for \(app.name) before dragging.")
     }
     let from = try screenPoint(x: try args.requireNumber("from_x"), y: try args.requireNumber("from_y"), snapshot: snapshot)

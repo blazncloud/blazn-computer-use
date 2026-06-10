@@ -18,11 +18,11 @@ struct PointTarget {
     let deliveryContext: DeliveryContext
 }
 
-func resolvePointTarget(_ args: [String: Value], app: ResolvedApp) throws -> PointTarget {
+func resolvePointTarget(_ args: [String: Value], app: ResolvedApp) async throws -> PointTarget {
     let allowGlobal = args.bool("allow_global_cursor") ?? false
 
     // Window + windowNumber for delivery (best-effort; nil disables Tier 2).
-    let snapshot = SnapshotStore.load(forPid: app.pid)
+    let snapshot = await SnapshotStore.shared.load(forPid: app.pid)
     let window = try? targetWindow(for: app, title: snapshot?.windowTitle)
     let windowNumber = window.flatMap { windowID(for: $0.element) }
     let context = DeliveryContext(
@@ -31,7 +31,7 @@ func resolvePointTarget(_ args: [String: Value], app: ResolvedApp) throws -> Poi
     )
 
     if let elementID = args.string("element_id") {
-        let target = try resolveTarget(app: app, elementID: elementID)
+        let target = try await resolveTarget(app: app, elementID: elementID)
         let point = axFrame(target.element).map { CGPoint(x: $0.midX, y: $0.midY) }
             ?? CGPoint(x: 0, y: 0)
         return PointTarget(

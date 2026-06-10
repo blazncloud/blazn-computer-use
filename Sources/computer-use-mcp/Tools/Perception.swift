@@ -53,26 +53,21 @@ func stateResult(
         pixelsPerPoint = 1
     }
 
-    let generation = SnapshotStore.nextGeneration(forPid: app.pid)
-    let tree = buildTree(
-        window: window.element,
+    let (_, tree) = await SnapshotStore.shared.capture(
+        pid: app.pid,
+        bundleIdentifier: app.bundleIdentifier,
+        windowTitle: window.title,
         windowOrigin: window.frame.origin,
         pixelsPerPoint: pixelsPerPoint,
-        generation: generation
-    )
-
-    SnapshotStore.save(
-        AppSnapshot(
-            pid: app.pid,
-            bundleIdentifier: app.bundleIdentifier,
-            windowTitle: window.title,
-            windowOrigin: [window.frame.origin.x, window.frame.origin.y],
+        createdAt: Date()
+    ) { generation in
+        buildTree(
+            window: window.element,
+            windowOrigin: window.frame.origin,
             pixelsPerPoint: pixelsPerPoint,
-            createdAt: Date(),
-            generation: generation,
-            elements: tree.elements
+            generation: generation
         )
-    )
+    }
 
     var text = ""
     if let note {

@@ -17,7 +17,7 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let element: AXUIElement
     let described: String
     if let elementID = args.string("element_id") {
-        let target = try resolveTarget(app: app, elementID: elementID)
+        let target = try await resolveTarget(app: app, elementID: elementID)
         element = target.element
         described = describeTarget(target)
     } else {
@@ -32,7 +32,7 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
     try SafetyPolicy.checkTyping(into: element, app: app, confirmed: confirmed)
     try insertText(text, into: element, described: described)
-    let snapshot = SnapshotStore.load(forPid: app.pid)
+    let snapshot = await SnapshotStore.shared.load(forPid: app.pid)
     return try await stateResult(
         app: app, windowTitle: snapshot?.windowTitle,
         note: "Typed \(text.count) characters into \(described). Verify the new value below."
@@ -95,9 +95,13 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     try requireAccessibilityTrusted()
     let confirmed = SafetyPolicy.confirmed(args)
     try SafetyPolicy.check(app: app, confirmed: confirmed)
-    let target = try resolveTarget(app: app, elementID: args.requireString("element_id"))
+    let target = try await resolveTarget(app: app, elementID: args.requireString("element_id"))
     try SafetyPolicy.checkTyping(into: target.element, app: app, confirmed: confirmed)
-    let value = try args.requireString("value")
+    // An empty value is valid (clearing a field), so accept "" rather than
+    // treating it as a missing argument.
+    guard let value = args.string("value") else {
+        throw ToolError.invalidArguments("\"value\" (string) is required.")
+    }
     try SafetyPolicy.checkValueChange(
         currentValue: axString(target.element, kAXValueAttribute), newValue: value, app: app, confirmed: confirmed
     )
@@ -153,7 +157,7 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 func selectTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
     try requireAccessibilityTrusted()
-    let target = try resolveTarget(app: app, elementID: args.requireString("element_id"))
+    let target = try await resolveTarget(app: app, elementID: args.requireString("element_id"))
     let text = try args.requireString("text")
     let occurrence = max(1, args.integer("occurrence") ?? 1)
 
@@ -198,7 +202,7 @@ func performSecondaryActionImpl(_ args: [String: Value]) async throws -> CallToo
     try requireAccessibilityTrusted()
     let confirmed = SafetyPolicy.confirmed(args)
     try SafetyPolicy.check(app: app, confirmed: confirmed)
-    let target = try resolveTarget(app: app, elementID: args.requireString("element_id"))
+    let target = try await resolveTarget(app: app, elementID: args.requireString("element_id"))
     let action = args.string("action") ?? "AXShowMenu"
 
     let available = axActionNames(target.element)

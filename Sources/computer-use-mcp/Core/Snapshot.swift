@@ -56,7 +56,15 @@ struct AppSnapshot: Codable {
     }
 }
 
-enum SnapshotStore {
+/// Serializes snapshot capture and lookup so concurrent same-pid tool calls
+/// cannot race on the generation counter. An in-memory cache is the source of
+/// truth; disk is write-through so element ids survive across processes.
+actor SnapshotStore {
+    static let shared = SnapshotStore()
+
+    private var cache: [pid_t: AppSnapshot] = [:]
+    private var counters: [pid_t: Int] = [:]
+
     private static var directory: URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("computer-use-mcp", isDirectory: true)
     }
@@ -65,23 +73,65 @@ enum SnapshotStore {
         directory.appendingPathComponent("snapshot-\(pid).json")
     }
 
-    /// The generation tag for the next snapshot of this app: previous + 1.
-    static func nextGeneration(forPid pid: pid_t) -> String {
-        let previous = load(forPid: pid)?.generation ?? "s0"
-        let counter = Int(previous.dropFirst()) ?? 0
-        return "s\(counter + 1)"
+    /// Allocate the next generation, build the tree with it, and persist —
+    /// all atomically, so a second same-pid capture cannot collide.
+    func capture(
+        pid: pid_t, bundleIdentifier: String, windowTitle: String?,
+        windowOrigin: CGPoint, pixelsPerPoint: Double, createdAt: Date,
+        buildTree: (String) -> BuiltTree
+    ) -> (snapshot: AppSnapshot, tree: BuiltTree) {
+        let next = (counters[pid] ?? loadFromDisk(pid).map(Self.parseGeneration) ?? 0) + 1
+        counters[pid] = next
+        let generation = "s\(next)"
+        let tree = buildTree(generation)
+        let snapshot = AppSnapshot(
+            pid: pid, bundleIdentifier: bundleIdentifier, windowTitle: windowTitle,
+            windowOrigin: [windowOrigin.x, windowOrigin.y], pixelsPerPoint: pixelsPerPoint,
+            createdAt: createdAt, generation: generation, elements: tree.elements
+        )
+        cache[pid] = snapshot
+        persist(snapshot)
+        return (snapshot, tree)
     }
 
-    static func save(_ snapshot: AppSnapshot) {
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    func load(forPid pid: pid_t) -> AppSnapshot? {
+        if let cached = cache[pid] { return cached }
+        guard let disk = loadFromDisk(pid) else { return nil }
+        cache[pid] = disk
+        counters[pid] = max(counters[pid] ?? 0, Self.parseGeneration(disk))
+        return disk
+    }
+
+    private func loadFromDisk(_ pid: pid_t) -> AppSnapshot? {
+        guard let data = try? Data(contentsOf: Self.url(forPid: pid)) else { return nil }
+        return try? JSONDecoder().decode(AppSnapshot.self, from: data)
+    }
+
+    private func persist(_ snapshot: AppSnapshot) {
+        try? FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
         if let data = try? JSONEncoder().encode(snapshot) {
-            try? data.write(to: url(forPid: snapshot.pid), options: .atomic)
+            try? data.write(to: Self.url(forPid: snapshot.pid), options: .atomic)
+        }
+        pruneStaleFiles()
+    }
+
+    /// Best-effort: drop snapshot files older than an hour so the temp dir
+    /// doesn't accumulate files for exited apps / recycled pids.
+    private func pruneStaleFiles() {
+        let cutoff = Date(timeIntervalSinceNow: -3600)
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: Self.directory, includingPropertiesForKeys: [.contentModificationDateKey]
+        ) else { return }
+        for url in entries where url.lastPathComponent.hasPrefix("snapshot-") {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if let modified, modified < cutoff {
+                try? FileManager.default.removeItem(at: url)
+            }
         }
     }
 
-    static func load(forPid pid: pid_t) -> AppSnapshot? {
-        guard let data = try? Data(contentsOf: url(forPid: pid)) else { return nil }
-        return try? JSONDecoder().decode(AppSnapshot.self, from: data)
+    private static func parseGeneration(_ snapshot: AppSnapshot) -> Int {
+        Int(snapshot.generation.dropFirst()) ?? 0
     }
 }
 

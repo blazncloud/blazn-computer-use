@@ -12,8 +12,8 @@ struct ResolvedTarget {
     let element: AXUIElement
 }
 
-func resolveTarget(app: ResolvedApp, elementID: String) throws -> ResolvedTarget {
-    guard let snapshot = SnapshotStore.load(forPid: app.pid) else {
+func resolveTarget(app: ResolvedApp, elementID: String) async throws -> ResolvedTarget {
+    guard let snapshot = await SnapshotStore.shared.load(forPid: app.pid) else {
         throw ToolError.failed(
             "No app state captured for \(app.name) yet. Call get_app_state first, "
                 + "then use the element ids it returns."

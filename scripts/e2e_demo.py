@@ -91,8 +91,9 @@ def main():
         ta = find(state, r'(e\d+@s\d+) AXTextArea')
         assert ta, "no text area:\n" + state[:800]
 
-        # 2. Clear any prior text, then type a paragraph.
-        mcp.call("set_value", {"app": "TextEdit", "element_id": ta, "value": ""})
+        # 2. Clear any prior text (confirm: the safety policy gates clearing
+        # non-empty content), then type a paragraph.
+        mcp.call("set_value", {"app": "TextEdit", "element_id": ta, "value": "", "confirm": True})
         state, _ = mcp.call("get_app_state", {"app": "TextEdit"})
         ta = find(state, r'(e\d+@s\d+) AXTextArea')
         paragraph = "Computer use, for any agent. This MCP server let a background agent write this line."

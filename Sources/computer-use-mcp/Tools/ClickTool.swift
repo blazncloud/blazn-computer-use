@@ -14,7 +14,7 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let clickCount = max(1, args.integer("click_count") ?? 1)
     let confirmed = SafetyPolicy.confirmed(args)
     try SafetyPolicy.check(app: app, confirmed: confirmed)
-    let target = try resolvePointTarget(args, app: app)
+    let target = try await resolvePointTarget(args, app: app)
     try SafetyPolicy.checkClick(label: clickTargetLabel(target), app: app, confirmed: confirmed)
 
     let note: String
