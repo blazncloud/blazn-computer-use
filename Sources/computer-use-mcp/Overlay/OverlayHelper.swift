@@ -258,8 +258,8 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         let image = NSImage(size: NSSize(width: 32 * scale, height: 32 * scale))
         image.lockFocus()
         NSGraphicsContext.current?.cgContext.scaleBy(x: scale, y: scale)
-        // The classic macOS arrow-with-tail silhouette — black fill, white
-        // outline — so the agent cursor reads as a real mouse. Tip at (2,30).
+        // The classic macOS arrow-with-tail silhouette, in blue with a white
+        // outline: reads as a real mouse but is clearly the agent's. Tip at (2,30).
         let arrow = NSBezierPath()
         arrow.move(to: NSPoint(x: 2.0, y: 30.0))    // tip
         arrow.line(to: NSPoint(x: 2.0, y: 4.5))     // left edge straight down
@@ -269,7 +269,7 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         arrow.line(to: NSPoint(x: 12.1, y: 11.1))   // tail inner
         arrow.line(to: NSPoint(x: 19.6, y: 11.1))   // right wing
         arrow.close()
-        NSColor.black.setFill()
+        NSColor.systemBlue.setFill()
         arrow.fill()
         NSColor.white.setStroke()
         arrow.lineWidth = 1.7
