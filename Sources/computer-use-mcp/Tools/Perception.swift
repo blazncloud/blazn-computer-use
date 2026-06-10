@@ -44,10 +44,12 @@ func stateResult(
         pixelsPerPoint = 1
     }
 
+    let generation = SnapshotStore.nextGeneration(forPid: app.pid)
     let tree = buildTree(
         window: window.element,
         windowOrigin: window.frame.origin,
-        pixelsPerPoint: pixelsPerPoint
+        pixelsPerPoint: pixelsPerPoint,
+        generation: generation
     )
 
     SnapshotStore.save(
@@ -58,6 +60,7 @@ func stateResult(
             windowOrigin: [window.frame.origin.x, window.frame.origin.y],
             pixelsPerPoint: pixelsPerPoint,
             createdAt: Date(),
+            generation: generation,
             elements: tree.elements
         )
     )

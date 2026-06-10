@@ -14,7 +14,9 @@ private let maxDepth = 14
 private let maxChildrenPerNode = 150
 private let maxValueLength = 300
 
-func buildTree(window: AXUIElement, windowOrigin: CGPoint, pixelsPerPoint: Double) -> BuiltTree {
+func buildTree(
+    window: AXUIElement, windowOrigin: CGPoint, pixelsPerPoint: Double, generation: String
+) -> BuiltTree {
     var lines: [String] = []
     var elements: [SnapshotElement] = []
 
@@ -32,7 +34,7 @@ func buildTree(window: AXUIElement, windowOrigin: CGPoint, pixelsPerPoint: Doubl
         guard elements.count < maxNodes, depth <= maxDepth else { return }
 
         let role = axRole(element)
-        let id = "e\(elements.count)"
+        let id = "e\(elements.count)@\(generation)"
         let label = axString(element, kAXTitleAttribute)
             ?? axString(element, kAXDescriptionAttribute)
             ?? axString(element, "AXPlaceholderValue")

@@ -12,7 +12,7 @@ func getAppState(_ args: [String: Value]) async throws -> CallTool.Result {
 }
 
 func click(_ args: [String: Value]) async throws -> CallTool.Result {
-    throw ToolError.notImplemented("click")
+    try await clickImpl(args)
 }
 
 func typeText(_ args: [String: Value]) async throws -> CallTool.Result {

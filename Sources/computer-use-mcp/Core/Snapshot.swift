@@ -37,6 +37,10 @@ struct AppSnapshot: Codable {
     /// Multiplier from window points to screenshot pixels.
     let pixelsPerPoint: Double
     let createdAt: Date
+    /// Generation tag baked into element ids (e.g. "e11@s3"), so an id from
+    /// an older state is rejected loudly instead of silently resolving to
+    /// whatever occupies that index now.
+    let generation: String
     let elements: [SnapshotElement]
 
     func element(withID id: String) -> SnapshotElement? {
@@ -61,6 +65,13 @@ enum SnapshotStore {
         directory.appendingPathComponent("snapshot-\(pid).json")
     }
 
+    /// The generation tag for the next snapshot of this app: previous + 1.
+    static func nextGeneration(forPid pid: pid_t) -> String {
+        let previous = load(forPid: pid)?.generation ?? "s0"
+        let counter = Int(previous.dropFirst()) ?? 0
+        return "s\(counter + 1)"
+    }
+
     static func save(_ snapshot: AppSnapshot) {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         if let data = try? JSONEncoder().encode(snapshot) {
@@ -75,24 +86,47 @@ enum SnapshotStore {
 }
 
 /// Re-resolve a snapshot element against the live accessibility tree.
-/// Retries briefly so a UI that is mid-update can settle.
+/// Retries briefly so a UI that is mid-update can settle, and verifies the
+/// resolved element still matches the snapshot's identity (role + label) so a
+/// relayout turns into a clear stale-id error instead of a silent mis-click.
 func resolveElement(_ element: SnapshotElement, in window: AXUIElement) throws -> AXUIElement {
     let deadline = Date().addingTimeInterval(1.0)
     var lastFailure = "locator path did not resolve"
 
     repeat {
         if let resolved = walkLocator(element.path, from: window) {
-            return resolved
+            if matchesIdentity(resolved, of: element) {
+                return resolved
+            }
+            let liveLabel = elementLabel(resolved) ?? "no label"
+            lastFailure =
+                "the element at path \(describePath(element.path)) is now "
+                + "\(axRole(resolved)) \"\(liveLabel)\", not what \(element.id) referred to"
+        } else {
+            lastFailure = "no element at path \(describePath(element.path))"
         }
-        lastFailure = "no element at path \(describePath(element.path))"
         Thread.sleep(forTimeInterval: 0.15)
     } while Date() < deadline
 
     throw ToolError.failed(
         "Element \(element.id) (\(element.role)\(element.label.map { " \"\($0)\"" } ?? "")) "
-            + "no longer resolves: \(lastFailure). The UI has changed — call get_app_state "
-            + "and use a fresh element id."
+            + "is stale: \(lastFailure). The UI has changed since that state was captured — "
+            + "call get_app_state and use a fresh element id."
     )
+}
+
+private func elementLabel(_ element: AXUIElement) -> String? {
+    axString(element, kAXTitleAttribute)
+        ?? axString(element, kAXDescriptionAttribute)
+        ?? axString(element, "AXPlaceholderValue")
+}
+
+private func matchesIdentity(_ live: AXUIElement, of element: SnapshotElement) -> Bool {
+    guard axRole(live) == element.role else { return false }
+    // Only enforce label identity when the snapshot had one; unlabeled
+    // containers are identified by structure alone.
+    guard let expected = element.label, !expected.isEmpty else { return true }
+    return elementLabel(live) == expected
 }
 
 private func walkLocator(_ path: [LocatorStep], from root: AXUIElement) -> AXUIElement? {
