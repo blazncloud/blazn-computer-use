@@ -14,7 +14,7 @@ actor AgentCursor {
 
     private var process: Process?
     private var stdinPipe: Pipe?
-    private let enabled = ProcessInfo.processInfo.environment["COMPUTER_USE_MCP_CURSOR"] != "0"
+    private let enabled = Config.bool("cursor") != false
     // Awaited before the action fires. Slightly less than the overlay's own
     // animation so the cursor is still arriving as the action lands (natural)
     // while keeping per-action latency low.

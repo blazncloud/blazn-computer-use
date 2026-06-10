@@ -30,15 +30,19 @@ locked inside tools like OpenAI's Codex app. MIT licensed.
 
 ## Tools
 
-`get_app_state` · `list_apps` · `click` · `type_text` · `press_key` · `scroll` · `drag` ·
-`set_value` · `select_text` · `perform_secondary_action`
+**Perceive** `get_app_state` (with `scope_element_id`/`max_elements` for huge windows) ·
+`list_apps` · `list_windows` · `read_text` · `wait_for`
+**Act** `click` · `type_text` · `press_key` · `scroll` · `drag` · `set_value` ·
+`select_text` · `perform_secondary_action` · `click_menu_item`
+**System** `open_app` · `open_url` · `manage_window` · `read_clipboard` · `write_clipboard`
 
 Every interaction tool accepts **either** a stable element id **or** raw screenshot
 coordinates.
 
-Action results return a reduced-resolution screenshot to keep the agent loop fast;
-pass `include_screenshot: false` for tree-only results, and call `get_app_state`
-whenever full-resolution pixels are needed.
+Action results return a reduced-resolution screenshot to keep the agent loop fast.
+Pass `include_screenshot: false` for tree-only results, `include_state: false` for a
+bare confirmation (fastest), and call `get_app_state` whenever full-resolution pixels
+are needed.
 
 ## How it works
 
@@ -80,14 +84,30 @@ secure password fields, and actions against apps on a confirmation list return
 a recoverable `Confirmation required: …` error until the caller retries with
 `"confirm": true`.
 
-## Configuration (environment variables)
+## Configuration
 
-| Variable | Effect |
+Every option is settable as an environment variable (`COMPUTER_USE_MCP_<KEY>`) or a
+key in `~/.config/computer-use-mcp.json` (env wins):
+
+| Key (file) / variable | Effect |
 | --- | --- |
-| `COMPUTER_USE_MCP_CURSOR=0` | Hide the animated agent-cursor overlay (on by default; set 0 for headless/CI). |
-| `COMPUTER_USE_MCP_NO_SAFETY=1` | Disable the safety policy entirely. |
-| `COMPUTER_USE_MCP_CONFIRM_APPS=a,b` | Apps (name or bundle id) where every action needs `confirm`. |
-| `COMPUTER_USE_MCP_DESTRUCTIVE=pat,pat` | Extra destructive label substrings to gate. |
+| `cursor` / `COMPUTER_USE_MCP_CURSOR=0` | Hide the animated agent-cursor overlay (on by default; set 0 for headless/CI). |
+| `cursor_idle_fade` | Seconds of quiet before the agent cursor fades (default 12). |
+| `no_safety` / `COMPUTER_USE_MCP_NO_SAFETY=1` | Disable the safety policy entirely. |
+| `confirm_apps` | Apps (name or bundle id) where every action needs `confirm`. |
+| `destructive` | Extra destructive label substrings to gate. |
+| `ax_timeout` | Per-call accessibility timeout in seconds (default 2). |
+| `log` / `COMPUTER_USE_MCP_LOG=1` | Per-tool-call stderr log lines (name, ok/error, duration). |
+| `max_actions_per_sec` | Optional global throttle on tool calls (off by default). |
+
+## Distribution notes
+
+The binary needs **Accessibility** and **Screen Recording** permission, and macOS
+ties those grants to the *host process* that spawns the server (your terminal or
+agent app). A rebuilt binary keeps its grants; a different host needs its own.
+For redistribution, codesign with a Developer ID and notarize
+(`codesign --sign "Developer ID Application: …" && xcrun notarytool submit …`) so
+TCC grants attach to a stable identity.
 
 ## Known limitations
 

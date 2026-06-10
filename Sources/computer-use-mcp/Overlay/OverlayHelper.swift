@@ -48,8 +48,7 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
     /// multi-step task (clicks, key presses, perception, model thinking in
     /// between) and fades only once the agent has actually gone quiet.
     private var fadeWork: DispatchWorkItem?
-    private let idleFadeDelay: TimeInterval =
-        ProcessInfo.processInfo.environment["COMPUTER_USE_MCP_CURSOR_IDLE_FADE"].flatMap(TimeInterval.init) ?? 12
+    private let idleFadeDelay: TimeInterval = Config.double("cursor_idle_fade") ?? 12
     /// Cursor position in AppKit global coordinates (bottom-left origin at the
     /// primary screen) — the one space all screen frames share.
     private var currentPoint = CGPoint.zero

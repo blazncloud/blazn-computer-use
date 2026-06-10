@@ -8,8 +8,7 @@ import Foundation
 /// fails each AX call after this bound instead of stalling tool calls for the
 /// 6s system default. Tunable via COMPUTER_USE_MCP_AX_TIMEOUT.
 func configureAXMessagingTimeout() {
-    let seconds = ProcessInfo.processInfo.environment["COMPUTER_USE_MCP_AX_TIMEOUT"]
-        .flatMap(Float.init) ?? 2.0
+    let seconds = Config.double("ax_timeout").map(Float.init) ?? 2.0
     AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), seconds)
 }
 

@@ -26,29 +26,20 @@ struct SafetyError: Error, CustomStringConvertible {
 }
 
 enum SafetyPolicy {
-    private static let env = ProcessInfo.processInfo.environment
+    static var isEnabled: Bool { Config.bool("no_safety") != true }
 
-    static var isEnabled: Bool { env["COMPUTER_USE_MCP_NO_SAFETY"] != "1" }
-
-    /// Default destructive label substrings (case-insensitive), plus any from env.
+    /// Default destructive label substrings (case-insensitive), plus any configured.
     private static var destructivePatterns: [String] {
         let defaults = [
             "delete", "remove", "erase", "trash", "discard", "don't save", "dont save",
             "reset", "format", "uninstall", "destroy", "wipe", "shut down", "log out",
         ]
-        let extra = (env["COMPUTER_USE_MCP_DESTRUCTIVE"] ?? "")
-            .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-            .filter { !$0.isEmpty }
-        return defaults + extra
+        return defaults + Config.list("destructive")
     }
 
     /// Apps where every action requires confirmation (none by default).
     private static var confirmApps: Set<String> {
-        Set(
-            (env["COMPUTER_USE_MCP_CONFIRM_APPS"] ?? "")
-                .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-                .filter { !$0.isEmpty }
-        )
+        Set(Config.list("confirm_apps"))
     }
 
     static func confirmed(_ args: [String: Value]) -> Bool {
