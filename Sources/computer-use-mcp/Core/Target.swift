@@ -35,7 +35,7 @@ func resolveTarget(app: ResolvedApp, elementID: String) async throws -> Resolved
         )
     }
     let window = try targetWindow(for: app, title: snapshot.windowTitle)
-    let element = try resolveElement(snapshotElement, in: window.element)
+    let element = try await resolveElement(snapshotElement, in: window.element)
     return ResolvedTarget(app: app, snapshot: snapshot, snapshotElement: snapshotElement, element: element)
 }
 

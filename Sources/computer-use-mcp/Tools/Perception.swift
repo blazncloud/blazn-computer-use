@@ -24,8 +24,8 @@ func stateResult(
 ) async throws -> CallTool.Result {
     try requireAccessibilityTrusted()
 
-    // Give the UI a beat to settle after whatever just happened.
-    try? await Task.sleep(for: .milliseconds(80))
+    // Give the UI a brief beat to settle after whatever just happened.
+    try? await Task.sleep(for: .milliseconds(40))
 
     // Actions can close or replace the window they acted in (dialogs,
     // sheets); fall back to the front window rather than failing.
@@ -46,8 +46,10 @@ func stateResult(
         captureNote = "Screenshot unavailable: \(error)"
     }
 
+    // Guard both terms: a degenerate capture or zero-width window must not
+    // produce a 0 (or infinite) scale that breaks pixel→point conversion.
     let pixelsPerPoint: Double
-    if let capture, window.frame.width > 0 {
+    if let capture, capture.pixelWidth > 0, window.frame.width > 0 {
         pixelsPerPoint = Double(capture.pixelWidth) / window.frame.width
     } else {
         pixelsPerPoint = 1

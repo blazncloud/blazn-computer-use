@@ -36,7 +36,8 @@ func screenPoint(x: Double, y: Double, snapshot: AppSnapshot) throws -> CGPoint 
         throw ToolError.failed("The latest snapshot has no window element. Call get_app_state again.")
     }
     let frame = window.frame
-    guard x >= 0, y >= 0, x <= frame[2], y <= frame[3] else {
+    // Pixel coordinates are zero-indexed: width/height themselves are outside.
+    guard x >= 0, y >= 0, x < frame[2], y < frame[3] else {
         throw ToolError.invalidArguments(
             "Coordinate (\(Int(x)), \(Int(y))) is outside the \(Int(frame[2]))x\(Int(frame[3])) "
                 + "screenshot. Coordinates are pixels in the latest get_app_state screenshot."

@@ -108,9 +108,17 @@ actor SnapshotStore {
     }
 
     private func persist(_ snapshot: AppSnapshot) {
-        try? FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(snapshot) {
-            try? data.write(to: Self.url(forPid: snapshot.pid), options: .atomic)
+        // The in-memory cache is the source of truth; disk only matters for
+        // cross-process id resolution (serve vs call, restarts). Still, a
+        // persist failure should leave a trace, not vanish.
+        do {
+            try FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
+            let data = try JSONEncoder().encode(snapshot)
+            try data.write(to: Self.url(forPid: snapshot.pid), options: .atomic)
+        } catch {
+            FileHandle.standardError.write(
+                Data("[computer-use-mcp] snapshot persist failed for pid \(snapshot.pid): \(error)\n".utf8)
+            )
         }
         pruneStaleFiles()
     }
@@ -139,7 +147,7 @@ actor SnapshotStore {
 /// Retries briefly so a UI that is mid-update can settle, and verifies the
 /// resolved element still matches the snapshot's identity (role + label) so a
 /// relayout turns into a clear stale-id error instead of a silent mis-click.
-func resolveElement(_ element: SnapshotElement, in window: AXUIElement) throws -> AXUIElement {
+func resolveElement(_ element: SnapshotElement, in window: AXUIElement) async throws -> AXUIElement {
     let deadline = Date().addingTimeInterval(1.0)
     var lastFailure = "locator path did not resolve"
 
@@ -155,7 +163,9 @@ func resolveElement(_ element: SnapshotElement, in window: AXUIElement) throws -
         } else {
             lastFailure = "no element at path \(describePath(element.path))"
         }
-        Thread.sleep(forTimeInterval: 0.15)
+        // Task.sleep, not Thread.sleep: this runs on the cooperative pool and
+        // must suspend rather than block a shared executor thread.
+        try? await Task.sleep(for: .milliseconds(150))
     } while Date() < deadline
 
     throw ToolError.failed(
