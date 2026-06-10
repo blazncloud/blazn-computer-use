@@ -20,15 +20,15 @@ func typeText(_ args: [String: Value]) async throws -> CallTool.Result {
 }
 
 func pressKey(_ args: [String: Value]) async throws -> CallTool.Result {
-    throw ToolError.notImplemented("press_key")
+    try await pressKeyImpl(args)
 }
 
 func scroll(_ args: [String: Value]) async throws -> CallTool.Result {
-    throw ToolError.notImplemented("scroll")
+    try await scrollImpl(args)
 }
 
 func drag(_ args: [String: Value]) async throws -> CallTool.Result {
-    throw ToolError.notImplemented("drag")
+    try await dragImpl(args)
 }
 
 func setValue(_ args: [String: Value]) async throws -> CallTool.Result {
