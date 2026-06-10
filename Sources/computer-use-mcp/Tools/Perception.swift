@@ -24,6 +24,10 @@ func stateResult(
 ) async throws -> CallTool.Result {
     try requireAccessibilityTrusted()
 
+    // Every tool call lands here; let the cursor overlay know the agent is
+    // still mid-task so it stays visible across the whole operation.
+    await AgentCursor.shared.keepAlive()
+
     // Give the UI a brief beat to settle after whatever just happened.
     try? await Task.sleep(for: .milliseconds(40))
 

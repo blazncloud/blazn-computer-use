@@ -15,7 +15,10 @@ actor AgentCursor {
     private var process: Process?
     private var stdinPipe: Pipe?
     private let enabled = ProcessInfo.processInfo.environment["COMPUTER_USE_MCP_CURSOR"] != "0"
-    private let glideDuration = Duration.milliseconds(300)
+    // Awaited before the action fires. Slightly less than the overlay's own
+    // animation so the cursor is still arriving as the action lands (natural)
+    // while keeping per-action latency low.
+    private let glideDuration = Duration.milliseconds(160)
 
     /// Glide the overlay cursor to a global top-left point, then return so the
     /// caller can deliver the actual action. No-op when disabled.
@@ -34,6 +37,19 @@ actor AgentCursor {
             return
         }
         try? await Task.sleep(for: glideDuration)
+    }
+
+    /// Tell a running helper the agent is still mid-task so the cursor's idle
+    /// fade is postponed. Never spawns the helper — activity without movement
+    /// (key presses, perception) should not summon a cursor that isn't there.
+    func keepAlive() {
+        guard enabled, let process, process.isRunning else { return }
+        do {
+            try stdinPipe?.fileHandleForWriting.write(contentsOf: Data("ping\n".utf8))
+        } catch {
+            self.process = nil
+            stdinPipe = nil
+        }
     }
 
     private func ensureRunning() -> Bool {

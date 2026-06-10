@@ -43,16 +43,22 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
 
     private var visible = false
     private var animating = false
-    /// Pending idle fade-out, cancelled whenever a new glide arrives.
+    /// Pending idle fade-out, postponed by any glide or keep-alive ping. The
+    /// server pings on every tool call, so the cursor stays up for a whole
+    /// multi-step task (clicks, key presses, perception, model thinking in
+    /// between) and fades only once the agent has actually gone quiet.
     private var fadeWork: DispatchWorkItem?
-    private let idleFadeDelay: TimeInterval = 2.5
+    private let idleFadeDelay: TimeInterval =
+        ProcessInfo.processInfo.environment["COMPUTER_USE_MCP_CURSOR_IDLE_FADE"].flatMap(TimeInterval.init) ?? 12
     /// Cursor position in AppKit global coordinates (bottom-left origin at the
     /// primary screen) — the one space all screen frames share.
     private var currentPoint = CGPoint.zero
     private var startPoint = CGPoint.zero
     private var targetPoint = CGPoint.zero
     private var startTime: CFTimeInterval = 0
-    private let duration: CFTimeInterval = 0.22
+    /// Per-glide, scaled with distance: short hops stay snappy, long crossings
+    /// stay smooth instead of teleporting.
+    private var duration: CFTimeInterval = 0.22
 
     func start() {
         guard let primary = NSScreen.screens.first else { exit(0) }
@@ -87,8 +93,8 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
             let layer = CALayer()
             layer.contents = cursorGlyph()
             layer.contentsScale = screen.backingScaleFactor
-            layer.bounds = CGRect(x: 0, y: 0, width: 40, height: 40)
-            layer.anchorPoint = CGPoint(x: 0.18, y: 0.82)  // arrow hotspot ~ tip
+            layer.bounds = CGRect(x: 0, y: 0, width: 32, height: 32)
+            layer.anchorPoint = CGPoint(x: 0.0625, y: 0.9375)  // arrow tip at (2,30)
             layer.opacity = visible ? 1 : 0
             host.layer?.addSublayer(layer)
 
@@ -145,6 +151,12 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
             guard let text = String(data: data, encoding: .utf8) else { return }
             for line in text.split(separator: "\n") {
                 let parts = line.split(separator: " ")
+                if parts.first == "ping" {
+                    DispatchQueue.main.async {
+                        (NSApp.delegate as? OverlayController)?.postponeIdleFade()
+                    }
+                    continue
+                }
                 guard parts.first == "move", parts.count == 3,
                     let x = Double(parts[1]), let y = Double(parts[2])
                 else { continue }
@@ -164,6 +176,8 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         targetPoint = CGPoint(x: point.x, y: primaryHeight - point.y)
         startPoint = currentPoint
         startTime = CACurrentMediaTime()
+        let distance = hypot(targetPoint.x - startPoint.x, targetPoint.y - startPoint.y)
+        duration = min(0.32, max(0.12, distance / 2400))
         animating = true
         overlayDebug("beginGlide cg=\(point) appkit=\(targetPoint) from=\(startPoint)")
         fadeWork?.cancel()
@@ -196,6 +210,14 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
             overlayDebug("glide done at \(currentPoint)")
             scheduleIdleFade()
         }
+    }
+
+    /// Push the idle fade out by another full delay window. Called on server
+    /// keep-alive pings (any tool activity) while the cursor is visible.
+    fileprivate func postponeIdleFade() {
+        guard visible, fadeWork != nil else { return }
+        fadeWork?.cancel()
+        scheduleIdleFade()
     }
 
     /// Fade the cursor away after a quiet period so it does not sit on the
@@ -231,31 +253,27 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
 
     private func cursorGlyph() -> CGImage? {
         // Rendered at 2x so it stays crisp on Retina displays (each layer's
-        // contentsScale maps it back to 40pt).
+        // contentsScale maps it back to 32pt).
         let scale: CGFloat = 2
-        let image = NSImage(size: NSSize(width: 40 * scale, height: 40 * scale))
+        let image = NSImage(size: NSSize(width: 32 * scale, height: 32 * scale))
         image.lockFocus()
         NSGraphicsContext.current?.cgContext.scaleBy(x: scale, y: scale)
-        // A translucent halo behind a bold arrow, so the agent cursor is
-        // unmistakable against any background.
-        let halo = NSBezierPath(ovalIn: NSRect(x: 2, y: 2, width: 36, height: 36))
-        NSColor.systemBlue.withAlphaComponent(0.22).setFill()
-        halo.fill()
-        NSColor.systemBlue.withAlphaComponent(0.6).setStroke()
-        halo.lineWidth = 1.5
-        halo.stroke()
-
+        // The classic macOS arrow-with-tail silhouette — black fill, white
+        // outline — so the agent cursor reads as a real mouse. Tip at (2,30).
         let arrow = NSBezierPath()
-        arrow.move(to: NSPoint(x: 8, y: 34))
-        arrow.line(to: NSPoint(x: 8, y: 9))
-        arrow.line(to: NSPoint(x: 17, y: 18))
-        arrow.line(to: NSPoint(x: 23, y: 18))
-        arrow.line(to: NSPoint(x: 8, y: 34))
+        arrow.move(to: NSPoint(x: 2.0, y: 30.0))    // tip
+        arrow.line(to: NSPoint(x: 2.0, y: 4.5))     // left edge straight down
+        arrow.line(to: NSPoint(x: 7.9, y: 9.8))     // notch toward the tail
+        arrow.line(to: NSPoint(x: 12.0, y: 0.6))    // tail outer
+        arrow.line(to: NSPoint(x: 16.3, y: 2.4))    // tail tip
+        arrow.line(to: NSPoint(x: 12.1, y: 11.1))   // tail inner
+        arrow.line(to: NSPoint(x: 19.6, y: 11.1))   // right wing
         arrow.close()
-        NSColor.systemBlue.setFill()
+        NSColor.black.setFill()
         arrow.fill()
         NSColor.white.setStroke()
-        arrow.lineWidth = 2
+        arrow.lineWidth = 1.7
+        arrow.lineJoinStyle = .round
         arrow.stroke()
         image.unlockFocus()
         return image.cgImage(forProposedRect: nil, context: nil, hints: nil)
