@@ -25,6 +25,12 @@ private let allowGlobalCursorParam = boolParam(
         + "background delivery did not land for a stubborn app."
 )
 
+private let confirmParam = boolParam(
+    "Set true to confirm a potentially destructive or irreversible action (e.g. a "
+        + "Delete button, typing into a password field, or an app on the confirmation "
+        + "list). Required only when the server flags the action; the error says so."
+)
+
 let toolCatalog: [ToolSpec] = [
     ToolSpec(
         name: "list_apps",
@@ -72,6 +78,7 @@ let toolCatalog: [ToolSpec] = [
                 "click_count": integerParam("Number of clicks: 1 (default) or 2 for double-click."),
                 "mouse_button": enumParam(["left", "right", "middle"], "Mouse button. Defaults to left."),
                 "allow_global_cursor": allowGlobalCursorParam,
+                "confirm": confirmParam,
             ],
             required: ["app"]
         ),
@@ -89,6 +96,7 @@ let toolCatalog: [ToolSpec] = [
                 "app": appParam,
                 "element_id": elementIDParam,
                 "text": stringParam("Literal text to type."),
+                "confirm": confirmParam,
             ],
             required: ["app", "text"]
         ),
@@ -107,6 +115,7 @@ let toolCatalog: [ToolSpec] = [
                 "app": appParam,
                 "key": stringParam("Key or combination in xdotool syntax, e.g. \"Return\", \"cmd+n\"."),
                 "allow_global_cursor": allowGlobalCursorParam,
+                "confirm": confirmParam,
             ],
             required: ["app", "key"]
         ),
@@ -127,6 +136,7 @@ let toolCatalog: [ToolSpec] = [
                 "delta_x": integerParam("Horizontal scroll amount in pixels."),
                 "delta_y": integerParam("Vertical scroll amount in pixels."),
                 "allow_global_cursor": allowGlobalCursorParam,
+                "confirm": confirmParam,
             ],
             required: ["app"]
         ),
@@ -147,6 +157,7 @@ let toolCatalog: [ToolSpec] = [
                 "to_x": numberParam("End X pixel coordinate in the latest screenshot."),
                 "to_y": numberParam("End Y pixel coordinate in the latest screenshot."),
                 "allow_global_cursor": allowGlobalCursorParam,
+                "confirm": confirmParam,
             ],
             required: ["app", "from_x", "from_y", "to_x", "to_y"]
         ),
@@ -164,6 +175,7 @@ let toolCatalog: [ToolSpec] = [
                 "app": appParam,
                 "element_id": elementIDParam,
                 "value": stringParam("New value. For checkboxes use \"true\"/\"false\"; for sliders a number."),
+                "confirm": confirmParam,
             ],
             required: ["app", "element_id", "value"]
         ),

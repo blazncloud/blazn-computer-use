@@ -10,6 +10,8 @@ import MCP
 func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
     let text = try args.requireString("text")
+    let confirmed = SafetyPolicy.confirmed(args)
+    try SafetyPolicy.check(app: app, confirmed: confirmed)
 
     let element: AXUIElement
     let described: String
@@ -27,6 +29,7 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         described = "the focused element (\(axRole(focused)))"
     }
 
+    try SafetyPolicy.checkTyping(into: element, app: app, confirmed: confirmed)
     try insertText(text, into: element, described: described)
     let snapshot = SnapshotStore.load(forPid: app.pid)
     return try await stateResult(
@@ -88,7 +91,10 @@ private func insertText(_ text: String, into element: AXUIElement, described: St
 
 func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
+    let confirmed = SafetyPolicy.confirmed(args)
+    try SafetyPolicy.check(app: app, confirmed: confirmed)
     let target = try resolveTarget(app: app, elementID: args.requireString("element_id"))
+    try SafetyPolicy.checkTyping(into: target.element, app: app, confirmed: confirmed)
     let value = try args.requireString("value")
 
     // Checkboxes and radio buttons: treat as semantic toggle.

@@ -8,6 +8,7 @@ import MCP
 func pressKeyImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
     try requireAccessibilityTrusted()
+    try SafetyPolicy.check(app: app, confirmed: SafetyPolicy.confirmed(args))
     let combo = try args.requireString("key")
     let chord = try Keymap.parse(combo)
 
@@ -29,6 +30,7 @@ func pressKeyImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
     try requireAccessibilityTrusted()
+    try SafetyPolicy.check(app: app, confirmed: SafetyPolicy.confirmed(args))
     let target = try resolvePointTarget(args, app: app)
     let deltaX = args.integer("delta_x") ?? 0
     let deltaY = args.integer("delta_y") ?? 0
@@ -49,6 +51,7 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 func dragImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
     try requireAccessibilityTrusted()
+    try SafetyPolicy.check(app: app, confirmed: SafetyPolicy.confirmed(args))
     guard let snapshot = SnapshotStore.load(forPid: app.pid) else {
         throw ToolError.failed("Call get_app_state for \(app.name) before dragging.")
     }

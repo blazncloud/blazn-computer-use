@@ -11,7 +11,10 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
     let buttonName = args.string("mouse_button") ?? "left"
     let clickCount = max(1, args.integer("click_count") ?? 1)
+    let confirmed = SafetyPolicy.confirmed(args)
+    try SafetyPolicy.check(app: app, confirmed: confirmed)
     let target = try resolvePointTarget(args, app: app)
+    try SafetyPolicy.checkClick(label: clickTargetLabel(target), app: app, confirmed: confirmed)
 
     let note: String
     switch buttonName {
@@ -30,6 +33,16 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     }
 
     return try await stateResult(app: app, windowTitle: target.snapshot.windowTitle, note: note)
+}
+
+/// Best-effort label for the click target, for the safety check.
+private func clickTargetLabel(_ target: PointTarget) -> String? {
+    if let element = target.element {
+        return axString(element, kAXTitleAttribute)
+            ?? axString(element, kAXDescriptionAttribute)
+            ?? axString(element, kAXValueAttribute)
+    }
+    return nil
 }
 
 private func leftClick(_ target: PointTarget, clickCount: Int) async throws -> String {
