@@ -18,6 +18,11 @@ let package = Package(
                 .product(name: "MCP", package: "swift-sdk")
             ],
             path: "Sources/computer-use-mcp"
-        )
+        ),
+        .testTarget(
+            name: "ComputerUseMCPTests",
+            dependencies: ["computer-use-mcp"],
+            path: "Tests/ComputerUseMCPTests"
+        ),
     ]
 )
