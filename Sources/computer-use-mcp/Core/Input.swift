@@ -141,6 +141,7 @@ private func bridgedWindowEvent(
     case .rightMouseUp: nsType = .rightMouseUp
     case .otherMouseDown: nsType = .otherMouseDown
     case .otherMouseUp: nsType = .otherMouseUp
+    case .leftMouseDragged: nsType = .leftMouseDragged
     default: return nil
     }
     let clickState = Int(cgEvent.getIntegerValueField(.mouseEventClickState))
@@ -153,7 +154,11 @@ private func bridgedWindowEvent(
 }
 
 private extension NSEvent.EventType {
-    var isDown: Bool { self == .leftMouseDown || self == .rightMouseDown || self == .otherMouseDown }
+    // Button-held events carry full pressure (down and drag); releases carry 0.
+    var isDown: Bool {
+        self == .leftMouseDown || self == .rightMouseDown || self == .otherMouseDown
+            || self == .leftMouseDragged
+    }
 }
 
 /// Tier 4: guarded global cursor. Moves the real cursor, posts to the session
@@ -164,26 +169,38 @@ private func deliverClickGlobal(
     let saved = CGEvent(source: nil)?.location
     CGWarpMouseCursorPosition(point)
     let source = CGEventSource(stateID: .combinedSessionState)
-    for _ in 0..<clickCount {
+    for clickState in 1...clickCount {
         let down = CGEvent(mouseEventSource: source, mouseType: button.downType, mouseCursorPosition: point, mouseButton: button.cgButton)
+        down?.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
         down?.post(tap: .cgSessionEventTap)
         let up = CGEvent(mouseEventSource: source, mouseType: button.upType, mouseCursorPosition: point, mouseButton: button.cgButton)
+        up?.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
         up?.post(tap: .cgSessionEventTap)
     }
     if let saved { CGWarpMouseCursorPosition(saved) }
     return .globalCursor
 }
 
-/// Deliver scroll wheel events at a global point.
+/// Deliver scroll wheel events at a global point. Distributes the delta across
+/// steps with error diffusion so the posted amounts sum exactly to the request
+/// and a small axis is never truncated to zero.
 func deliverScroll(at point: CGPoint, deltaX: Int, deltaY: Int, context: DeliveryContext) {
     let source = CGEventSource(stateID: .privateState)
     let stepCount = max(1, max(abs(deltaX), abs(deltaY)) / 40)
-    for _ in 0..<stepCount {
+    var emittedX = 0
+    var emittedY = 0
+    for step in 1...stepCount {
+        let targetX = Int((Double(deltaX) * Double(step) / Double(stepCount)).rounded())
+        let targetY = Int((Double(deltaY) * Double(step) / Double(stepCount)).rounded())
+        let stepX = targetX - emittedX
+        let stepY = targetY - emittedY
+        emittedX = targetX
+        emittedY = targetY
         // Positive delta_y scrolls content up; wheel1 up is positive, so negate.
         guard
             let event = CGEvent(
                 scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
-                wheel1: Int32(-deltaY / stepCount), wheel2: Int32(deltaX / stepCount), wheel3: 0
+                wheel1: Int32(-stepY), wheel2: Int32(stepX), wheel3: 0
             )
         else { continue }
         event.location = point
@@ -197,7 +214,14 @@ func deliverDrag(from: CGPoint, to: CGPoint, context: DeliveryContext) async {
     func post(_ type: CGEventType, _ p: CGPoint) {
         guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: p, mouseButton: .left)
         else { return }
-        event.postToPid(context.pid)
+        // Prefer window-affined delivery (Tier 2) when resolvable, like clicks.
+        if let windowNumber = context.windowNumber, let frame = context.windowFrame,
+            let bridged = bridgedWindowEvent(from: event, point: p, windowNumber: windowNumber, windowFrame: frame)
+        {
+            bridged.postToPid(context.pid)
+        } else {
+            event.postToPid(context.pid)
+        }
     }
     post(.leftMouseDown, from)
     let steps = 24
