@@ -17,6 +17,8 @@ case "call":
     await runCall(Array(arguments.dropFirst()))
 case "doctor":
     runDoctor(prompt: arguments.contains("--prompt"))
+case "overlay":
+    runOverlay()
 case "version", "--version", "-v":
     print("computer-use-mcp \(version)")
 case "help", "--help", "-h", .none:

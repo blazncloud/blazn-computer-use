@@ -33,6 +33,9 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 }
 
 private func leftClick(_ target: PointTarget, clickCount: Int) async throws -> String {
+    // Animate the (cosmetic) agent cursor to the target before acting.
+    if target.point != .zero { await AgentCursor.shared.glide(to: target.point) }
+
     // Tier 1: accessibility press, when the element advertises it.
     if let element = target.element,
         let pressable = selfOrAncestor(of: element, supporting: kAXPressAction as String)

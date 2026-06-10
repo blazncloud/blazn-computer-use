@@ -36,6 +36,7 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         throw ToolError.invalidArguments("Provide a non-zero delta_x or delta_y.")
     }
 
+    if target.point != .zero { await AgentCursor.shared.glide(to: target.point) }
     deliverScroll(at: target.point, deltaX: deltaX, deltaY: deltaY, context: target.deliveryContext)
     try? await Task.sleep(for: .milliseconds(80))
 
@@ -61,6 +62,7 @@ func dragImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         windowFrame: window?.frame,
         allowGlobalCursor: args.bool("allow_global_cursor") ?? false
     )
+    await AgentCursor.shared.glide(to: from)
     await deliverDrag(from: from, to: to, context: context)
     try? await Task.sleep(for: .milliseconds(80))
 
