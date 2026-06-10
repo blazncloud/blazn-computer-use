@@ -136,7 +136,7 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     // Numeric elements (sliders, steppers) want numbers, not strings.
     let newValue: CFTypeRef
     let currentValue = axAttribute(target.element, kAXValueAttribute)
-    if let currentValue, currentValue is NSNumber, !(currentValue is CFBoolean), let number = Double(value) {
+    if let currentValue, CFGetTypeID(currentValue) == CFNumberGetTypeID(), let number = Double(value) {
         newValue = NSNumber(value: number)
     } else {
         newValue = value as CFString

@@ -30,13 +30,16 @@ enum Keymap {
             flags.formUnion(flag)
         }
 
-        guard let keyCode = keyCode(for: keyToken) else {
+        guard let resolved = keyCode(for: keyToken) else {
             throw ToolError.invalidArguments(
                 "Unknown key \"\(keyToken)\" in \"\(combo)\". Use a single character or a named key "
                     + "like Return, Tab, Escape, Up, F5, Delete, space."
             )
         }
-        return KeyChord(keyCode: keyCode, flags: flags)
+        if resolved.needsShift {
+            flags.formUnion(.maskShift)
+        }
+        return KeyChord(keyCode: resolved.code, flags: flags)
     }
 
     private static func modifierFlag(_ token: String) -> CGEventFlags? {
@@ -67,9 +70,9 @@ enum Keymap {
         "f10": CGKeyCode(kVK_F10), "f11": CGKeyCode(kVK_F11), "f12": CGKeyCode(kVK_F12),
     ]
 
-    private static func keyCode(for token: String) -> CGKeyCode? {
+    private static func keyCode(for token: String) -> (code: CGKeyCode, needsShift: Bool)? {
         if let named = namedKeys[token.lowercased()] {
-            return named
+            return (named, false)
         }
         if token.count == 1, let char = token.first {
             return keyCodeForCharacter(char)
@@ -78,20 +81,23 @@ enum Keymap {
     }
 
     /// Translate a printable character to a keycode on the current layout by
-    /// scanning keycodes for the one that produces it.
-    private static func keyCodeForCharacter(_ character: Character) -> CGKeyCode? {
+    /// scanning keycodes — first unshifted, then shifted (so bare "?" / "@"
+    /// resolve and report that Shift is required).
+    private static func keyCodeForCharacter(_ character: Character) -> (code: CGKeyCode, needsShift: Bool)? {
         guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
             let layoutPointer = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData)
         else { return nil }
         let layoutData = Unmanaged<CFData>.fromOpaque(layoutPointer).takeUnretainedValue() as Data
         let target = String(character)
 
-        return layoutData.withUnsafeBytes { raw -> CGKeyCode? in
+        return layoutData.withUnsafeBytes { raw -> (CGKeyCode, Bool)? in
             guard let layout = raw.bindMemory(to: UCKeyboardLayout.self).baseAddress else { return nil }
             let keyboardType = UInt32(LMGetKbdType())
-            for code in 0..<CGKeyCode(128) {
-                if produced(layout, code, shift: false, keyboardType: keyboardType) == target {
-                    return code
+            for shift in [false, true] {
+                for code in 0..<CGKeyCode(128) {
+                    if produced(layout, code, shift: shift, keyboardType: keyboardType) == target {
+                        return (code, shift)
+                    }
                 }
             }
             return nil

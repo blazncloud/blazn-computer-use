@@ -35,9 +35,9 @@ let toolCatalog: [ToolSpec] = [
     ToolSpec(
         name: "list_apps",
         description: """
-            List apps on this Mac that can be controlled: running apps with windows, \
-            plus installed apps that can be launched. Call this first when the target \
-            app is unknown or ambiguous.
+            List the currently-running apps that can be controlled, plus installed apps \
+            for reference. Only running apps can be controlled — an installed app must be \
+            opened first. Call this first when the target app is unknown or ambiguous.
             """,
         inputSchema: objectSchema([:]),
         handler: { args in try await listApps(args) }

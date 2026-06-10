@@ -31,8 +31,8 @@ func resolveApp(_ identifier: String) throws -> ResolvedApp {
             .sorted()
             .joined(separator: ", ")
         throw ToolError.failed(
-            "No running app matches \"\(identifier)\". Running apps: \(visible). "
-                + "Use list_apps to see what can be controlled or launched."
+            "\"\(identifier)\" is not running. Only running apps can be controlled — open it "
+                + "first, then retry. Currently running: \(visible)."
         )
     }
     return ResolvedApp(
@@ -63,7 +63,7 @@ func runningAppsDescription() -> String {
         .sorted()
     if !installed.isEmpty {
         lines.append("")
-        lines.append("Installed apps (launchable): \(installed.joined(separator: ", "))")
+        lines.append("Installed apps (open one first to control it): \(installed.joined(separator: ", "))")
     }
     return lines.joined(separator: "\n")
 }

@@ -28,7 +28,9 @@ func captureWindow(pid: pid_t, title: String?, frame: CGRect) async throws -> Wi
         )
     }
 
-    let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+    // On-screen windows only: the target must be on-screen to capture a useful
+    // image, and this avoids enumerating every off-screen window in the system.
+    let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
     let appWindows = content.windows.filter {
         $0.owningApplication?.processID == pid && $0.windowLayer == 0
     }

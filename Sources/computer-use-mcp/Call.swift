@@ -45,8 +45,10 @@ func runCall(_ args: [String]) async {
         case .image(let base64, let mimeType, _, _):
             if let data = Data(base64Encoded: base64) {
                 let ext = mimeType.split(separator: "/").last.map(String.init) ?? "bin"
+                // Stable name (no pid) so repeated calls overwrite rather than
+                // accumulate one temp file per invocation.
                 let url = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("computer-use-mcp-\(toolName)-\(ProcessInfo.processInfo.processIdentifier).\(ext)")
+                    .appendingPathComponent("computer-use-mcp-\(toolName).\(ext)")
                 try? data.write(to: url)
                 print("[image \(mimeType), \(data.count) bytes] \(url.path)")
             } else {
