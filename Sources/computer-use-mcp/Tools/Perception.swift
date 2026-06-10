@@ -33,10 +33,12 @@ struct TreeScope: @unchecked Sendable {
     let pathPrefix: [LocatorStep]
 }
 
-/// Screenshot detail for an action's returned state: reduced by default,
-/// omitted when the caller passes include_screenshot=false.
+/// Result detail for an action: reduced screenshot by default,
+/// include_screenshot=false drops the image, include_state=false drops
+/// everything but the confirmation note (fastest chained-action mode).
 func screenshotDetail(_ args: [String: Value]) -> ScreenshotDetail {
-    args.bool("include_screenshot") == false ? .none : .reduced
+    if args.bool("include_state") == false { return .noState }
+    return args.bool("include_screenshot") == false ? .none : .reduced
 }
 
 /// Build the canonical app-state result: accessibility tree (with element ids
@@ -55,6 +57,11 @@ func stateResult(
     // Every tool call lands here; let the cursor overlay know the agent is
     // still mid-task so it stays visible across the whole operation.
     await AgentCursor.shared.keepAlive()
+
+    if detail == .noState {
+        let confirmation = note ?? "Action completed."
+        return .text(confirmation + " Call get_app_state when you need the updated UI state.")
+    }
 
     // Give the UI a brief beat to settle after whatever just happened.
     try? await Task.sleep(for: .milliseconds(40))

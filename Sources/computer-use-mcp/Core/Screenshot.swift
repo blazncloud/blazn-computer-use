@@ -23,6 +23,8 @@ enum ScreenshotDetail: Sendable {
     case reduced
     /// Tree only, no capture.
     case none
+    /// No state at all: the action returns just its confirmation note.
+    case noState
 
     /// Longest screenshot side sent to the model, in pixels.
     var maxDimension: Double { self == .full ? 1600 : 1000 }

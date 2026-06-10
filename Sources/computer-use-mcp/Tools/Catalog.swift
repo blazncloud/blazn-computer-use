@@ -37,6 +37,11 @@ private let includeScreenshotParam = boolParam(
         + "when you need full-resolution pixels again."
 )
 
+private let includeStateParam = boolParam(
+    "Default true. Set false to return only a confirmation note — no tree, no screenshot. "
+        + "The fastest mode for chained actions; call get_app_state when you need state again."
+)
+
 let toolCatalog: [ToolSpec] = [
     ToolSpec(
         name: "list_apps",
@@ -92,6 +97,7 @@ let toolCatalog: [ToolSpec] = [
                 "mouse_button": enumParam(["left", "right", "middle"], "Mouse button. Defaults to left."),
                 "allow_global_cursor": allowGlobalCursorParam,
                 "include_screenshot": includeScreenshotParam,
+                "include_state": includeStateParam,
                 "confirm": confirmParam,
             ],
             required: ["app"]
@@ -111,6 +117,7 @@ let toolCatalog: [ToolSpec] = [
                 "element_id": elementIDParam,
                 "text": stringParam("Literal text to type."),
                 "include_screenshot": includeScreenshotParam,
+                "include_state": includeStateParam,
                 "confirm": confirmParam,
             ],
             required: ["app", "text"]
@@ -131,6 +138,7 @@ let toolCatalog: [ToolSpec] = [
                 "key": stringParam("Key or combination in xdotool syntax, e.g. \"Return\", \"cmd+n\"."),
                 "allow_global_cursor": allowGlobalCursorParam,
                 "include_screenshot": includeScreenshotParam,
+                "include_state": includeStateParam,
                 "confirm": confirmParam,
             ],
             required: ["app", "key"]
@@ -153,6 +161,7 @@ let toolCatalog: [ToolSpec] = [
                 "delta_y": integerParam("Vertical scroll amount in pixels."),
                 "allow_global_cursor": allowGlobalCursorParam,
                 "include_screenshot": includeScreenshotParam,
+                "include_state": includeStateParam,
                 "confirm": confirmParam,
             ],
             required: ["app"]
@@ -175,6 +184,7 @@ let toolCatalog: [ToolSpec] = [
                 "to_y": numberParam("End Y pixel coordinate in the latest screenshot."),
                 "allow_global_cursor": allowGlobalCursorParam,
                 "include_screenshot": includeScreenshotParam,
+                "include_state": includeStateParam,
                 "confirm": confirmParam,
             ],
             required: ["app", "from_x", "from_y", "to_x", "to_y"]
@@ -194,6 +204,7 @@ let toolCatalog: [ToolSpec] = [
                 "element_id": elementIDParam,
                 "value": stringParam("New value. For checkboxes use \"true\"/\"false\"; for sliders a number."),
                 "include_screenshot": includeScreenshotParam,
+                "include_state": includeStateParam,
                 "confirm": confirmParam,
             ],
             required: ["app", "element_id", "value"]
@@ -214,6 +225,7 @@ let toolCatalog: [ToolSpec] = [
                 "text": stringParam("Exact text to select, as it appears in the element's current value."),
                 "occurrence": integerParam("Which occurrence to select when the text appears multiple times (1-based, default 1)."),
                 "include_screenshot": includeScreenshotParam,
+                "include_state": includeStateParam,
             ],
             required: ["app", "element_id", "text"]
         ),
@@ -234,6 +246,7 @@ let toolCatalog: [ToolSpec] = [
                     "Accessibility action to perform. Defaults to AXShowMenu (context menu)."
                 ),
                 "include_screenshot": includeScreenshotParam,
+                "include_state": includeStateParam,
             ],
             required: ["app", "element_id"]
         ),
@@ -321,6 +334,7 @@ let toolCatalog: [ToolSpec] = [
                 "app": appParam,
                 "path": stringParam("Menu path with \" > \" separators, e.g. \"File > Save\"."),
                 "include_screenshot": includeScreenshotParam,
+                "include_state": includeStateParam,
                 "confirm": confirmParam,
             ],
             required: ["app", "path"]
