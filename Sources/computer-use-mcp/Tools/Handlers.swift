@@ -16,7 +16,7 @@ func click(_ args: [String: Value]) async throws -> CallTool.Result {
 }
 
 func typeText(_ args: [String: Value]) async throws -> CallTool.Result {
-    throw ToolError.notImplemented("type_text")
+    try await typeTextImpl(args)
 }
 
 func pressKey(_ args: [String: Value]) async throws -> CallTool.Result {
@@ -32,13 +32,13 @@ func drag(_ args: [String: Value]) async throws -> CallTool.Result {
 }
 
 func setValue(_ args: [String: Value]) async throws -> CallTool.Result {
-    throw ToolError.notImplemented("set_value")
+    try await setValueImpl(args)
 }
 
 func selectText(_ args: [String: Value]) async throws -> CallTool.Result {
-    throw ToolError.notImplemented("select_text")
+    try await selectTextImpl(args)
 }
 
 func performSecondaryAction(_ args: [String: Value]) async throws -> CallTool.Result {
-    throw ToolError.notImplemented("perform_secondary_action")
+    try await performSecondaryActionImpl(args)
 }
