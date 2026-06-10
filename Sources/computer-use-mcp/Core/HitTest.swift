@@ -32,14 +32,16 @@ func selfOrAncestor(of element: AXUIElement, supporting action: String, maxHops:
 /// Convert screenshot-pixel coordinates from the latest snapshot into a
 /// global screen point, validating bounds.
 func screenPoint(x: Double, y: Double, snapshot: AppSnapshot) throws -> CGPoint {
-    guard let window = snapshot.elements.first else {
+    // Prefer the stored window size (the element list may be scoped to a
+    // subtree); fall back to the first element's box for old snapshots.
+    guard let size = snapshot.windowSize ?? snapshot.elements.first.map({ [$0.frame[2], $0.frame[3]] })
+    else {
         throw ToolError.failed("The latest snapshot has no window element. Call get_app_state again.")
     }
-    let frame = window.frame
     // Pixel coordinates are zero-indexed: width/height themselves are outside.
-    guard x >= 0, y >= 0, x < frame[2], y < frame[3] else {
+    guard x >= 0, y >= 0, x < size[0], y < size[1] else {
         throw ToolError.invalidArguments(
-            "Coordinate (\(Int(x)), \(Int(y))) is outside the \(Int(frame[2]))x\(Int(frame[3])) "
+            "Coordinate (\(Int(x)), \(Int(y))) is outside the \(Int(size[0]))x\(Int(size[1])) "
                 + "screenshot. Coordinates are pixels in the latest get_app_state screenshot."
         )
     }

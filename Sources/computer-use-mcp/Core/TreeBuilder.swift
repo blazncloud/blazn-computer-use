@@ -9,14 +9,16 @@ struct BuiltTree {
     let elements: [SnapshotElement]
 }
 
-private let maxNodes = 500
+let defaultMaxTreeElements = 500
 private let maxDepth = 14
 private let maxChildrenPerNode = 150
 private let maxValueLength = 300
 
 func buildTree(
-    window: AXUIElement, windowOrigin: CGPoint, pixelsPerPoint: Double, generation: String
+    window: AXUIElement, windowOrigin: CGPoint, pixelsPerPoint: Double, generation: String,
+    pathPrefix: [LocatorStep] = [], maxElements: Int = defaultMaxTreeElements
 ) -> BuiltTree {
+    let maxNodes = max(1, min(maxElements, 5000))
     var lines: [String] = []
     var elements: [SnapshotElement] = []
 
@@ -56,10 +58,13 @@ func buildTree(
         }
     }
 
-    visit(window, depth: 0, path: [])
+    visit(window, depth: 0, path: pathPrefix)
 
     if elements.count >= maxNodes {
-        lines.append("… tree truncated at \(maxNodes) elements. Scroll or focus a smaller window for more detail.")
+        lines.append(
+            "… tree truncated at \(maxNodes) elements. Call get_app_state with scope_element_id "
+                + "set to a container id to expand just that subtree, or raise max_elements."
+        )
     }
     return BuiltTree(text: lines.joined(separator: "\n"), elements: elements)
 }

@@ -63,6 +63,13 @@ let toolCatalog: [ToolSpec] = [
                 "window_title": stringParam(
                     "Optional window title to target a specific window. Defaults to the app's front window."
                 ),
+                "scope_element_id": stringParam(
+                    "Optional container element id: return the tree for just that subtree, with the "
+                        + "full element budget. Use when the whole-window tree was truncated."
+                ),
+                "max_elements": integerParam(
+                    "Maximum elements in the returned tree (default 500, cap 5000). Raise for large windows."
+                ),
             ],
             required: ["app"]
         ),

@@ -11,7 +11,26 @@ func listAppsImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
 func getAppStateImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
-    return try await stateResult(app: app, windowTitle: args.string("window_title"), screenshot: .full)
+
+    // Scoped query: rebuild the tree from one element down, with full budget —
+    // the recourse when the whole-window tree is truncated.
+    var scope: TreeScope?
+    if let scopeID = args.string("scope_element_id") {
+        let target = try await resolveTarget(app: app, elementID: scopeID)
+        scope = TreeScope(root: target.element, pathPrefix: target.snapshotElement.path)
+    }
+    return try await stateResult(
+        app: app, windowTitle: args.string("window_title"), screenshot: .full,
+        scope: scope, maxElements: args.integer("max_elements") ?? defaultMaxTreeElements
+    )
+}
+
+/// A subtree root to build the element tree from, with its locator path from
+/// the window root so resolved paths stay anchored at the window.
+/// @unchecked: AXUIElement is an immutable thread-safe CF handle.
+struct TreeScope: @unchecked Sendable {
+    let root: AXUIElement
+    let pathPrefix: [LocatorStep]
 }
 
 /// Screenshot detail for an action's returned state: reduced by default,
@@ -27,7 +46,9 @@ func stateResult(
     app: ResolvedApp,
     windowTitle: String?,
     note: String? = nil,
-    screenshot detail: ScreenshotDetail = .reduced
+    screenshot detail: ScreenshotDetail = .reduced,
+    scope: TreeScope? = nil,
+    maxElements: Int = defaultMaxTreeElements
 ) async throws -> CallTool.Result {
     try requireAccessibilityTrusted()
 
@@ -78,13 +99,16 @@ func stateResult(
         windowTitle: window.title,
         windowOrigin: window.frame.origin,
         pixelsPerPoint: pixelsPerPoint,
+        windowSize: [window.frame.width * pixelsPerPoint, window.frame.height * pixelsPerPoint],
         createdAt: Date()
     ) { generation in
         buildTree(
-            window: window.element,
+            window: scope?.root ?? window.element,
             windowOrigin: window.frame.origin,
             pixelsPerPoint: pixelsPerPoint,
-            generation: generation
+            generation: generation,
+            pathPrefix: scope?.pathPrefix ?? [],
+            maxElements: maxElements
         )
     }
 
