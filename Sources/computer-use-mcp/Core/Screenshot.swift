@@ -27,7 +27,16 @@ func captureWindow(pid: pid_t, title: String?, frame: CGRect) async throws -> Wi
             """
         )
     }
+    // ScreenCaptureKit calls go through the replayd daemon, whose XPC
+    // connection can wedge (observed: a dead replayd port left awaits hanging
+    // for hours while ReplayKit spun on reconnect). Bound the whole capture so
+    // a wedged daemon degrades to a no-screenshot result, not a hung server.
+    return try await withTimeout(seconds: 8, label: "Window screenshot") {
+        try await captureWindowUnbounded(pid: pid, title: title, frame: frame)
+    }
+}
 
+private func captureWindowUnbounded(pid: pid_t, title: String?, frame: CGRect) async throws -> WindowCapture {
     // On-screen windows only: the target must be on-screen to capture a useful
     // image, and this avoids enumerating every off-screen window in the system.
     let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
@@ -71,6 +80,29 @@ func captureWindow(pid: pid_t, title: String?, frame: CGRect) async throws -> Wi
         throw ToolError.failed("Failed to encode the window screenshot.")
     }
     return WindowCapture(pngData: pngData, pixelWidth: image.width, pixelHeight: image.height)
+}
+
+/// Race an operation against a deadline. On timeout the operation's task is
+/// cancelled and abandoned (ScreenCaptureKit awaits do not always honor
+/// cancellation) and a recoverable tool error is thrown instead.
+private func withTimeout<T: Sendable>(
+    seconds: Double, label: String, operation: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask { try await operation() }
+        group.addTask {
+            try await Task.sleep(for: .seconds(seconds))
+            throw ToolError.failed(
+                "\(label) timed out after \(Int(seconds))s. The macOS screen-capture "
+                    + "service may be unresponsive; if this persists, restart the MCP server."
+            )
+        }
+        guard let first = try await group.next() else {
+            throw ToolError.failed("\(label) produced no result.")
+        }
+        group.cancelAll()
+        return first
+    }
 }
 
 private func distance(_ a: CGRect, _ b: CGRect) -> Double {
