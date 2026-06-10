@@ -239,4 +239,131 @@ let toolCatalog: [ToolSpec] = [
         ),
         handler: { args in try await performSecondaryAction(args) }
     ),
+    ToolSpec(
+        name: "open_app",
+        description: """
+            Open (launch) an app so it can be controlled, without stealing focus unless \
+            activate is true. Accepts an app name, bundle id, or .app path. If the app is \
+            already running this is a no-op (plus optional activation). Returns fresh app state.
+            """,
+        inputSchema: objectSchema(
+            [
+                "app": stringParam("App name (e.g. \"Notes\"), bundle id, or full .app path."),
+                "activate": boolParam(
+                    "Default false. When true, brings the app to the foreground — this changes the user's focus."
+                ),
+            ],
+            required: ["app"]
+        ),
+        handler: { args in try await openApp(args) }
+    ),
+    ToolSpec(
+        name: "open_url",
+        description: """
+            Open a URL or file path with its default handler (browser, document app, …). \
+            Non-http(s) schemes require confirm:true because they can trigger arbitrary \
+            app handlers.
+            """,
+        inputSchema: objectSchema(
+            [
+                "url": stringParam("URL (https://…, file://…, app schemes) or an existing file path."),
+                "confirm": confirmParam,
+            ],
+            required: ["url"]
+        ),
+        handler: { args in try await openURL(args) }
+    ),
+    ToolSpec(
+        name: "list_windows",
+        description: """
+            List every window of an app — including dialogs, floating panels, and \
+            minimized windows — with titles, frames, and which one is focused. Use when an \
+            app has multiple windows, a save dialog appeared, or get_app_state shows the \
+            wrong window.
+            """,
+        inputSchema: objectSchema(["app": appParam], required: ["app"]),
+        handler: { args in try await listWindows(args) }
+    ),
+    ToolSpec(
+        name: "manage_window",
+        description: """
+            Manage an app window: raise (bring to front within the app), minimize, \
+            unminimize, move, resize, fullscreen, exit_fullscreen, or close. Targets the \
+            front window unless window_title is given. Move/resize use global screen \
+            points (not screenshot pixels).
+            """,
+        inputSchema: objectSchema(
+            [
+                "app": appParam,
+                "action": enumParam(
+                    ["raise", "minimize", "unminimize", "move", "resize", "fullscreen", "exit_fullscreen", "close"],
+                    "What to do with the window."
+                ),
+                "window_title": stringParam("Optional window title; defaults to the front window."),
+                "x": numberParam("Target X for move (global screen points, top-left origin)."),
+                "y": numberParam("Target Y for move (global screen points)."),
+                "width": numberParam("Target width for resize (points)."),
+                "height": numberParam("Target height for resize (points)."),
+            ],
+            required: ["app", "action"]
+        ),
+        handler: { args in try await manageWindow(args) }
+    ),
+    ToolSpec(
+        name: "click_menu_item",
+        description: """
+            Select an item from the app's menu bar by path, e.g. \"File > Export As…\" or \
+            \"Format > Font > Bold\". Works in the background without opening the menu \
+            visually. Use for commands that have no on-screen button.
+            """,
+        inputSchema: objectSchema(
+            [
+                "app": appParam,
+                "path": stringParam("Menu path with \" > \" separators, e.g. \"File > Save\"."),
+                "include_screenshot": includeScreenshotParam,
+                "confirm": confirmParam,
+            ],
+            required: ["app", "path"]
+        ),
+        handler: { args in try await clickMenuItem(args) }
+    ),
+    ToolSpec(
+        name: "read_clipboard",
+        description: "Read the current text content of the system clipboard.",
+        inputSchema: objectSchema([:]),
+        handler: { args in try await readClipboard(args) }
+    ),
+    ToolSpec(
+        name: "write_clipboard",
+        description: """
+            Replace the system clipboard with the given text, e.g. to paste a long value \
+            with press_key cmd+v. Note: this overwrites whatever the user had copied.
+            """,
+        inputSchema: objectSchema(
+            ["text": stringParam("Text to place on the clipboard.")],
+            required: ["text"]
+        ),
+        handler: { args in try await writeClipboard(args) }
+    ),
+    ToolSpec(
+        name: "wait_for",
+        description: """
+            Wait until an element appears (or disappears, with gone:true) in an app's \
+            window, then return fresh state. Use after actions that trigger loading, \
+            instead of polling get_app_state manually.
+            """,
+        inputSchema: objectSchema(
+            [
+                "app": appParam,
+                "label": stringParam("Match elements whose title/description contains this text (case-insensitive)."),
+                "role": stringParam("Match elements with this exact AX role, e.g. AXButton."),
+                "value_contains": stringParam("Match elements whose value contains this text."),
+                "gone": boolParam("Default false. When true, wait for the match to disappear instead."),
+                "timeout_seconds": numberParam("How long to wait (default 10, max 60)."),
+                "window_title": stringParam("Optional window title; defaults to the front window."),
+            ],
+            required: ["app"]
+        ),
+        handler: { args in try await waitFor(args) }
+    ),
 ]

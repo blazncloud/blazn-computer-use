@@ -42,3 +42,35 @@ func selectText(_ args: [String: Value]) async throws -> CallTool.Result {
 func performSecondaryAction(_ args: [String: Value]) async throws -> CallTool.Result {
     try await performSecondaryActionImpl(args)
 }
+
+func openApp(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await openAppImpl(args)
+}
+
+func openURL(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await openURLImpl(args)
+}
+
+func listWindows(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await listWindowsImpl(args)
+}
+
+func manageWindow(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await manageWindowImpl(args)
+}
+
+func clickMenuItem(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await clickMenuItemImpl(args)
+}
+
+func readClipboard(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await readClipboardImpl(args)
+}
+
+func writeClipboard(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await writeClipboardImpl(args)
+}
+
+func waitFor(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await waitForImpl(args)
+}
