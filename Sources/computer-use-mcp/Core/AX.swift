@@ -1,7 +1,46 @@
 // Thin helpers over the C Accessibility (AXUIElement) API.
 
+import AppKit
 import ApplicationServices
 import Foundation
+
+/// Process-wide AX messaging timeout (seconds). An unresponsive app then
+/// fails each AX call after this bound instead of stalling tool calls for the
+/// 6s system default. Tunable via COMPUTER_USE_MCP_AX_TIMEOUT.
+func configureAXMessagingTimeout() {
+    let seconds = ProcessInfo.processInfo.environment["COMPUTER_USE_MCP_AX_TIMEOUT"]
+        .flatMap(Float.init) ?? 2.0
+    AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), seconds)
+}
+
+/// Human-readable AXError explanation with retry guidance for the agent.
+func axErrorDescription(_ error: AXError) -> String {
+    switch error {
+    case .cannotComplete:
+        return "AXError cannotComplete: the app did not respond (busy, hung, or just slow) — usually transient, retry once"
+    case .invalidUIElement:
+        return "AXError invalidUIElement: the element no longer exists — call get_app_state for fresh ids"
+    case .actionUnsupported:
+        return "AXError actionUnsupported: the element does not support this action"
+    case .attributeUnsupported:
+        return "AXError attributeUnsupported: the element does not expose this attribute"
+    case .notImplemented:
+        return "AXError notImplemented: the app does not implement this part of the accessibility API"
+    case .apiDisabled:
+        return "AXError apiDisabled: accessibility permission is missing or was revoked"
+    case .noValue:
+        return "AXError noValue: the attribute has no value"
+    default:
+        return "AXError \(error.rawValue)"
+    }
+}
+
+/// True when the process behind a pid is gone (quit or crashed); used to turn
+/// confusing stale-element errors into a clear "the app died" message.
+func appIsGone(pid: pid_t) -> Bool {
+    guard let app = NSRunningApplication(processIdentifier: pid) else { return true }
+    return app.isTerminated
+}
 
 func axAttribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var value: CFTypeRef?

@@ -11,6 +11,7 @@ struct TargetWindow {
 }
 
 func targetWindow(for app: ResolvedApp, title requestedTitle: String?) throws -> TargetWindow {
+    try requireAppAlive(app)
     let axApp = app.axApplication
     var windows = axElements(axApp, kAXWindowsAttribute)
     if windows.isEmpty, let focused = axElement(axApp, kAXFocusedWindowAttribute) {

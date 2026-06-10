@@ -43,7 +43,7 @@ func performAXAction(_ action: String, on target: ResolvedTarget) throws {
     let error = AXUIElementPerformAction(target.element, action as CFString)
     guard error == .success else {
         throw ToolError.failed(
-            "\(action) failed on \(describeTarget(target)) (AXError \(error.rawValue))."
+            "\(action) failed on \(describeTarget(target)) (\(axErrorDescription(error)))."
         )
     }
 }

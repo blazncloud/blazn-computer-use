@@ -52,7 +52,7 @@ private func leftClick(_ target: PointTarget, clickCount: Int) async throws -> S
         for _ in 0..<clickCount {
             let error = AXUIElementPerformAction(pressable, kAXPressAction as CFString)
             guard error == .success else {
-                throw ToolError.failed("AXPress failed on \(target.description) (AXError \(error.rawValue)).")
+                throw ToolError.failed("AXPress failed on \(target.description) (\(axErrorDescription(error))).")
             }
             try? await Task.sleep(for: .milliseconds(80))
         }
@@ -73,7 +73,7 @@ private func rightClick(_ target: PointTarget) throws -> String {
     {
         let error = AXUIElementPerformAction(menu, "AXShowMenu" as CFString)
         guard error == .success else {
-            throw ToolError.failed("AXShowMenu failed on \(target.description) (AXError \(error.rawValue)).")
+            throw ToolError.failed("AXShowMenu failed on \(target.description) (\(axErrorDescription(error))).")
         }
         return "Opened context menu on \(target.description) via accessibility [tier1-ax-action]."
     }

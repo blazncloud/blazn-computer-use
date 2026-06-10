@@ -36,6 +36,9 @@ struct AppSnapshot: Codable {
     let windowOrigin: [Double]
     /// Multiplier from window points to screenshot pixels.
     let pixelsPerPoint: Double
+    /// Window size in screenshot pixels, for coordinate bounds checks (the
+    /// element list may be scoped to a subtree). Optional for old snapshots.
+    let windowSize: [Double]?
     let createdAt: Date
     /// Generation tag baked into element ids (e.g. "e11@s3"), so an id from
     /// an older state is rejected loudly instead of silently resolving to
@@ -77,7 +80,7 @@ actor SnapshotStore {
     /// all atomically, so a second same-pid capture cannot collide.
     func capture(
         pid: pid_t, bundleIdentifier: String, windowTitle: String?,
-        windowOrigin: CGPoint, pixelsPerPoint: Double, createdAt: Date,
+        windowOrigin: CGPoint, pixelsPerPoint: Double, windowSize: [Double]?, createdAt: Date,
         buildTree: (String) -> BuiltTree
     ) -> (snapshot: AppSnapshot, tree: BuiltTree) {
         let next = (counters[pid] ?? loadFromDisk(pid).map(Self.parseGeneration) ?? 0) + 1
@@ -87,7 +90,7 @@ actor SnapshotStore {
         let snapshot = AppSnapshot(
             pid: pid, bundleIdentifier: bundleIdentifier, windowTitle: windowTitle,
             windowOrigin: [windowOrigin.x, windowOrigin.y], pixelsPerPoint: pixelsPerPoint,
-            createdAt: createdAt, generation: generation, elements: tree.elements
+            windowSize: windowSize, createdAt: createdAt, generation: generation, elements: tree.elements
         )
         cache[pid] = snapshot
         persist(snapshot)
@@ -173,6 +176,17 @@ func resolveElement(_ element: SnapshotElement, in window: AXUIElement) async th
             + "is stale: \(lastFailure). The UI has changed since that state was captured — "
             + "call get_app_state and use a fresh element id."
     )
+}
+
+/// Fail fast with a clear message when the target app has quit or crashed,
+/// instead of surfacing a confusing stale-element or no-window error.
+func requireAppAlive(_ app: ResolvedApp) throws {
+    if appIsGone(pid: app.pid) {
+        throw ToolError.failed(
+            "\(app.name) (pid \(app.pid)) has quit or crashed since it was resolved. "
+                + "Call list_apps to see what is running, then get_app_state on the new instance."
+        )
+    }
 }
 
 private func elementLabel(_ element: AXUIElement) -> String? {

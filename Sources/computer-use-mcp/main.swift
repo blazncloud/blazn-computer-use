@@ -8,6 +8,11 @@ import Foundation
 // CG asserts (CGS_REQUIRE_INIT) in headless CLI processes.
 _ = CGMainDisplayID()
 
+// Cap how long any single accessibility message may block (the system default
+// is 6s — a frozen app would stall every AX call in a tree walk for that
+// long). Setting the system-wide element changes this process's default.
+configureAXMessagingTimeout()
+
 // A broken pipe to a child (e.g. a dead overlay helper) must yield EPIPE, not
 // terminate the server with SIGPIPE.
 signal(SIGPIPE, SIG_IGN)
