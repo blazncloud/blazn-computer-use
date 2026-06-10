@@ -1,0 +1,50 @@
+// Server-side client for the agent-cursor overlay helper process.
+//
+// Opt-in (off by default) via COMPUTER_USE_MCP_CURSOR=1, so the headless server
+// pays nothing for the overlay in production. When enabled, the server spawns
+// the `overlay` helper once and, before each spatial action, tells it to glide
+// to the target and waits the animation duration — the animate-then-act
+// choreography. The overlay is purely cosmetic; it never moves the real cursor,
+// and a dead/failed helper never blocks or fails the action.
+
+import Foundation
+
+actor AgentCursor {
+    static let shared = AgentCursor()
+
+    private var process: Process?
+    private var stdinPipe: Pipe?
+    private let enabled = ProcessInfo.processInfo.environment["COMPUTER_USE_MCP_CURSOR"] == "1"
+    private let glideDuration = Duration.milliseconds(300)
+
+    /// Glide the overlay cursor to a global top-left point, then return so the
+    /// caller can deliver the actual action. No-op when disabled.
+    func glide(to point: CGPoint) async {
+        guard enabled else { return }
+        guard ensureRunning() else { return }
+        let command = "move \(Int(point.x)) \(Int(point.y))\n"
+        stdinPipe?.fileHandleForWriting.write(Data(command.utf8))
+        try? await Task.sleep(for: glideDuration)
+    }
+
+    private func ensureRunning() -> Bool {
+        if let process, process.isRunning { return true }
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+        task.arguments = ["overlay"]
+        let input = Pipe()
+        task.standardInput = input
+        // Let the helper inherit stderr for diagnostics; ignore its stdout.
+        task.standardOutput = FileHandle.nullDevice
+
+        do {
+            try task.run()
+        } catch {
+            return false
+        }
+        process = task
+        stdinPipe = input
+        return true
+    }
+}
