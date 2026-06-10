@@ -13,11 +13,29 @@ struct WindowCapture {
     let pixelHeight: Int
 }
 
-/// Longest screenshot side sent to the model, in pixels. Keeps payloads and
-/// token costs sane while remaining readable.
-private let maxScreenshotDimension = 1600.0
+/// How much screenshot a state result carries. Action results default to
+/// .reduced: the agent usually verifies effects from the tree and only needs
+/// full pixels when it explicitly re-perceives.
+enum ScreenshotDetail: Sendable {
+    /// Retina-scale capture capped at 1600px — get_app_state ground truth.
+    case full
+    /// 1x capture capped at 1000px — cheap post-action verification.
+    case reduced
+    /// Tree only, no capture.
+    case none
 
-func captureWindow(pid: pid_t, title: String?, frame: CGRect) async throws -> WindowCapture {
+    /// Longest screenshot side sent to the model, in pixels.
+    var maxDimension: Double { self == .full ? 1600 : 1000 }
+
+    /// Capture scale. Full follows the display (with a 2x floor — the
+    /// pointPixelScale can misreport 1 in headless CLI contexts); reduced is
+    /// always 1x, quartering the payload on Retina displays.
+    func scale(forDisplayScale displayScale: CGFloat) -> CGFloat {
+        self == .full ? max(displayScale, 2) : 1
+    }
+}
+
+func captureWindow(pid: pid_t, title: String?, frame: CGRect, detail: ScreenshotDetail) async throws -> WindowCapture {
     guard CGPreflightScreenCaptureAccess() else {
         throw ToolError.failed(
             """
@@ -32,11 +50,13 @@ func captureWindow(pid: pid_t, title: String?, frame: CGRect) async throws -> Wi
     // for hours while ReplayKit spun on reconnect). Bound the whole capture so
     // a wedged daemon degrades to a no-screenshot result, not a hung server.
     return try await withTimeout(seconds: 8, label: "Window screenshot") {
-        try await captureWindowUnbounded(pid: pid, title: title, frame: frame)
+        try await captureWindowUnbounded(pid: pid, title: title, frame: frame, detail: detail)
     }
 }
 
-private func captureWindowUnbounded(pid: pid_t, title: String?, frame: CGRect) async throws -> WindowCapture {
+private func captureWindowUnbounded(
+    pid: pid_t, title: String?, frame: CGRect, detail: ScreenshotDetail
+) async throws -> WindowCapture {
     // On-screen windows only: the target must be on-screen to capture a useful
     // image, and this avoids enumerating every off-screen window in the system.
     let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
@@ -59,12 +79,12 @@ private func captureWindowUnbounded(pid: pid_t, title: String?, frame: CGRect) a
 
     let filter = SCContentFilter(desktopIndependentWindow: window)
 
-    // Capture at 2x for crisp text (pointPixelScale can misreport 1 in
-    // headless CLI contexts), downscaled to the payload cap if needed.
-    let scale = max(CGFloat(filter.pointPixelScale), 2)
+    // Full detail captures at display scale; reduced detail captures at 1x.
+    // Both are downscaled to the detail's payload cap if needed.
+    let scale = detail.scale(forDisplayScale: CGFloat(filter.pointPixelScale))
     let nativeWidth = filter.contentRect.width * scale
     let nativeHeight = filter.contentRect.height * scale
-    let downscale = min(1.0, maxScreenshotDimension / max(nativeWidth, nativeHeight))
+    let downscale = min(1.0, detail.maxDimension / max(nativeWidth, nativeHeight))
 
     let configuration = SCStreamConfiguration()
     configuration.width = Int(nativeWidth * downscale)

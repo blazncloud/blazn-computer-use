@@ -36,6 +36,10 @@ locked inside tools like OpenAI's Codex app. MIT licensed.
 Every interaction tool accepts **either** a stable element id **or** raw screenshot
 coordinates.
 
+Action results return a reduced-resolution screenshot to keep the agent loop fast;
+pass `include_screenshot: false` for tree-only results, and call `get_app_state`
+whenever full-resolution pixels are needed.
+
 ## How it works
 
 Every interaction first resolves to an accessibility element and a screen

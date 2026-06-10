@@ -30,7 +30,10 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         throw ToolError.invalidArguments("mouse_button \"\(buttonName)\" is not supported.")
     }
 
-    return try await stateResult(app: app, windowTitle: target.snapshot.windowTitle, note: note)
+    return try await stateResult(
+        app: app, windowTitle: target.snapshot.windowTitle, note: note,
+        screenshot: screenshotDetail(args)
+    )
 }
 
 /// Best-effort label for the click target, for the safety check.

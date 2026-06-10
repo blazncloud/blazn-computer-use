@@ -11,7 +11,13 @@ func listAppsImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
 func getAppStateImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
-    return try await stateResult(app: app, windowTitle: args.string("window_title"))
+    return try await stateResult(app: app, windowTitle: args.string("window_title"), screenshot: .full)
+}
+
+/// Screenshot detail for an action's returned state: reduced by default,
+/// omitted when the caller passes include_screenshot=false.
+func screenshotDetail(_ args: [String: Value]) -> ScreenshotDetail {
+    args.bool("include_screenshot") == false ? .none : .reduced
 }
 
 /// Build the canonical app-state result: accessibility tree (with element ids
@@ -20,7 +26,8 @@ func getAppStateImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 func stateResult(
     app: ResolvedApp,
     windowTitle: String?,
-    note: String? = nil
+    note: String? = nil,
+    screenshot detail: ScreenshotDetail = .reduced
 ) async throws -> CallTool.Result {
     try requireAccessibilityTrusted()
 
@@ -44,10 +51,12 @@ func stateResult(
 
     var capture: WindowCapture?
     var captureNote: String?
-    do {
-        capture = try await captureWindow(pid: app.pid, title: window.title, frame: window.frame)
-    } catch {
-        captureNote = "Screenshot unavailable: \(error)"
+    if detail != .none {
+        do {
+            capture = try await captureWindow(pid: app.pid, title: window.title, frame: window.frame, detail: detail)
+        } catch {
+            captureNote = "Screenshot unavailable: \(error)"
+        }
     }
 
     // Guard both terms: a degenerate capture or zero-width window must not
@@ -55,6 +64,10 @@ func stateResult(
     let pixelsPerPoint: Double
     if let capture, capture.pixelWidth > 0, window.frame.width > 0 {
         pixelsPerPoint = Double(capture.pixelWidth) / window.frame.width
+    } else if let prior = await SnapshotStore.shared.load(forPid: app.pid), prior.pixelsPerPoint > 0 {
+        // No new screenshot: keep coordinates in the pixel space of the last
+        // one the agent saw, so its ids and coordinates stay comparable.
+        pixelsPerPoint = prior.pixelsPerPoint
     } else {
         pixelsPerPoint = 1
     }
@@ -87,6 +100,8 @@ func stateResult(
     if let capture {
         text += " — screenshot \(capture.pixelWidth)x\(capture.pixelHeight) px"
         text += " (element boxes and x/y coordinates are in these pixels)"
+    } else if detail == .none {
+        text += " — screenshot omitted (element boxes stay in the previous screenshot's pixel scale)"
     }
     text += "\n"
     if let captureNote {

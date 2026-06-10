@@ -35,7 +35,8 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let snapshot = await SnapshotStore.shared.load(forPid: app.pid)
     return try await stateResult(
         app: app, windowTitle: snapshot?.windowTitle,
-        note: "Typed \(text.count) characters into \(described). Verify the new value below."
+        note: "Typed \(text.count) characters into \(described). Verify the new value below.",
+        screenshot: screenshotDetail(args)
     )
 }
 
@@ -118,7 +119,8 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         }
         return try await stateResult(
             app: app, windowTitle: target.snapshot.windowTitle,
-            note: "Set \(describeTarget(target)) to \(desired)."
+            note: "Set \(describeTarget(target)) to \(desired).",
+            screenshot: screenshotDetail(args)
         )
     }
 
@@ -148,7 +150,8 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     }
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle,
-        note: "Set the value of \(describeTarget(target)). Verify it below."
+        note: "Set the value of \(describeTarget(target)). Verify it below.",
+        screenshot: screenshotDetail(args)
     )
 }
 
@@ -191,7 +194,8 @@ func selectTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     }
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle,
-        note: "Selected \"\(text)\" in \(describeTarget(target))."
+        note: "Selected \"\(text)\" in \(describeTarget(target)).",
+        screenshot: screenshotDetail(args)
     )
 }
 
@@ -223,6 +227,7 @@ func performSecondaryActionImpl(_ args: [String: Value]) async throws -> CallToo
     try performAXAction(action, on: target)
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle,
-        note: "Performed \(action) on \(describeTarget(target))."
+        note: "Performed \(action) on \(describeTarget(target)).",
+        screenshot: screenshotDetail(args)
     )
 }

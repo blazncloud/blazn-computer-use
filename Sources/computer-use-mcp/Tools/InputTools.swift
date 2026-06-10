@@ -29,7 +29,8 @@ func pressKeyImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     try? await Task.sleep(for: .milliseconds(80))
 
     return try await stateResult(
-        app: app, windowTitle: window?.title, note: "Pressed \(combo)."
+        app: app, windowTitle: window?.title, note: "Pressed \(combo).",
+        screenshot: screenshotDetail(args)
     )
 }
 
@@ -51,7 +52,8 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle,
-        note: "Scrolled (\(deltaX),\(deltaY)) at \(target.description)."
+        note: "Scrolled (\(deltaX),\(deltaY)) at \(target.description).",
+        screenshot: screenshotDetail(args)
     )
 }
 
@@ -85,6 +87,7 @@ func dragImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     return try await stateResult(
         app: app, windowTitle: snapshot.windowTitle,
         note: "Dragged from (\(Int(from.x.rounded())),\(Int(from.y.rounded()))) "
-            + "to (\(Int(to.x.rounded())),\(Int(to.y.rounded())))."
+            + "to (\(Int(to.x.rounded())),\(Int(to.y.rounded()))).",
+        screenshot: screenshotDetail(args)
     )
 }

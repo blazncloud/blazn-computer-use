@@ -31,6 +31,12 @@ private let confirmParam = boolParam(
         + "list). Required only when the server flags the action; the error says so."
 )
 
+private let includeScreenshotParam = boolParam(
+    "Default true. Set false to omit the screenshot from the returned state — faster "
+        + "and cheaper. The accessibility tree is always returned; call get_app_state "
+        + "when you need full-resolution pixels again."
+)
+
 let toolCatalog: [ToolSpec] = [
     ToolSpec(
         name: "list_apps",
@@ -78,6 +84,7 @@ let toolCatalog: [ToolSpec] = [
                 "click_count": integerParam("Number of clicks: 1 (default) or 2 for double-click."),
                 "mouse_button": enumParam(["left", "right", "middle"], "Mouse button. Defaults to left."),
                 "allow_global_cursor": allowGlobalCursorParam,
+                "include_screenshot": includeScreenshotParam,
                 "confirm": confirmParam,
             ],
             required: ["app"]
@@ -96,6 +103,7 @@ let toolCatalog: [ToolSpec] = [
                 "app": appParam,
                 "element_id": elementIDParam,
                 "text": stringParam("Literal text to type."),
+                "include_screenshot": includeScreenshotParam,
                 "confirm": confirmParam,
             ],
             required: ["app", "text"]
@@ -115,6 +123,7 @@ let toolCatalog: [ToolSpec] = [
                 "app": appParam,
                 "key": stringParam("Key or combination in xdotool syntax, e.g. \"Return\", \"cmd+n\"."),
                 "allow_global_cursor": allowGlobalCursorParam,
+                "include_screenshot": includeScreenshotParam,
                 "confirm": confirmParam,
             ],
             required: ["app", "key"]
@@ -136,6 +145,7 @@ let toolCatalog: [ToolSpec] = [
                 "delta_x": integerParam("Horizontal scroll amount in pixels."),
                 "delta_y": integerParam("Vertical scroll amount in pixels."),
                 "allow_global_cursor": allowGlobalCursorParam,
+                "include_screenshot": includeScreenshotParam,
                 "confirm": confirmParam,
             ],
             required: ["app"]
@@ -157,6 +167,7 @@ let toolCatalog: [ToolSpec] = [
                 "to_x": numberParam("End X pixel coordinate in the latest screenshot."),
                 "to_y": numberParam("End Y pixel coordinate in the latest screenshot."),
                 "allow_global_cursor": allowGlobalCursorParam,
+                "include_screenshot": includeScreenshotParam,
                 "confirm": confirmParam,
             ],
             required: ["app", "from_x", "from_y", "to_x", "to_y"]
@@ -175,6 +186,7 @@ let toolCatalog: [ToolSpec] = [
                 "app": appParam,
                 "element_id": elementIDParam,
                 "value": stringParam("New value. For checkboxes use \"true\"/\"false\"; for sliders a number."),
+                "include_screenshot": includeScreenshotParam,
                 "confirm": confirmParam,
             ],
             required: ["app", "element_id", "value"]
@@ -194,6 +206,7 @@ let toolCatalog: [ToolSpec] = [
                 "element_id": elementIDParam,
                 "text": stringParam("Exact text to select, as it appears in the element's current value."),
                 "occurrence": integerParam("Which occurrence to select when the text appears multiple times (1-based, default 1)."),
+                "include_screenshot": includeScreenshotParam,
             ],
             required: ["app", "element_id", "text"]
         ),
@@ -213,6 +226,7 @@ let toolCatalog: [ToolSpec] = [
                 "action": stringParam(
                     "Accessibility action to perform. Defaults to AXShowMenu (context menu)."
                 ),
+                "include_screenshot": includeScreenshotParam,
             ],
             required: ["app", "element_id"]
         ),
