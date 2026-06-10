@@ -1,13 +1,13 @@
 # computer-use-mcp
 
-**Give any AI agent a Mac it can actually use.** A single signed Swift binary that
-exposes macOS computer use as a standard [MCP](https://modelcontextprotocol.io) server.
-Point Claude Code, Cursor, Codex, Gemini CLI, or your own agent at it and the agent can
-**see and operate any Mac app — in the background, without hijacking your cursor or
-stealing focus.**
+**This is the open, agent-agnostic version of the computer-use capability.** A single
+signed Swift binary that exposes macOS computer use as a standard
+[MCP](https://modelcontextprotocol.io) server. Point Claude Code, Cursor, Codex, Gemini
+CLI, or your own agent at it and the agent can **see and operate the apps on your Mac —
+in the background, without hijacking your cursor or stealing focus.**
 
-This is the open, agent-agnostic version of the computer-use capability that ships
-locked inside tools like OpenAI's Codex app. MIT licensed.
+Unlike the computer-use capability locked inside tools like OpenAI's Codex app, this runs
+on the Mac you're already using and works with any agent. MIT licensed.
 
 > **Status:** early development. macOS only. Local use while the Mac is unlocked.
 
