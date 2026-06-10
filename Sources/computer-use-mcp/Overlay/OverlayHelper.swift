@@ -43,6 +43,9 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
 
     private var visible = false
     private var animating = false
+    /// Pending idle fade-out, cancelled whenever a new glide arrives.
+    private var fadeWork: DispatchWorkItem?
+    private let idleFadeDelay: TimeInterval = 2.5
     /// Cursor position in AppKit global coordinates (bottom-left origin at the
     /// primary screen) — the one space all screen frames share.
     private var currentPoint = CGPoint.zero
@@ -163,10 +166,10 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         startTime = CACurrentMediaTime()
         animating = true
         overlayDebug("beginGlide cg=\(point) appkit=\(targetPoint) from=\(startPoint)")
-        if !visible {
-            visible = true
-            for layer in cursorLayers { layer.opacity = 1 }
-        }
+        fadeWork?.cancel()
+        fadeWork = nil
+        visible = true
+        setCursorOpacity(1, animated: false)
 
         if displayLink == nil, let view = panels.first?.contentView {
             let link = view.displayLink(target: self, selector: #selector(tick))
@@ -191,7 +194,32 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
             animating = false
             displayLink?.isPaused = true  // stop per-frame wakeups while idle
             overlayDebug("glide done at \(currentPoint)")
+            scheduleIdleFade()
         }
+    }
+
+    /// Fade the cursor away after a quiet period so it does not sit on the
+    /// last target forever; the next glide restores it instantly.
+    private func scheduleIdleFade() {
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.animating else { return }
+            self.visible = false
+            self.setCursorOpacity(0, animated: true)
+            overlayDebug("idle fade")
+        }
+        fadeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + idleFadeDelay, execute: work)
+    }
+
+    private func setCursorOpacity(_ value: Float, animated: Bool) {
+        CATransaction.begin()
+        if animated {
+            CATransaction.setAnimationDuration(0.4)
+        } else {
+            CATransaction.setDisableActions(true)
+        }
+        for layer in cursorLayers { layer.opacity = value }
+        CATransaction.commit()
     }
 
     private func easeOutCubic(_ t: Double) -> Double {
