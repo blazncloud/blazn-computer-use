@@ -24,10 +24,7 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     case "right":
         note = try rightClick(target)
     case "middle":
-        guard target.point != .zero else {
-            throw ToolError.invalidArguments("middle click requires a resolvable point.")
-        }
-        let tier = try deliverClick(at: target.point, button: .middle, clickCount: clickCount, context: target.deliveryContext)
+        let tier = try deliverClick(at: target.requirePoint(), button: .middle, clickCount: clickCount, context: target.deliveryContext)
         note = "Middle-clicked \(target.description) [\(tier.rawValue)]."
     default:
         throw ToolError.invalidArguments("mouse_button \"\(buttonName)\" is not supported.")
@@ -43,7 +40,7 @@ private func clickTargetLabel(_ target: PointTarget) -> String? {
 
 private func leftClick(_ target: PointTarget, clickCount: Int) async throws -> String {
     // Animate the (cosmetic) agent cursor to the target before acting.
-    if target.point != .zero { await AgentCursor.shared.glide(to: target.point) }
+    if let point = target.point { await AgentCursor.shared.glide(to: point) }
 
     // Tier 1: accessibility press, when the element advertises it.
     if let element = target.element,
@@ -61,7 +58,7 @@ private func leftClick(_ target: PointTarget, clickCount: Int) async throws -> S
     }
 
     // Tiers 2–4: synthetic click at the point.
-    let tier = try deliverClick(at: target.point, button: .left, clickCount: clickCount, context: target.deliveryContext)
+    let tier = try deliverClick(at: target.requirePoint(), button: .left, clickCount: clickCount, context: target.deliveryContext)
     let verb = clickCount > 1 ? "Double-clicked" : "Clicked"
     return "\(verb) \(target.description) [\(tier.rawValue)]."
 }
@@ -77,6 +74,6 @@ private func rightClick(_ target: PointTarget) throws -> String {
         }
         return "Opened context menu on \(target.description) via accessibility [tier1-ax-action]."
     }
-    let tier = try deliverClick(at: target.point, button: .right, clickCount: 1, context: target.deliveryContext)
+    let tier = try deliverClick(at: target.requirePoint(), button: .right, clickCount: 1, context: target.deliveryContext)
     return "Right-clicked \(target.description) [\(tier.rawValue)]."
 }

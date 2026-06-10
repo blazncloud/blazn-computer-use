@@ -44,8 +44,9 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         throw ToolError.invalidArguments("Provide a non-zero delta_x or delta_y.")
     }
 
-    if target.point != .zero { await AgentCursor.shared.glide(to: target.point) }
-    deliverScroll(at: target.point, deltaX: deltaX, deltaY: deltaY, context: target.deliveryContext)
+    let point = try target.requirePoint()
+    await AgentCursor.shared.glide(to: point)
+    deliverScroll(at: point, deltaX: deltaX, deltaY: deltaY, context: target.deliveryContext)
     try? await Task.sleep(for: .milliseconds(80))
 
     return try await stateResult(

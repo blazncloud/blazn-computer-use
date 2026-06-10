@@ -9,13 +9,27 @@ import MCP
 struct PointTarget {
     /// The element under the point (hit-tested or resolved from an id), if any.
     let element: AXUIElement?
-    /// Global screen point (top-left origin).
-    let point: CGPoint
+    /// Global screen point (top-left origin). Nil when the element exposes no
+    /// frame — such targets can only be driven by accessibility actions, and
+    /// point-based delivery must fail loudly rather than act at (0,0).
+    let point: CGPoint?
     /// Snapshot the ids/coordinates came from.
     let snapshot: AppSnapshot
     /// Human description for result notes.
     let description: String
     let deliveryContext: DeliveryContext
+
+    /// The point, or a clear error for tools that cannot act without one.
+    func requirePoint() throws -> CGPoint {
+        guard let point else {
+            throw ToolError.failed(
+                "\(description) has no screen position (the element exposes no frame), "
+                    + "so this action cannot be delivered. Call get_app_state and target "
+                    + "a different element or use screenshot coordinates."
+            )
+        }
+        return point
+    }
 }
 
 func resolvePointTarget(_ args: [String: Value], app: ResolvedApp) async throws -> PointTarget {
@@ -33,7 +47,6 @@ func resolvePointTarget(_ args: [String: Value], app: ResolvedApp) async throws 
     if let elementID = args.string("element_id") {
         let target = try await resolveTarget(app: app, elementID: elementID)
         let point = axFrame(target.element).map { CGPoint(x: $0.midX, y: $0.midY) }
-            ?? CGPoint(x: 0, y: 0)
         return PointTarget(
             element: target.element, point: point, snapshot: target.snapshot,
             description: describeTarget(target), deliveryContext: context
