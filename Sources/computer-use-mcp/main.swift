@@ -8,6 +8,10 @@ import Foundation
 // CG asserts (CGS_REQUIRE_INIT) in headless CLI processes.
 _ = CGMainDisplayID()
 
+// A broken pipe to a child (e.g. a dead overlay helper) must yield EPIPE, not
+// terminate the server with SIGPIPE.
+signal(SIGPIPE, SIG_IGN)
+
 let arguments = Array(CommandLine.arguments.dropFirst())
 
 switch arguments.first {

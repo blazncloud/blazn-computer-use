@@ -23,7 +23,16 @@ actor AgentCursor {
         guard enabled else { return }
         guard ensureRunning() else { return }
         let command = "move \(Int(point.x)) \(Int(point.y))\n"
-        stdinPipe?.fileHandleForWriting.write(Data(command.utf8))
+        // Throwing write: a dead helper surfaces as a Swift error (SIGPIPE is
+        // ignored at startup), never an uncatchable ObjC exception. On failure
+        // tear down the dead helper so the next glide respawns it cleanly.
+        do {
+            try stdinPipe?.fileHandleForWriting.write(contentsOf: Data(command.utf8))
+        } catch {
+            process = nil
+            stdinPipe = nil
+            return
+        }
         try? await Task.sleep(for: glideDuration)
     }
 

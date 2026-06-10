@@ -105,6 +105,7 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
             link.add(to: .main, forMode: .common)
             displayLink = link
         }
+        displayLink?.isPaused = false
     }
 
     @objc private func tick() {
@@ -121,7 +122,10 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         cursorLayer.position = position
         CATransaction.commit()
 
-        if progress >= 1 { animating = false }
+        if progress >= 1 {
+            animating = false
+            displayLink?.isPaused = true  // stop per-frame wakeups while idle
+        }
     }
 
     private func easeOutCubic(_ t: Double) -> Double {
