@@ -2,13 +2,27 @@
 //
 // The MCP server is a headless async stdio process with no AppKit run loop, so
 // the cosmetic cursor lives here, in its own process. This helper runs an
-// .accessory NSApplication (no Dock icon, never frontmost), shows a
-// click-through borderless panel above all apps, and glides a cursor glyph
-// toward target points it reads from stdin ("move <globalX> <globalY>\n",
+// .accessory NSApplication (no Dock icon, never frontmost) and glides a cursor
+// glyph toward target points it reads from stdin ("move <globalX> <globalY>\n",
 // top-left screen coordinates). It never moves the real system cursor.
+//
+// One click-through borderless panel per display: with "Displays have separate
+// Spaces" (the macOS default) a window is clipped to a single screen, so one
+// panel — even sized to the union of all displays — can never draw on the
+// others. The cursor position is modeled once in AppKit global coordinates and
+// mirrored into every panel; each panel clips to its own screen, so the glyph
+// appears on whichever display contains it (including straddling a boundary
+// mid-glide).
 
 import AppKit
 import QuartzCore
+
+/// Stderr diagnostics, enabled with COMPUTER_USE_MCP_OVERLAY_DEBUG=1. The
+/// helper inherits the server's stderr, so these reach the MCP host's logs.
+func overlayDebug(_ message: @autoclosure () -> String) {
+    guard ProcessInfo.processInfo.environment["COMPUTER_USE_MCP_OVERLAY_DEBUG"] == "1" else { return }
+    FileHandle.standardError.write(Data("[overlay] \(message())\n".utf8))
+}
 
 @MainActor
 func runOverlay() -> Never {
@@ -23,44 +37,95 @@ func runOverlay() -> Never {
 
 @MainActor
 private final class OverlayController: NSObject, NSApplicationDelegate {
-    private var panel: NSPanel!
-    private let cursorLayer = CALayer()
+    private var panels: [NSPanel] = []
+    private var cursorLayers: [CALayer] = []
     private var displayLink: CADisplayLink?
 
+    private var visible = false
     private var animating = false
+    /// Cursor position in AppKit global coordinates (bottom-left origin at the
+    /// primary screen) — the one space all screen frames share.
+    private var currentPoint = CGPoint.zero
     private var startPoint = CGPoint.zero
     private var targetPoint = CGPoint.zero
     private var startTime: CFTimeInterval = 0
-    private let duration: CFTimeInterval = 0.28
+    private let duration: CFTimeInterval = 0.22
 
     func start() {
-        guard let screen = NSScreen.main else { exit(0) }
-        panel = NSPanel(
-            contentRect: screen.frame,
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered, defer: false
+        guard let primary = NSScreen.screens.first else { exit(0) }
+        currentPoint = CGPoint(x: primary.frame.midX, y: primary.frame.midY)
+        buildPanels()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(screensChanged),
+            name: NSApplication.didChangeScreenParametersNotification, object: nil
         )
-        panel.level = .screenSaver
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = false
-        panel.ignoresMouseEvents = true  // click-through: real input passes through
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
-
-        let host = NSView(frame: screen.frame)
-        host.wantsLayer = true
-        host.layer?.addSublayer(cursorLayer)
-        panel.contentView = host
-
-        let glyph = cursorGlyph()
-        cursorLayer.contents = glyph
-        cursorLayer.bounds = CGRect(x: 0, y: 0, width: 24, height: 24)
-        cursorLayer.anchorPoint = CGPoint(x: 0.15, y: 0.85)  // arrow hotspot ~ tip
-        cursorLayer.opacity = 0
-        cursorLayer.position = CGPoint(x: screen.frame.midX, y: screen.frame.midY)
-
-        panel.orderFrontRegardless()
         readStdin()
+    }
+
+    // MARK: panels
+
+    private func buildPanels() {
+        for screen in NSScreen.screens {
+            let panel = NSPanel(
+                contentRect: screen.frame,
+                styleMask: [.borderless, .nonactivatingPanel],
+                backing: .buffered, defer: false
+            )
+            panel.level = .screenSaver
+            panel.isOpaque = false
+            panel.backgroundColor = .clear
+            panel.hasShadow = false
+            panel.ignoresMouseEvents = true  // click-through: real input passes through
+            panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+
+            let host = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
+            host.wantsLayer = true
+
+            let layer = CALayer()
+            layer.contents = cursorGlyph()
+            layer.contentsScale = screen.backingScaleFactor
+            layer.bounds = CGRect(x: 0, y: 0, width: 40, height: 40)
+            layer.anchorPoint = CGPoint(x: 0.18, y: 0.82)  // arrow hotspot ~ tip
+            layer.opacity = visible ? 1 : 0
+            host.layer?.addSublayer(layer)
+
+            panel.contentView = host
+            panel.orderFrontRegardless()
+            panels.append(panel)
+            cursorLayers.append(layer)
+        }
+        syncLayers()
+    }
+
+    @objc private func screensChanged() {
+        displayLink?.invalidate()
+        displayLink = nil
+        animating = false
+        for panel in panels { panel.orderOut(nil) }
+        panels.removeAll()
+        cursorLayers.removeAll()
+        buildPanels()
+    }
+
+    /// Mirror the global cursor position into every panel's local space; each
+    /// panel clips to its own screen, so the glyph shows where it belongs.
+    private func syncLayers() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (index, panel) in panels.enumerated() {
+            cursorLayers[index].position = CGPoint(
+                x: currentPoint.x - panel.frame.origin.x,
+                y: currentPoint.y - panel.frame.origin.y
+            )
+        }
+        CATransaction.commit()
+    }
+
+    /// Height of the primary display (origin at 0,0), used to flip Quartz
+    /// global top-left coordinates into AppKit bottom-left coordinates. This is
+    /// NOT NSScreen.main (that follows the key window).
+    private var primaryHeight: CGFloat {
+        (NSScreen.screens.first { $0.frame.origin == .zero } ?? NSScreen.screens.first)?.frame.height ?? 0
     }
 
     // MARK: stdin command loop
@@ -91,17 +156,20 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
     // MARK: animation
 
     fileprivate func beginGlide(toGlobalTopLeft point: CGPoint) {
-        guard let screen = NSScreen.main else { return }
-        // Global top-left → AppKit bottom-left screen coordinates.
-        let target = CGPoint(x: point.x, y: screen.frame.height - point.y)
-        startPoint = cursorLayer.presentation()?.position ?? cursorLayer.position
-        targetPoint = target
+        // Quartz global top-left → AppKit bottom-left, using the PRIMARY screen
+        // height so it's correct on any display in the unified coordinate plane.
+        targetPoint = CGPoint(x: point.x, y: primaryHeight - point.y)
+        startPoint = currentPoint
         startTime = CACurrentMediaTime()
         animating = true
-        cursorLayer.opacity = 1
+        overlayDebug("beginGlide cg=\(point) appkit=\(targetPoint) from=\(startPoint)")
+        if !visible {
+            visible = true
+            for layer in cursorLayers { layer.opacity = 1 }
+        }
 
-        if displayLink == nil {
-            let link = panel.contentView!.displayLink(target: self, selector: #selector(tick))
+        if displayLink == nil, let view = panels.first?.contentView {
+            let link = view.displayLink(target: self, selector: #selector(tick))
             link.add(to: .main, forMode: .common)
             displayLink = link
         }
@@ -113,18 +181,16 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         let elapsed = CACurrentMediaTime() - startTime
         let progress = min(1, elapsed / duration)
         let eased = easeOutCubic(progress)
-        let position = CGPoint(
+        currentPoint = CGPoint(
             x: startPoint.x + (targetPoint.x - startPoint.x) * eased,
             y: startPoint.y + (targetPoint.y - startPoint.y) * eased
         )
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        cursorLayer.position = position
-        CATransaction.commit()
+        syncLayers()
 
         if progress >= 1 {
             animating = false
             displayLink?.isPaused = true  // stop per-frame wakeups while idle
+            overlayDebug("glide done at \(currentPoint)")
         }
     }
 
@@ -136,24 +202,33 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
     // MARK: glyph
 
     private func cursorGlyph() -> CGImage? {
-        let size = NSSize(width: 24, height: 24)
-        let image = NSImage(size: size)
+        // Rendered at 2x so it stays crisp on Retina displays (each layer's
+        // contentsScale maps it back to 40pt).
+        let scale: CGFloat = 2
+        let image = NSImage(size: NSSize(width: 40 * scale, height: 40 * scale))
         image.lockFocus()
-        let context = NSGraphicsContext.current?.cgContext
-        // A filled arrow with a subtle ring, in a distinct agent color.
+        NSGraphicsContext.current?.cgContext.scaleBy(x: scale, y: scale)
+        // A translucent halo behind a bold arrow, so the agent cursor is
+        // unmistakable against any background.
+        let halo = NSBezierPath(ovalIn: NSRect(x: 2, y: 2, width: 36, height: 36))
+        NSColor.systemBlue.withAlphaComponent(0.22).setFill()
+        halo.fill()
+        NSColor.systemBlue.withAlphaComponent(0.6).setStroke()
+        halo.lineWidth = 1.5
+        halo.stroke()
+
         let arrow = NSBezierPath()
-        arrow.move(to: NSPoint(x: 3, y: 21))
-        arrow.line(to: NSPoint(x: 3, y: 4))
-        arrow.line(to: NSPoint(x: 9, y: 10))
-        arrow.line(to: NSPoint(x: 13, y: 10))
-        arrow.line(to: NSPoint(x: 3, y: 21))
+        arrow.move(to: NSPoint(x: 8, y: 34))
+        arrow.line(to: NSPoint(x: 8, y: 9))
+        arrow.line(to: NSPoint(x: 17, y: 18))
+        arrow.line(to: NSPoint(x: 23, y: 18))
+        arrow.line(to: NSPoint(x: 8, y: 34))
         arrow.close()
         NSColor.systemBlue.setFill()
         arrow.fill()
         NSColor.white.setStroke()
-        arrow.lineWidth = 1.5
+        arrow.lineWidth = 2
         arrow.stroke()
-        context?.flush()
         image.unlockFocus()
         return image.cgImage(forProposedRect: nil, context: nil, hints: nil)
     }
