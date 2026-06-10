@@ -73,6 +73,23 @@ func axRole(_ element: AXUIElement) -> String {
     axString(element, kAXRoleAttribute) ?? "AXUnknown"
 }
 
+/// Best human-readable label for an element, used by the safety policy and
+/// result notes. Falls back through title, description, help, an associated
+/// title element, then value.
+func clickableLabel(_ element: AXUIElement) -> String? {
+    for attribute in [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute] {
+        if let value = axString(element, attribute), !value.isEmpty { return value }
+    }
+    if let titleElement = axElement(element, kAXTitleUIElementAttribute),
+        let value = axString(titleElement, kAXValueAttribute) ?? axString(titleElement, kAXTitleAttribute),
+        !value.isEmpty
+    {
+        return value
+    }
+    if let value = axString(element, kAXValueAttribute), !value.isEmpty { return value }
+    return nil
+}
+
 func requireAccessibilityTrusted() throws {
     guard AXIsProcessTrusted() else {
         throw ToolError.failed(

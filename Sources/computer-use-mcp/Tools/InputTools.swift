@@ -8,9 +8,15 @@ import MCP
 func pressKeyImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
     try requireAccessibilityTrusted()
-    try SafetyPolicy.check(app: app, confirmed: SafetyPolicy.confirmed(args))
+    let confirmed = SafetyPolicy.confirmed(args)
+    try SafetyPolicy.check(app: app, confirmed: confirmed)
     let combo = try args.requireString("key")
     let chord = try Keymap.parse(combo)
+    try SafetyPolicy.checkKey(
+        combo: combo, chord: chord,
+        focused: axElement(app.axApplication, kAXFocusedUIElementAttribute),
+        app: app, confirmed: confirmed
+    )
 
     let window = try? targetWindow(for: app, title: SnapshotStore.load(forPid: app.pid)?.windowTitle)
     let context = DeliveryContext(
@@ -58,6 +64,12 @@ func dragImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let from = try screenPoint(x: try args.requireNumber("from_x"), y: try args.requireNumber("from_y"), snapshot: snapshot)
     let to = try screenPoint(x: try args.requireNumber("to_x"), y: try args.requireNumber("to_y"), snapshot: snapshot)
 
+    // Gate a drop onto a destructive target (e.g. the Trash) like a click.
+    let confirmed = SafetyPolicy.confirmed(args)
+    if let destination = accessibilityElement(at: to, pid: app.pid) {
+        try SafetyPolicy.checkClick(label: clickableLabel(destination), app: app, confirmed: confirmed)
+    }
+
     let window = try? targetWindow(for: app, title: snapshot.windowTitle)
     let context = DeliveryContext(
         pid: app.pid,
@@ -71,7 +83,7 @@ func dragImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
     return try await stateResult(
         app: app, windowTitle: snapshot.windowTitle,
-        note: "Dragged from (\(args.integer("from_x") ?? 0),\(args.integer("from_y") ?? 0)) "
-            + "to (\(args.integer("to_x") ?? 0),\(args.integer("to_y") ?? 0))."
+        note: "Dragged from (\(Int(from.x.rounded())),\(Int(from.y.rounded()))) "
+            + "to (\(Int(to.x.rounded())),\(Int(to.y.rounded())))."
     )
 }

@@ -9,6 +9,7 @@ import MCP
 
 func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
+    try requireAccessibilityTrusted()
     let buttonName = args.string("mouse_button") ?? "left"
     let clickCount = max(1, args.integer("click_count") ?? 1)
     let confirmed = SafetyPolicy.confirmed(args)
@@ -37,12 +38,7 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
 /// Best-effort label for the click target, for the safety check.
 private func clickTargetLabel(_ target: PointTarget) -> String? {
-    if let element = target.element {
-        return axString(element, kAXTitleAttribute)
-            ?? axString(element, kAXDescriptionAttribute)
-            ?? axString(element, kAXValueAttribute)
-    }
-    return nil
+    target.element.flatMap(clickableLabel)
 }
 
 private func leftClick(_ target: PointTarget, clickCount: Int) async throws -> String {

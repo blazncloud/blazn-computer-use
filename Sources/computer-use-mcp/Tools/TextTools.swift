@@ -9,6 +9,7 @@ import MCP
 
 func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
+    try requireAccessibilityTrusted()
     let text = try args.requireString("text")
     let confirmed = SafetyPolicy.confirmed(args)
     try SafetyPolicy.check(app: app, confirmed: confirmed)
@@ -91,11 +92,15 @@ private func insertText(_ text: String, into element: AXUIElement, described: St
 
 func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
+    try requireAccessibilityTrusted()
     let confirmed = SafetyPolicy.confirmed(args)
     try SafetyPolicy.check(app: app, confirmed: confirmed)
     let target = try resolveTarget(app: app, elementID: args.requireString("element_id"))
     try SafetyPolicy.checkTyping(into: target.element, app: app, confirmed: confirmed)
     let value = try args.requireString("value")
+    try SafetyPolicy.checkValueChange(
+        currentValue: axString(target.element, kAXValueAttribute), newValue: value, app: app, confirmed: confirmed
+    )
 
     // Checkboxes and radio buttons: treat as semantic toggle.
     if target.snapshotElement.role == "AXCheckBox" || target.snapshotElement.role == "AXRadioButton" {
@@ -147,6 +152,7 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
 func selectTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
+    try requireAccessibilityTrusted()
     let target = try resolveTarget(app: app, elementID: args.requireString("element_id"))
     let text = try args.requireString("text")
     let occurrence = max(1, args.integer("occurrence") ?? 1)
@@ -189,6 +195,9 @@ func selectTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
 func performSecondaryActionImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
+    try requireAccessibilityTrusted()
+    let confirmed = SafetyPolicy.confirmed(args)
+    try SafetyPolicy.check(app: app, confirmed: confirmed)
     let target = try resolveTarget(app: app, elementID: args.requireString("element_id"))
     let action = args.string("action") ?? "AXShowMenu"
 
@@ -198,6 +207,14 @@ func performSecondaryActionImpl(_ args: [String: Value]) async throws -> CallToo
             "\(describeTarget(target)) does not support \(action). "
                 + "Available actions: \(available.joined(separator: ", "))."
         )
+    }
+    // Activating actions can be destructive (e.g. AXPress on a Delete button);
+    // gate them like a click. Menu/stepper actions stay ungated.
+    let activatingActions: Set<String> = [
+        kAXPressAction as String, "AXConfirm", "AXPick", "AXOpen",
+    ]
+    if activatingActions.contains(action) {
+        try SafetyPolicy.checkClick(label: clickableLabel(target.element), app: app, confirmed: confirmed)
     }
     try performAXAction(action, on: target)
     return try await stateResult(

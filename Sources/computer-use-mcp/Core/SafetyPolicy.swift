@@ -13,6 +13,8 @@
 //   COMPUTER_USE_MCP_DESTRUCTIVE=pat,pat    extra destructive label substrings
 
 import ApplicationServices
+import Carbon.HIToolbox
+import CoreGraphics
 import Foundation
 import MCP
 
@@ -81,6 +83,32 @@ enum SafetyPolicy {
             throw SafetyError(
                 reason: "the target in \(app.name) is a secure text field (password entry)."
             )
+        }
+    }
+
+    /// Gate a key press: inherently destructive shortcuts (⌘⌫ etc.) and
+    /// Return/Space activating a focused destructive control.
+    static func checkKey(
+        combo: String, chord: KeyChord, focused: AXUIElement?, app: ResolvedApp, confirmed: Bool
+    ) throws {
+        guard isEnabled, !confirmed else { return }
+        let deleteKeys: Set<CGKeyCode> = [CGKeyCode(kVK_Delete), CGKeyCode(kVK_ForwardDelete)]
+        if chord.flags.contains(.maskCommand), deleteKeys.contains(chord.keyCode) {
+            throw SafetyError(reason: "\"\(combo)\" is a destructive keyboard shortcut in \(app.name).")
+        }
+        let activateKeys: Set<CGKeyCode> = [
+            CGKeyCode(kVK_Return), CGKeyCode(kVK_ANSI_KeypadEnter), CGKeyCode(kVK_Space),
+        ]
+        if activateKeys.contains(chord.keyCode), let focused {
+            try checkClick(label: clickableLabel(focused), app: app, confirmed: confirmed)
+        }
+    }
+
+    /// Gate an action that clears a non-empty value (a destructive wipe).
+    static func checkValueChange(currentValue: String?, newValue: String, app: ResolvedApp, confirmed: Bool) throws {
+        guard isEnabled, !confirmed else { return }
+        if let current = currentValue, !current.isEmpty, newValue.isEmpty {
+            throw SafetyError(reason: "this clears existing content in \(app.name).")
         }
     }
 }
