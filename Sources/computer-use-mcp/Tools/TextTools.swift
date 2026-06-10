@@ -185,7 +185,24 @@ func selectTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         )
     }
 
-    var range = CFRange(location: found.location, length: found.length)
+    // position: select the match (default), or collapse the caret to one end —
+    // for inserting text before/after a landmark with type_text.
+    let position = args.string("position") ?? "select"
+    var range: CFRange
+    let note: String
+    switch position {
+    case "select":
+        range = CFRange(location: found.location, length: found.length)
+        note = "Selected \"\(text)\" in \(describeTarget(target))."
+    case "before":
+        range = CFRange(location: found.location, length: 0)
+        note = "Placed the cursor before \"\(text)\" in \(describeTarget(target))."
+    case "after":
+        range = CFRange(location: found.location + found.length, length: 0)
+        note = "Placed the cursor after \"\(text)\" in \(describeTarget(target))."
+    default:
+        throw ToolError.invalidArguments("position must be select, before, or after.")
+    }
     guard let rangeValue = AXValueCreate(.cfRange, &range),
         AXUIElementSetAttributeValue(target.element, kAXSelectedTextRangeAttribute as CFString, rangeValue)
             == .success
@@ -194,9 +211,32 @@ func selectTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     }
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle,
-        note: "Selected \"\(text)\" in \(describeTarget(target)).",
+        note: note,
         screenshot: screenshotDetail(args)
     )
+}
+
+// MARK: - read_text
+
+func readTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
+    let app = try resolveApp(args.requireString("app"))
+    try requireAccessibilityTrusted()
+    let target = try await resolveTarget(app: app, elementID: args.requireString("element_id"))
+    guard let value = axString(target.element, kAXValueAttribute) else {
+        throw ToolError.failed("\(describeTarget(target)) has no readable text value.")
+    }
+    let offset = max(0, args.integer("offset") ?? 0)
+    let requested = args.integer("length") ?? 20_000
+    let characters = Array(value)
+    guard offset < characters.count || characters.isEmpty else {
+        throw ToolError.invalidArguments("offset \(offset) is past the end (\(characters.count) chars).")
+    }
+    let slice = String(characters[offset..<min(characters.count, offset + max(1, requested))])
+    var header = "Text of \(describeTarget(target)) — \(characters.count) chars total"
+    if offset > 0 || offset + slice.count < characters.count {
+        header += ", showing \(offset)..<\(offset + slice.count) (use offset/length for more)"
+    }
+    return .text(header + ":\n" + slice)
 }
 
 // MARK: - perform_secondary_action

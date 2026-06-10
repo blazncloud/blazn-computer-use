@@ -157,8 +157,14 @@ let toolCatalog: [ToolSpec] = [
                 "element_id": elementIDParam,
                 "x": numberParam("X pixel coordinate in the latest screenshot (fallback when no element_id)."),
                 "y": numberParam("Y pixel coordinate in the latest screenshot (fallback when no element_id)."),
-                "delta_x": integerParam("Horizontal scroll amount in pixels."),
-                "delta_y": integerParam("Vertical scroll amount in pixels."),
+                "direction": enumParam(
+                    ["up", "down", "left", "right"],
+                    "Semantic scroll direction (sized from the element; combine with pages). "
+                        + "Alternative to raw deltas."
+                ),
+                "pages": numberParam("How many element-heights/widths to scroll with direction (default 1)."),
+                "delta_x": integerParam("Horizontal scroll amount in pixels (alternative to direction)."),
+                "delta_y": integerParam("Vertical scroll amount in pixels (alternative to direction)."),
                 "allow_global_cursor": allowGlobalCursorParam,
                 "include_screenshot": includeScreenshotParam,
                 "include_state": includeStateParam,
@@ -224,6 +230,10 @@ let toolCatalog: [ToolSpec] = [
                 "element_id": elementIDParam,
                 "text": stringParam("Exact text to select, as it appears in the element's current value."),
                 "occurrence": integerParam("Which occurrence to select when the text appears multiple times (1-based, default 1)."),
+                "position": enumParam(
+                    ["select", "before", "after"],
+                    "select the text (default), or collapse the cursor before/after it for inserting with type_text."
+                ),
                 "include_screenshot": includeScreenshotParam,
                 "include_state": includeStateParam,
             ],
@@ -379,5 +389,22 @@ let toolCatalog: [ToolSpec] = [
             required: ["app"]
         ),
         handler: { args in try await waitFor(args) }
+    ),
+    ToolSpec(
+        name: "read_text",
+        description: """
+            Read the full text value of an element — the tree truncates long values. \
+            Supports offset/length chunking for very large documents.
+            """,
+        inputSchema: objectSchema(
+            [
+                "app": appParam,
+                "element_id": elementIDParam,
+                "offset": integerParam("Character offset to start from (default 0)."),
+                "length": integerParam("Maximum characters to return (default 20000)."),
+            ],
+            required: ["app", "element_id"]
+        ),
+        handler: { args in try await readText(args) }
     ),
 ]

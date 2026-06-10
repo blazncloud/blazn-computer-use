@@ -69,7 +69,11 @@ actor SnapshotStore {
     private var counters: [pid_t: Int] = [:]
 
     private static var directory: URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("computer-use-mcp", isDirectory: true)
+        // Caches, not tmp: snapshot files must survive periodic temp cleaning
+        // for cross-process id resolution (serve vs call, server restarts).
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return base.appendingPathComponent("computer-use-mcp", isDirectory: true)
     }
 
     private static func url(forPid pid: pid_t) -> URL {

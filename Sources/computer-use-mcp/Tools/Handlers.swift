@@ -74,3 +74,7 @@ func writeClipboard(_ args: [String: Value]) async throws -> CallTool.Result {
 func waitFor(_ args: [String: Value]) async throws -> CallTool.Result {
     try await waitForImpl(args)
 }
+
+func readText(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await readTextImpl(args)
+}

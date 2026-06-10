@@ -108,7 +108,8 @@ private func describeLine(
 }
 
 private func truncate(_ value: String) -> String {
-    value.count > maxValueLength ? String(value.prefix(maxValueLength)) + "…" : value
+    guard value.count > maxValueLength else { return value }
+    return String(value.prefix(maxValueLength)) + "… [+\(value.count - maxValueLength) chars; read_text returns the full value]"
 }
 
 private func clean(_ value: String) -> String {

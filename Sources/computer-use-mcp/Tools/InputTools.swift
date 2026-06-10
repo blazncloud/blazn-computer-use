@@ -39,10 +39,25 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     try requireAccessibilityTrusted()
     try SafetyPolicy.check(app: app, confirmed: SafetyPolicy.confirmed(args))
     let target = try await resolvePointTarget(args, app: app)
-    let deltaX = args.integer("delta_x") ?? 0
-    let deltaY = args.integer("delta_y") ?? 0
+
+    var deltaX = args.integer("delta_x") ?? 0
+    var deltaY = args.integer("delta_y") ?? 0
+    // Semantic alternative to raw deltas: a direction and a page count, sized
+    // from the scrolled element itself.
+    if let direction = args.string("direction") {
+        let pages = max(0.1, args.number("pages") ?? 1)
+        let frame = target.element.flatMap(axFrame)
+        switch direction {
+        case "down": deltaY = Int(Double(frame?.height ?? 400) * pages)
+        case "up": deltaY = -Int(Double(frame?.height ?? 400) * pages)
+        case "right": deltaX = Int(Double(frame?.width ?? 400) * pages)
+        case "left": deltaX = -Int(Double(frame?.width ?? 400) * pages)
+        default:
+            throw ToolError.invalidArguments("direction must be up, down, left, or right.")
+        }
+    }
     guard deltaX != 0 || deltaY != 0 else {
-        throw ToolError.invalidArguments("Provide a non-zero delta_x or delta_y.")
+        throw ToolError.invalidArguments("Provide direction (+ optional pages), or a non-zero delta_x/delta_y.")
     }
 
     let point = try target.requirePoint()
