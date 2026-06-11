@@ -23,9 +23,11 @@ in the background, without hijacking your cursor or stealing focus.**
   of config — no lock-in.
 - **Observable.** A smooth self-drawn agent cursor (separate from your real pointer) glides
   to each target so you can watch what the agent does.
-- **Multi-session safe.** Each MCP client spawns its own server process; concurrent
-  sessions share one agent cursor, serialize screenshots (concurrent ScreenCaptureKit
-  callers can wedge macOS's capture daemon), and never collide on element-id generations.
+- **Multi-session safe.** Sessions are thin shims over one shared engine daemon
+  (spawned on demand, retired on version changes, self-reaping when idle), so any number
+  of concurrent agents go through a single process that owns capture, accessibility,
+  input, and the cursor — and per-app leases keep two agents from interleaving actions
+  inside the same app.
 - **Reliable.** Every action returns fresh app state (screenshot + accessibility tree).
   Elements are addressed by re-resolving locators (not stale indices), and destructive
   actions pass a confirmation policy.
@@ -33,8 +35,9 @@ in the background, without hijacking your cursor or stealing focus.**
 
 ## Tools
 
-**Perceive** `get_app_state` (with `scope_element_id`/`max_elements` for huge windows) ·
-`list_apps` · `list_windows` · `read_text` · `wait_for`
+**Perceive** `get_app_state` (with `scope_element_id`/`max_elements` for huge windows,
+`ocr: true` for apps that draw their own UI) · `find` (search elements by text — the
+fast way to locate a control) · `list_apps` · `list_windows` · `read_text` · `wait_for`
 **Act** `click` · `type_text` · `press_key` · `scroll` · `drag` · `set_value` ·
 `select_text` · `perform_secondary_action` · `click_menu_item`
 **System** `open_app` · `open_url` · `manage_window` · `read_clipboard` · `write_clipboard`
@@ -42,12 +45,20 @@ in the background, without hijacking your cursor or stealing focus.**
 Every interaction tool accepts **either** a stable element id **or** raw screenshot
 coordinates.
 
-Action results return a reduced-resolution screenshot to keep the agent loop fast.
-Pass `include_screenshot: false` for tree-only results, `include_state: false` for a
-bare confirmation (fastest), and call `get_app_state` whenever full-resolution pixels
-are needed.
+Action results return a reduced-resolution screenshot to keep the agent loop fast, and
+skip resending the element tree when the action changed nothing (existing ids stay
+valid). Pass `include_screenshot: false` for tree-only results, `include_state: false`
+for a bare confirmation (fastest), and call `get_app_state` whenever full-resolution
+pixels are needed.
 
 ## How it works
+
+Each MCP client spawns `serve`, a thin stdio shim; tool calls are forwarded to a
+shared engine **daemon** (one per user, spawned on demand over a unix socket) that
+owns accessibility, screen capture, input delivery, and the agent cursor. One engine
+process means concurrent agent sessions cannot collide on shared system services, and
+short per-app leases keep two sessions from interleaving actions inside the same app.
+`COMPUTER_USE_MCP_NO_DAEMON=1` runs the engine in-process instead.
 
 Every interaction first resolves to an accessibility element and a screen
 point, then descends a delivery ladder, stopping at the first tier that works:
@@ -100,6 +111,9 @@ key in `~/.config/computer-use-mcp.json` (env wins):
 | `confirm_apps` | Apps (name or bundle id) where every action needs `confirm`. |
 | `destructive` | Extra destructive label substrings to gate. |
 | `ax_timeout` | Per-call accessibility timeout in seconds (default 2). |
+| `no_daemon` / `COMPUTER_USE_MCP_NO_DAEMON=1` | Run the engine in-process instead of through the shared daemon. |
+| `no_app_lease` | Disable per-app session arbitration. |
+| `app_lease_seconds` | How long an app stays leased to a session after its last action (default 10). |
 | `log` / `COMPUTER_USE_MCP_LOG=1` | Per-tool-call stderr log lines (name, ok/error, duration). |
 | `max_actions_per_sec` | Optional global throttle on tool calls (off by default). |
 
