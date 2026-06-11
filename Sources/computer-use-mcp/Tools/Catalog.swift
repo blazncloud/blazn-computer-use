@@ -75,6 +75,11 @@ let toolCatalog: [ToolSpec] = [
                 "max_elements": integerParam(
                     "Maximum elements in the returned tree (default 500, cap 5000). Raise for large windows."
                 ),
+                "ocr": boolParam(
+                    "Default false. Set true to also OCR the screenshot and return recognized text "
+                        + "with pixel boxes — the fallback for apps whose accessibility tree is "
+                        + "missing or sparse (custom-drawn UIs, games, remote desktops)."
+                ),
             ],
             required: ["app"]
         ),

@@ -68,6 +68,15 @@ private func makeSnapshot(
         #expect(treeFingerprint(a) != treeFingerprint(c))
     }
 
+    @Test func visionBoxConvertsToTopLeftPixels() {
+        // Vision: normalized, bottom-left origin. A box hugging the top-left
+        // corner of the image must land at pixel (0,0).
+        let top = pixelBox(normalized: CGRect(x: 0, y: 0.9, width: 0.5, height: 0.1), width: 1000, height: 800)
+        #expect(top == [0, 0, 500, 80])
+        let bottom = pixelBox(normalized: CGRect(x: 0.5, y: 0, width: 0.25, height: 0.5), width: 1000, height: 800)
+        #expect(bottom == [500, 400, 250, 400])
+    }
+
     @Test func locatorRoundTrip() throws {
         let path = [LocatorStep(role: "AXGroup", indexOfRole: 0), LocatorStep(role: "AXButton", indexOfRole: 3)]
         let data = try JSONEncoder().encode(path)

@@ -21,7 +21,8 @@ func getAppStateImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     }
     return try await stateResult(
         app: app, windowTitle: args.string("window_title"), screenshot: .full,
-        scope: scope, maxElements: args.integer("max_elements") ?? defaultMaxTreeElements
+        scope: scope, maxElements: args.integer("max_elements") ?? defaultMaxTreeElements,
+        ocr: args.bool("ocr") == true
     )
 }
 
@@ -50,7 +51,8 @@ func stateResult(
     note: String? = nil,
     screenshot detail: ScreenshotDetail = .reduced,
     scope: TreeScope? = nil,
-    maxElements: Int = defaultMaxTreeElements
+    maxElements: Int = defaultMaxTreeElements,
+    ocr: Bool = false
 ) async throws -> CallTool.Result {
     try requireAccessibilityTrusted()
 
@@ -162,6 +164,25 @@ func stateResult(
     } else {
         text += "Elements: id role \"label\" (x,y,w,h) …\n"
         text += tree.text
+    }
+
+    if ocr {
+        if let capture {
+            let lines = (try? await recognizeText(
+                inPNG: capture.pngData, pixelWidth: capture.pixelWidth, pixelHeight: capture.pixelHeight
+            )) ?? []
+            text += "\n\nOCR text (x,y,w,h in screenshot pixels; click by coordinates):\n"
+            text += lines.isEmpty
+                ? "(no text recognized)"
+                : lines.map { "\"\($0.text)\" (\($0.box[0]),\($0.box[1]),\($0.box[2]),\($0.box[3]))" }
+                    .joined(separator: "\n")
+        } else {
+            text += "\n\nOCR unavailable: no screenshot was captured."
+        }
+    } else if detail == .full && tree.elements.count < 10 {
+        text +=
+            "\n\nThe accessibility tree is sparse — this app may draw its own UI. "
+            + "Call get_app_state with ocr:true to read on-screen text with clickable coordinates."
     }
 
     var content: [Tool.Content] = [.text(text: text, annotations: nil, _meta: nil)]
