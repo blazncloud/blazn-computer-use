@@ -14,18 +14,10 @@ import Foundation
 /// then, so the exit is invisible.
 let overlayIdleExitDelay: TimeInterval = 900
 
-private func overlayRuntimeDirectory() -> URL {
-    let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-        ?? FileManager.default.temporaryDirectory
-    let directory = base.appendingPathComponent("computer-use-mcp", isDirectory: true)
-    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    return directory
-}
-
 func overlayFifoPath() -> String {
-    overlayRuntimeDirectory().appendingPathComponent("overlay.cmd").path
+    runtimeDirectory().appendingPathComponent("overlay.cmd").path
 }
 
 func overlayLockPath() -> String {
-    overlayRuntimeDirectory().appendingPathComponent("overlay.lock").path
+    runtimeDirectory().appendingPathComponent("overlay.lock").path
 }

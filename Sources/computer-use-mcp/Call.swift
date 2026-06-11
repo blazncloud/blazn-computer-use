@@ -14,7 +14,7 @@ func runCall(_ args: [String]) async {
         FileHandle.standardError.write(Data("Usage: computer-use-mcp call <tool> [<json-arguments>]\n".utf8))
         exit(2)
     }
-    guard let spec = toolCatalog.first(where: { $0.name == toolName }) else {
+    guard toolCatalog.contains(where: { $0.name == toolName }) else {
         let names = toolCatalog.map(\.name).joined(separator: ", ")
         FileHandle.standardError.write(Data("Unknown tool: \(toolName)\nAvailable tools: \(names)\n".utf8))
         exit(2)
@@ -30,12 +30,18 @@ func runCall(_ args: [String]) async {
         }
     }
 
-    let result: CallTool.Result
-    do {
-        result = try await spec.handler(arguments)
-    } catch {
-        FileHandle.standardError.write(Data("\(error)\n".utf8))
-        exit(1)
+    // Route through the shared daemon (same engine state as live agent
+    // sessions); fall back to in-process if it cannot be reached.
+    var result: CallTool.Result
+    if Config.bool("no_daemon") != true {
+        do {
+            result = try await DaemonClient.shared.call(tool: toolName, arguments: arguments)
+        } catch {
+            FileHandle.standardError.write(Data("daemon unavailable (\(error)); running in-process\n".utf8))
+            result = await dispatchTool(name: toolName, arguments: arguments)
+        }
+    } else {
+        result = await dispatchTool(name: toolName, arguments: arguments)
     }
 
     for content in result.content {

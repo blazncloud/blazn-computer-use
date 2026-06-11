@@ -22,6 +22,8 @@ let arguments = Array(CommandLine.arguments.dropFirst())
 switch arguments.first {
 case "serve":
     await runServe()
+case "daemon":
+    await runDaemon()
 case "call":
     await runCall(Array(arguments.dropFirst()))
 case "doctor":
@@ -46,6 +48,7 @@ func printUsage() {
 
         USAGE:
           computer-use-mcp serve                 Run the MCP server over stdio
+          computer-use-mcp daemon                Run the shared engine daemon (spawned on demand)
           computer-use-mcp call <tool> [<json>]  Invoke a single tool (dev harness)
           computer-use-mcp doctor [--prompt]     Check required macOS permissions
           computer-use-mcp version               Print version
