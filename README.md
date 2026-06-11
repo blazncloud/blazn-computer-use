@@ -13,6 +13,9 @@ in the background, without hijacking your cursor or stealing focus.**
 - **Universal — works on every app.** Accessibility-first for precision, with an
   automatic pixel-coordinate fallback (z-order hit-testing) for apps with poor or absent
   accessibility trees. The agent's own vision provides the grounding — no bundled ML model.
+  Web apps included: Chromium/Electron web-content accessibility is enabled on demand,
+  and structural wrapper nodes are collapsed so deeply nested page content actually
+  reaches the agent.
 - **Background-safe.** A layered input ladder (AX action → per-window event → per-PID
   event → last-resort global) delivers actions to the target app without moving the real
   cursor or changing focus. You keep working while the agent works.
@@ -20,6 +23,9 @@ in the background, without hijacking your cursor or stealing focus.**
   of config — no lock-in.
 - **Observable.** A smooth self-drawn agent cursor (separate from your real pointer) glides
   to each target so you can watch what the agent does.
+- **Multi-session safe.** Each MCP client spawns its own server process; concurrent
+  sessions share one agent cursor, serialize screenshots (concurrent ScreenCaptureKit
+  callers can wedge macOS's capture daemon), and never collide on element-id generations.
 - **Reliable.** Every action returns fresh app state (screenshot + accessibility tree).
   Elements are addressed by re-resolving locators (not stale indices), and destructive
   actions pass a confirmation policy.
