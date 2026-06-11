@@ -11,6 +11,10 @@ func getAppState(_ args: [String: Value]) async throws -> CallTool.Result {
     try await getAppStateImpl(args)
 }
 
+func find(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await findImpl(args)
+}
+
 func click(_ args: [String: Value]) async throws -> CallTool.Result {
     try await clickImpl(args)
 }

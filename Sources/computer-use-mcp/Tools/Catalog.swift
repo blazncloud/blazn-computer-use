@@ -81,6 +81,29 @@ let toolCatalog: [ToolSpec] = [
         handler: { args in try await getAppState(args) }
     ),
     ToolSpec(
+        name: "find",
+        description: """
+            Search a window's accessibility tree for elements matching a text query — \
+            the fast way to locate a control without reading the whole tree. Searches \
+            deeper than get_app_state returns (up to 5000 elements) and matches labels, \
+            values, and roles, case-insensitively. Returned element ids are fresh and \
+            directly usable in action tools.
+            """,
+        inputSchema: objectSchema(
+            [
+                "app": appParam,
+                "query": stringParam("Substring to search for in element labels, values, and roles."),
+                "role": stringParam("Optional exact role filter, e.g. \"AXButton\"."),
+                "max_results": integerParam("Maximum matches to return (default 20, cap 100)."),
+                "window_title": stringParam(
+                    "Optional window title to target a specific window. Defaults to the app's front window."
+                ),
+            ],
+            required: ["app", "query"]
+        ),
+        handler: { args in try await find(args) }
+    ),
+    ToolSpec(
         name: "click",
         description: """
             Click an element by id, or by screenshot pixel coordinates when the target \
