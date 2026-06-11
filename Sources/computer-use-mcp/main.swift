@@ -25,7 +25,7 @@ case "serve":
 case "call":
     await runCall(Array(arguments.dropFirst()))
 case "doctor":
-    runDoctor(prompt: arguments.contains("--prompt"))
+    await runDoctor(prompt: arguments.contains("--prompt"))
 case "overlay":
     runOverlay()
 case "version", "--version", "-v":

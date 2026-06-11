@@ -49,10 +49,14 @@ func captureWindow(pid: pid_t, title: String?, frame: CGRect, detail: Screenshot
     }
     // ScreenCaptureKit calls go through the replayd daemon, whose XPC
     // connection can wedge (observed: a dead replayd port left awaits hanging
-    // for hours while ReplayKit spun on reconnect). Bound the whole capture so
-    // a wedged daemon degrades to a no-screenshot result, not a hung server.
-    return try await withTimeout(seconds: 8, label: "Window screenshot") {
-        try await captureWindowUnbounded(pid: pid, title: title, frame: frame, detail: detail)
+    // for hours while ReplayKit spun on reconnect). Concurrent captures from
+    // multiple server processes are a known trigger, so captures are
+    // serialized across processes, and the whole capture is bounded so a
+    // wedged daemon degrades to a no-screenshot result, not a hung server.
+    return try await withCrossProcessLock(named: "screencapture") {
+        try await withTimeout(seconds: 8, label: "Window screenshot") {
+            try await captureWindowUnbounded(pid: pid, title: title, frame: frame, detail: detail)
+        }
     }
 }
 
@@ -107,7 +111,7 @@ private func captureWindowUnbounded(
 /// Race an operation against a deadline. On timeout the operation's task is
 /// cancelled and abandoned (ScreenCaptureKit awaits do not always honor
 /// cancellation) and a recoverable tool error is thrown instead.
-private func withTimeout<T: Sendable>(
+func withTimeout<T: Sendable>(
     seconds: Double, label: String, operation: @escaping @Sendable () async throws -> T
 ) async throws -> T {
     try await withThrowingTaskGroup(of: T.self) { group in
@@ -116,7 +120,8 @@ private func withTimeout<T: Sendable>(
             try await Task.sleep(for: .seconds(seconds))
             throw ToolError.failed(
                 "\(label) timed out after \(Int(seconds))s. The macOS screen-capture "
-                    + "service may be unresponsive; if this persists, restart the MCP server."
+                    + "service (replayd) may be wedged; if this persists, run "
+                    + "`killall -9 replayd` (launchd restarts it clean) or restart the MCP server."
             )
         }
         guard let first = try await group.next() else {
