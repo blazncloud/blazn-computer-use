@@ -3,8 +3,10 @@
 // The MCP server is a headless async stdio process with no AppKit run loop, so
 // the cosmetic cursor lives here, in its own process. This helper runs an
 // .accessory NSApplication (no Dock icon, never frontmost) and glides a cursor
-// glyph toward target points it reads from stdin ("move <globalX> <globalY>\n",
-// top-left screen coordinates). It never moves the real system cursor.
+// glyph toward target points it reads from a shared FIFO ("move <globalX>
+// <globalY>\n", top-left screen coordinates; "ping\n" keep-alives). It is a
+// singleton — one cursor serves every concurrently running server process —
+// and it never moves the real system cursor.
 //
 // One click-through borderless panel per display: with "Displays have separate
 // Spaces" (the macOS default) a window is clipped to a single screen, so one
@@ -26,6 +28,16 @@ func overlayDebug(_ message: @autoclosure () -> String) {
 
 @MainActor
 func runOverlay() -> Never {
+    // Singleton: the flock is held for the helper's lifetime (the kernel
+    // releases it on exit or crash). A second helper — another server
+    // spawning concurrently — exits and leaves the FIFO to the incumbent.
+    let lockFD = open(overlayLockPath(), O_CREAT | O_WRONLY, 0o644)
+    if lockFD < 0 || flock(lockFD, LOCK_EX | LOCK_NB) != 0 {
+        overlayDebug("another overlay helper is already serving; exiting")
+        exit(0)
+    }
+    prepareOverlayFifo()
+
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
     let controller = OverlayController()
@@ -33,6 +45,15 @@ func runOverlay() -> Never {
     controller.start()
     app.run()
     exit(0)
+}
+
+private func prepareOverlayFifo() {
+    let path = overlayFifoPath()
+    var status = stat()
+    if stat(path, &status) == 0, (status.st_mode & S_IFMT) != S_IFIFO {
+        unlink(path)  // a stale regular file would silently swallow commands
+    }
+    mkfifo(path, 0o600)  // EEXIST is fine: the FIFO persists across helpers
 }
 
 @MainActor
@@ -49,6 +70,8 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
     /// between) and fades only once the agent has actually gone quiet.
     private var fadeWork: DispatchWorkItem?
     private let idleFadeDelay: TimeInterval = Config.double("cursor_idle_fade") ?? 12
+    /// Last command of any kind, for the idle self-exit.
+    private var lastCommand = Date()
     /// Cursor position in AppKit global coordinates (bottom-left origin at the
     /// primary screen) — the one space all screen frames share.
     private var currentPoint = CGPoint.zero
@@ -67,7 +90,8 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
             self, selector: #selector(screensChanged),
             name: NSApplication.didChangeScreenParametersNotification, object: nil
         )
-        readStdin()
+        readFifo()
+        scheduleIdleExitCheck()
     }
 
     // MARK: panels
@@ -136,40 +160,74 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         (NSScreen.screens.first { $0.frame.origin == .zero } ?? NSScreen.screens.first)?.frame.height ?? 0
     }
 
-    // MARK: stdin command loop
+    // MARK: FIFO command loop
 
-    private func readStdin() {
-        // The readability handler runs on a background queue and must not touch
-        // main-actor state directly; it parses lines and marshals points to main.
-        FileHandle.standardInput.readabilityHandler = { handle in
-            let data = handle.availableData
-            guard !data.isEmpty else {
-                DispatchQueue.main.async { NSApplication.shared.terminate(nil) }
-                return
-            }
-            guard let text = String(data: data, encoding: .utf8) else { return }
-            for line in text.split(separator: "\n") {
-                let parts = line.split(separator: " ")
-                if parts.first == "ping" {
-                    DispatchQueue.main.async {
-                        (NSApp.delegate as? OverlayController)?.postponeIdleFade()
-                    }
+    /// Read commands from the shared FIFO on a background thread, marshaling
+    /// them to the main actor. The blocking open waits for the first writer;
+    /// an empty read means every writer closed (servers exited), so the FIFO
+    /// is reopened and the helper waits for the next one.
+    private nonisolated func readFifo() {
+        DispatchQueue.global(qos: .userInteractive).async {
+            let path = overlayFifoPath()
+            while true {
+                let fd = open(path, O_RDONLY)
+                if fd < 0 {
+                    Thread.sleep(forTimeInterval: 0.25)
                     continue
                 }
-                guard parts.first == "move", parts.count == 3,
-                    let x = Double(parts[1]), let y = Double(parts[2])
-                else { continue }
-                let point = CGPoint(x: x, y: y)
-                DispatchQueue.main.async {
-                    (NSApp.delegate as? OverlayController)?.beginGlide(toGlobalTopLeft: point)
+                let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+                var pending = ""
+                while true {
+                    let data = handle.availableData
+                    if data.isEmpty { break }
+                    pending += String(data: data, encoding: .utf8) ?? ""
+                    while let newline = pending.firstIndex(of: "\n") {
+                        let line = String(pending[..<newline])
+                        pending = String(pending[pending.index(after: newline)...])
+                        Self.handle(command: line)
+                    }
                 }
             }
         }
     }
 
+    private nonisolated static func handle(command line: String) {
+        let parts = line.split(separator: " ")
+        if parts.first == "ping" {
+            DispatchQueue.main.async {
+                (NSApp.delegate as? OverlayController)?.noteActivity()
+            }
+            return
+        }
+        guard parts.first == "move", parts.count == 3,
+            let x = Double(parts[1]), let y = Double(parts[2])
+        else { return }
+        let point = CGPoint(x: x, y: y)
+        DispatchQueue.main.async {
+            (NSApp.delegate as? OverlayController)?.beginGlide(toGlobalTopLeft: point)
+        }
+    }
+
+    // MARK: lifetime
+
+    /// Without a spawning parent to die with (the FIFO outlives any single
+    /// server), the helper reaps itself after a long quiet period instead.
+    private func scheduleIdleExitCheck() {
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            if Date().timeIntervalSince(self.lastCommand) > overlayIdleExitDelay {
+                overlayDebug("idle exit")
+                exit(0)
+            }
+            self.scheduleIdleExitCheck()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60, execute: work)
+    }
+
     // MARK: animation
 
     fileprivate func beginGlide(toGlobalTopLeft point: CGPoint) {
+        lastCommand = Date()
         // Quartz global top-left → AppKit bottom-left, using the PRIMARY screen
         // height so it's correct on any display in the unified coordinate plane.
         targetPoint = CGPoint(x: point.x, y: primaryHeight - point.y)
@@ -211,9 +269,10 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Push the idle fade out by another full delay window. Called on server
-    /// keep-alive pings (any tool activity) while the cursor is visible.
-    fileprivate func postponeIdleFade() {
+    /// Keep-alive ping from any server: postpone the idle fade (if a fade is
+    /// pending) and the idle self-exit.
+    fileprivate func noteActivity() {
+        lastCommand = Date()
         guard visible, fadeWork != nil else { return }
         fadeWork?.cancel()
         scheduleIdleFade()
