@@ -4,7 +4,7 @@
 import CoreGraphics
 import Foundation
 import ImageIO
-import ScreenCaptureKit
+@preconcurrency import ScreenCaptureKit
 import UniformTypeIdentifiers
 
 struct WindowCapture {
@@ -60,15 +60,44 @@ func captureWindow(pid: pid_t, title: String?, frame: CGRect, detail: Screenshot
     }
 }
 
+/// SCShareableContent enumerates every on-screen window in the system through
+/// replayd — the most expensive part of a capture. Within a burst of actions
+/// the window list barely changes, so it is cached briefly; a request the
+/// cache cannot satisfy (new window, new dialog, new title) refetches.
+/// @unchecked: SCWindow is an immutable snapshot of window state.
+private struct WindowList: @unchecked Sendable {
+    let windows: [SCWindow]
+}
+
+private actor ShareableContentCache {
+    static let shared = ShareableContentCache()
+    private var windows: [SCWindow] = []
+    private var fetchedAt = Date.distantPast
+
+    func appWindows(pid: pid_t, title: String?) async throws -> WindowList {
+        if Date().timeIntervalSince(fetchedAt) < 1.5 {
+            let cached = filter(pid: pid)
+            if !cached.isEmpty, title == nil || cached.contains(where: { $0.title == title }) {
+                return WindowList(windows: cached)
+            }
+        }
+        // On-screen windows only: the target must be on-screen to capture a
+        // useful image, and this avoids enumerating off-screen windows.
+        let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+        windows = content.windows
+        fetchedAt = Date()
+        return WindowList(windows: filter(pid: pid))
+    }
+
+    private func filter(pid: pid_t) -> [SCWindow] {
+        windows.filter { $0.owningApplication?.processID == pid && $0.windowLayer == 0 }
+    }
+}
+
 private func captureWindowUnbounded(
     pid: pid_t, title: String?, frame: CGRect, detail: ScreenshotDetail
 ) async throws -> WindowCapture {
-    // On-screen windows only: the target must be on-screen to capture a useful
-    // image, and this avoids enumerating every off-screen window in the system.
-    let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
-    let appWindows = content.windows.filter {
-        $0.owningApplication?.processID == pid && $0.windowLayer == 0
-    }
+    let appWindows = try await ShareableContentCache.shared.appWindows(pid: pid, title: title).windows
     guard !appWindows.isEmpty else {
         throw ToolError.failed("No capturable window found for pid \(pid).")
     }
