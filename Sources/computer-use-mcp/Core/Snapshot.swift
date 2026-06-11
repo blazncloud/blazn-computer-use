@@ -87,7 +87,12 @@ actor SnapshotStore {
         windowOrigin: CGPoint, pixelsPerPoint: Double, windowSize: [Double]?, createdAt: Date,
         buildTree: (String) -> BuiltTree
     ) -> (snapshot: AppSnapshot, tree: BuiltTree) {
-        let next = (counters[pid] ?? loadFromDisk(pid).map(Self.parseGeneration) ?? 0) + 1
+        // Always consult disk, not just on first touch: other server
+        // processes (each MCP client spawns its own) persist to the same
+        // file, and two servers must never issue the same generation tag for
+        // the same pid.
+        let diskGeneration = loadFromDisk(pid).map(Self.parseGeneration) ?? 0
+        let next = max(counters[pid] ?? 0, diskGeneration) + 1
         counters[pid] = next
         let generation = "s\(next)"
         let tree = buildTree(generation)
