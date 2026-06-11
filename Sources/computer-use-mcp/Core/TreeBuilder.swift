@@ -10,9 +10,25 @@ struct BuiltTree {
 }
 
 let defaultMaxTreeElements = 500
-private let maxDepth = 14
+private let maxDepth = 24
+private let maxRawDepth = 60
 private let maxChildrenPerNode = 150
 private let maxValueLength = 300
+
+/// True for pure structural wrappers: unlabeled, value-less AXGroups whose
+/// only actions are universal noise (ShowMenu, ScrollToVisible). Web pages
+/// nest dozens of these around every piece of content — they are omitted from
+/// the outline (and the element budget) but kept in locator paths, so deep
+/// web content fits within the depth and element limits.
+func isStructuralWrapper(
+    role: String, label: String?, value: String?, focused: Bool, actions: [String]
+) -> Bool {
+    guard role == "AXGroup" else { return false }
+    guard label == nil || label!.isEmpty else { return false }
+    guard value == nil || value!.isEmpty else { return false }
+    guard !focused else { return false }
+    return actions.allSatisfy { $0 == "AXShowMenu" || $0 == "AXScrollToVisible" }
+}
 
 func buildTree(
     window: AXUIElement, windowOrigin: CGPoint, pixelsPerPoint: Double, generation: String,
@@ -32,20 +48,39 @@ func buildTree(
         ]
     }
 
-    func visit(_ element: AXUIElement, depth: Int, path: [LocatorStep]) {
-        guard elements.count < maxNodes, depth <= maxDepth else { return }
+    var depthTruncated = false
+
+    func visit(_ element: AXUIElement, depth: Int, rawDepth: Int, path: [LocatorStep]) {
+        guard elements.count < maxNodes else { return }
+        guard depth <= maxDepth, rawDepth <= maxRawDepth else {
+            depthTruncated = true
+            return
+        }
 
         let role = axRole(element)
-        let id = "e\(elements.count)@\(generation)"
         let label = axString(element, kAXTitleAttribute)
             ?? axString(element, kAXDescriptionAttribute)
             ?? axString(element, "AXPlaceholderValue")
-        let frame = pixelFrame(element)
 
-        elements.append(
-            SnapshotElement(id: id, role: role, label: label, path: path, frame: frame ?? [0, 0, 0, 0])
-        )
-        lines.append(describeLine(element, id: id, role: role, label: label, frame: frame, depth: depth))
+        // Wrappers (never the tree root) pass their outline slot straight to
+        // their children; childless wrappers vanish entirely.
+        let wrapper =
+            !path.isEmpty
+            && isStructuralWrapper(
+                role: role, label: label,
+                value: axString(element, kAXValueAttribute),
+                focused: axBool(element, kAXFocusedAttribute) == true,
+                actions: axActionNames(element)
+            )
+
+        if !wrapper {
+            let id = "e\(elements.count)@\(generation)"
+            let frame = pixelFrame(element)
+            elements.append(
+                SnapshotElement(id: id, role: role, label: label, path: path, frame: frame ?? [0, 0, 0, 0])
+            )
+            lines.append(describeLine(element, id: id, role: role, label: label, frame: frame, depth: depth))
+        }
 
         let children = axElements(element, kAXChildrenAttribute)
         var roleCounts: [String: Int] = [:]
@@ -53,17 +88,26 @@ func buildTree(
             let childRole = axRole(child)
             let indexOfRole = roleCounts[childRole, default: 0]
             roleCounts[childRole] = indexOfRole + 1
-            visit(child, depth: depth + 1, path: path + [LocatorStep(role: childRole, indexOfRole: indexOfRole)])
+            visit(
+                child, depth: wrapper ? depth : depth + 1, rawDepth: rawDepth + 1,
+                path: path + [LocatorStep(role: childRole, indexOfRole: indexOfRole)]
+            )
             if elements.count >= maxNodes { break }
         }
     }
 
-    visit(window, depth: 0, path: pathPrefix)
+    visit(window, depth: 0, rawDepth: 0, path: pathPrefix)
 
     if elements.count >= maxNodes {
         lines.append(
             "… tree truncated at \(maxNodes) elements. Call get_app_state with scope_element_id "
                 + "set to a container id to expand just that subtree, or raise max_elements."
+        )
+    }
+    if depthTruncated {
+        lines.append(
+            "… some branches exceed the nesting limit and were cut. Call get_app_state with "
+                + "scope_element_id set to the deepest visible container to expand further."
         )
     }
     return BuiltTree(text: lines.joined(separator: "\n"), elements: elements)
