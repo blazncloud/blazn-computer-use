@@ -104,7 +104,7 @@ func stateResult(
     // render web content into the accessibility tree.
     await AssistiveAccess.shared.enable(pid: app.pid)
 
-    func captureSnapshot() async -> BuiltTree {
+    func captureSnapshot() async -> (snapshot: AppSnapshot, tree: BuiltTree, unchanged: Bool) {
         await SnapshotStore.shared.capture(
             pid: app.pid,
             bundleIdentifier: app.bundleIdentifier,
@@ -122,16 +122,16 @@ func stateResult(
                 pathPrefix: scope?.pathPrefix ?? [],
                 maxElements: maxElements
             )
-        }.tree
+        }
     }
 
-    var tree = await captureSnapshot()
+    var (snapshot, tree, unchanged) = await captureSnapshot()
     if hasEmptyWebArea(tree.elements) {
         // Web accessibility was off or mid-build: force the flags on, give
         // the renderer a beat to populate the tree, and rebuild once.
         await AssistiveAccess.shared.enable(pid: app.pid, force: true)
         try? await Task.sleep(for: .milliseconds(500))
-        tree = await captureSnapshot()
+        (snapshot, tree, unchanged) = await captureSnapshot()
     }
 
     var text = ""
@@ -153,8 +153,16 @@ func stateResult(
     if let captureNote {
         text += captureNote + "\n"
     }
-    text += "Elements: id role \"label\" (x,y,w,h) …\n"
-    text += tree.text
+    // Action results skip resending a tree the agent already has; explicit
+    // perception (get_app_state, .full) always returns it.
+    if unchanged && detail != .full {
+        text +=
+            "UI tree unchanged by this action: element ids from generation "
+            + "\(snapshot.generation) remain valid, reuse them."
+    } else {
+        text += "Elements: id role \"label\" (x,y,w,h) …\n"
+        text += tree.text
+    }
 
     var content: [Tool.Content] = [.text(text: text, annotations: nil, _meta: nil)]
     if let capture {

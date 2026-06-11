@@ -60,6 +60,14 @@ private func makeSnapshot(
         #expect(ScreenshotDetail.reduced.maxDimension == 1000)
     }
 
+    @Test func treeFingerprintIgnoresIDsButNotContent() {
+        let a = "e0@s1 AXWindow \"Test\" (0,0,10,10)\n\te1@s1 AXButton \"OK\" (1,1,2,2)"
+        let b = "e0@s7 AXWindow \"Test\" (0,0,10,10)\n\te1@s7 AXButton \"OK\" (1,1,2,2)"
+        let c = "e0@s8 AXWindow \"Test\" (0,0,10,10)\n\te1@s8 AXButton \"Cancel\" (1,1,2,2)"
+        #expect(treeFingerprint(a) == treeFingerprint(b))
+        #expect(treeFingerprint(a) != treeFingerprint(c))
+    }
+
     @Test func locatorRoundTrip() throws {
         let path = [LocatorStep(role: "AXGroup", indexOfRole: 0), LocatorStep(role: "AXButton", indexOfRole: 3)]
         let data = try JSONEncoder().encode(path)

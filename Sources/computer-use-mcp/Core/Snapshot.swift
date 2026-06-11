@@ -11,6 +11,7 @@
 // server and the `call` harness, or a restarted server).
 
 import ApplicationServices
+import CryptoKit
 import Foundation
 
 struct LocatorStep: Codable, Equatable {
@@ -44,6 +45,9 @@ struct AppSnapshot: Codable {
     /// an older state is rejected loudly instead of silently resolving to
     /// whatever occupies that index now.
     let generation: String
+    /// Hash of the id-normalized tree text, for unchanged-tree detection.
+    /// Optional: predates some persisted snapshots.
+    var treeFingerprint: String? = nil
     let elements: [SnapshotElement]
 
     func element(withID id: String) -> SnapshotElement? {
@@ -82,11 +86,17 @@ actor SnapshotStore {
 
     /// Allocate the next generation, build the tree with it, and persist —
     /// all atomically, so a second same-pid capture cannot collide.
+    ///
+    /// When the rebuilt tree is identical to the previous snapshot's (same
+    /// content, window placement, and scale — only the ids differ), the
+    /// previous snapshot is kept and returned with `unchanged: true`: the
+    /// agent's existing element ids stay valid and the caller can skip
+    /// resending an identical tree.
     func capture(
         pid: pid_t, bundleIdentifier: String, windowTitle: String?,
         windowOrigin: CGPoint, pixelsPerPoint: Double, windowSize: [Double]?, createdAt: Date,
         buildTree: (String) -> BuiltTree
-    ) -> (snapshot: AppSnapshot, tree: BuiltTree) {
+    ) -> (snapshot: AppSnapshot, tree: BuiltTree, unchanged: Bool) {
         // Always consult disk, not just on first touch: other server
         // processes (each MCP client spawns its own) persist to the same
         // file, and two servers must never issue the same generation tag for
@@ -96,14 +106,27 @@ actor SnapshotStore {
         counters[pid] = next
         let generation = "s\(next)"
         let tree = buildTree(generation)
+        let fingerprint = treeFingerprint(tree.text)
+
+        if let previous = cache[pid] ?? loadFromDisk(pid),
+            previous.treeFingerprint == fingerprint,
+            previous.windowTitle == windowTitle,
+            previous.windowOrigin == [windowOrigin.x, windowOrigin.y],
+            previous.pixelsPerPoint == pixelsPerPoint
+        {
+            cache[pid] = previous
+            return (previous, tree, true)
+        }
+
         let snapshot = AppSnapshot(
             pid: pid, bundleIdentifier: bundleIdentifier, windowTitle: windowTitle,
             windowOrigin: [windowOrigin.x, windowOrigin.y], pixelsPerPoint: pixelsPerPoint,
-            windowSize: windowSize, createdAt: createdAt, generation: generation, elements: tree.elements
+            windowSize: windowSize, createdAt: createdAt, generation: generation,
+            treeFingerprint: fingerprint, elements: tree.elements
         )
         cache[pid] = snapshot
         persist(snapshot)
-        return (snapshot, tree)
+        return (snapshot, tree, false)
     }
 
     func load(forPid pid: pid_t) -> AppSnapshot? {
@@ -153,6 +176,15 @@ actor SnapshotStore {
     private static func parseGeneration(_ snapshot: AppSnapshot) -> Int {
         Int(snapshot.generation.dropFirst()) ?? 0
     }
+}
+
+/// Hash of the tree text with element ids normalized away, so two builds of
+/// an identical UI fingerprint the same even though ids carry fresh
+/// generation tags.
+func treeFingerprint(_ treeText: String) -> String {
+    let normalized = treeText.replacing(/e\d+@s\d+/, with: "e@")
+    let digest = SHA256.hash(data: Data(normalized.utf8))
+    return digest.map { String(format: "%02x", $0) }.joined()
 }
 
 /// Re-resolve a snapshot element against the live accessibility tree.

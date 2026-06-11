@@ -24,7 +24,7 @@ func findImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let pixelsPerPoint = await SnapshotStore.shared.load(forPid: app.pid)
         .map(\.pixelsPerPoint).flatMap { $0 > 0 ? $0 : nil } ?? 1
 
-    func capture() async -> BuiltTree {
+    func capture() async -> (snapshot: AppSnapshot, tree: BuiltTree, unchanged: Bool) {
         await SnapshotStore.shared.capture(
             pid: app.pid,
             bundleIdentifier: app.bundleIdentifier,
@@ -41,28 +41,35 @@ func findImpl(_ args: [String: Value]) async throws -> CallTool.Result {
                 generation: generation,
                 maxElements: 5000
             )
-        }.tree
+        }
     }
 
-    var tree = await capture()
+    var (snapshot, tree, unchanged) = await capture()
     if hasEmptyWebArea(tree.elements) {
         await AssistiveAccess.shared.enable(pid: app.pid, force: true)
         try? await Task.sleep(for: .milliseconds(500))
-        tree = await capture()
+        (snapshot, tree, unchanged) = await capture()
     }
 
     // Tree text lines map 1:1 onto elements (truncation notices trail them),
     // and each line carries the label and value the agent would see — match
-    // against the line so values count, not just labels.
+    // against the line so values count, not just labels. When the store kept
+    // the previous (identical) snapshot, the fresh build's ids were never
+    // committed — substitute the committed id, same position, same element.
     let lines = tree.text.split(separator: "\n", omittingEmptySubsequences: false)
     var matches: [String] = []
     var total = 0
-    for (element, line) in zip(tree.elements, lines) {
+    for (index, line) in lines.enumerated() where index < tree.elements.count {
+        let element = tree.elements[index]
         if let roleFilter, element.role != roleFilter { continue }
         guard line.lowercased().contains(lowered) else { continue }
         total += 1
         if matches.count < maxResults {
-            matches.append(line.trimmingCharacters(in: .whitespaces))
+            var display = line.trimmingCharacters(in: .whitespaces)
+            if unchanged, index < snapshot.elements.count {
+                display = display.replacingOccurrences(of: element.id, with: snapshot.elements[index].id)
+            }
+            matches.append(display)
         }
     }
 
