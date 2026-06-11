@@ -13,7 +13,7 @@
 import ApplicationServices
 import Foundation
 
-struct LocatorStep: Codable {
+struct LocatorStep: Codable, Equatable {
     let role: String
     /// Index among siblings that share this role.
     let indexOfRole: Int

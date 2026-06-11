@@ -100,23 +100,38 @@ func stateResult(
         pixelsPerPoint = 1
     }
 
-    let (_, tree) = await SnapshotStore.shared.capture(
-        pid: app.pid,
-        bundleIdentifier: app.bundleIdentifier,
-        windowTitle: window.title,
-        windowOrigin: window.frame.origin,
-        pixelsPerPoint: pixelsPerPoint,
-        windowSize: [window.frame.width * pixelsPerPoint, window.frame.height * pixelsPerPoint],
-        createdAt: Date()
-    ) { generation in
-        buildTree(
-            window: scope?.root ?? window.element,
+    // Chromium/Electron apps need an assistive client on record before they
+    // render web content into the accessibility tree.
+    await AssistiveAccess.shared.enable(pid: app.pid)
+
+    func captureSnapshot() async -> BuiltTree {
+        await SnapshotStore.shared.capture(
+            pid: app.pid,
+            bundleIdentifier: app.bundleIdentifier,
+            windowTitle: window.title,
             windowOrigin: window.frame.origin,
             pixelsPerPoint: pixelsPerPoint,
-            generation: generation,
-            pathPrefix: scope?.pathPrefix ?? [],
-            maxElements: maxElements
-        )
+            windowSize: [window.frame.width * pixelsPerPoint, window.frame.height * pixelsPerPoint],
+            createdAt: Date()
+        ) { generation in
+            buildTree(
+                window: scope?.root ?? window.element,
+                windowOrigin: window.frame.origin,
+                pixelsPerPoint: pixelsPerPoint,
+                generation: generation,
+                pathPrefix: scope?.pathPrefix ?? [],
+                maxElements: maxElements
+            )
+        }.tree
+    }
+
+    var tree = await captureSnapshot()
+    if hasEmptyWebArea(tree.elements) {
+        // Web accessibility was off or mid-build: force the flags on, give
+        // the renderer a beat to populate the tree, and rebuild once.
+        await AssistiveAccess.shared.enable(pid: app.pid, force: true)
+        try? await Task.sleep(for: .milliseconds(500))
+        tree = await captureSnapshot()
     }
 
     var text = ""

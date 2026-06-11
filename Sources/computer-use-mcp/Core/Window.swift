@@ -3,7 +3,8 @@
 import ApplicationServices
 import Foundation
 
-struct TargetWindow {
+/// @unchecked: AXUIElement is an immutable thread-safe CF handle.
+struct TargetWindow: @unchecked Sendable {
     let element: AXUIElement
     let title: String?
     /// Global screen frame in points (top-left origin).

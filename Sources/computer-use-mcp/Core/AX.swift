@@ -41,6 +41,48 @@ func appIsGone(pid: pid_t) -> Bool {
     return app.isTerminated
 }
 
+/// Chromium and Electron apps render their web-content accessibility tree
+/// only while an assistive client is detected — otherwise the tree stops at
+/// the browser chrome and an empty AXWebArea (and support can lapse again
+/// between calls). Setting these app-element attributes is the documented
+/// opt-in (VoiceOver does the same). Native apps don't expose the attributes
+/// and are left untouched.
+actor AssistiveAccess {
+    static let shared = AssistiveAccess()
+    private var enabledPids: Set<pid_t> = []
+
+    /// Cheap once-per-pid enable for apps that advertise the attributes.
+    /// `force` re-sets the flags regardless (used when a web area came back
+    /// empty, which means support lapsed or was never on).
+    func enable(pid: pid_t, force: Bool = false) {
+        guard force || !enabledPids.contains(pid) else { return }
+        enabledPids.insert(pid)
+        let app = AXUIElementCreateApplication(pid)
+        var names: CFArray?
+        AXUIElementCopyAttributeNames(app, &names)
+        let advertised = (names as? [String]) ?? []
+        for attribute in ["AXEnhancedUserInterface", "AXManualAccessibility"]
+        where force || advertised.contains(attribute) {
+            AXUIElementSetAttributeValue(app, attribute as CFString, kCFBooleanTrue)
+        }
+    }
+}
+
+/// True when the tree contains an AXWebArea with no emitted content below it
+/// — the signature of a Chromium/Electron app whose web accessibility is off
+/// (or still building). Elements are emitted in DFS order, so a web area's
+/// content, if any survived filtering, immediately follows it.
+func hasEmptyWebArea(_ elements: [SnapshotElement]) -> Bool {
+    for (index, element) in elements.enumerated() where element.role == "AXWebArea" {
+        let prefix = element.path
+        let next = index + 1 < elements.count ? elements[index + 1] : nil
+        let hasContent =
+            next.map { $0.path.count > prefix.count && Array($0.path.prefix(prefix.count)) == prefix } ?? false
+        if !hasContent { return true }
+    }
+    return false
+}
+
 func axAttribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var value: CFTypeRef?
     guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else {
