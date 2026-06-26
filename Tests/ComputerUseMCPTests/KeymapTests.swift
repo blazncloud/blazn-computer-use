@@ -3,7 +3,7 @@ import Testing
 
 @testable import computer_use_mcp
 
-@Suite struct KeymapTests {
+@Suite(.serialized) struct KeymapTests {
     @Test func namedKey() throws {
         let chord = try Keymap.parse("Return")
         #expect(chord.keyCode == CGKeyCode(kVK_Return))
