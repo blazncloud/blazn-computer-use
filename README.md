@@ -145,7 +145,7 @@ swift test
 .build/debug/computer-use-mcp serve                  # run the stdio MCP server
 .build/debug/computer-use-mcp call get_app_state '{"app":"Calculator"}'   # drive one tool
 .build/debug/computer-use-mcp doctor                 # check permissions
-python3 scripts/e2e_demo.py                          # end-to-end demo over stdio
+python3 scripts/e2e_demo.py                          # safe structured smoke artifact; no GUI mutation
 ```
 
 Default CI covers the non-mutating path: package build, pure unit tests, and
@@ -153,6 +153,41 @@ CLI `version`/`help` smoke checks. Live app-control checks are local-only becaus
 they require a logged-in macOS desktop plus Accessibility/Screen Recording
 permission and can operate real apps. See [Testing and Preflight](docs/TESTING.md)
 for the testing tiers, local command loop, and release preflight expectations.
+
+### Benchmark and smoke tiers
+
+Use deterministic checks for hosted CI and live GUI checks only on a local Mac
+or a future self-hosted macOS runner with explicit permissions.
+
+| Tier | What it proves | Safe for hosted CI? | Command |
+| --- | --- | --- | --- |
+| Deterministic unit tests | Pure Swift behavior such as parsing, safety policy, coordinates, and tree shaping. | Yes | `swift test` |
+| Structured dry-run smoke | The benchmark entrypoint, schema, git/macOS metadata collection, and opt-in gate. It does not start the MCP server or open apps. | Yes | `python3 scripts/e2e_demo.py` |
+| Live GUI smoke | The real MCP stdio path against TextEdit in the background, including perceive, type, select, and focus-stability checks. This opens TextEdit/Finder and edits a TextEdit document. | No | `python3 scripts/e2e_demo.py --live` |
+
+The smoke script writes JSON by default and can write JSONL for trend ingestion:
+
+```bash
+python3 scripts/e2e_demo.py --format jsonl --output /tmp/computer-use-mcp-smoke.jsonl
+```
+
+Live GUI mutation is opt-in by flag or environment variable:
+
+```bash
+COMPUTER_USE_MCP_RUN_LIVE_SMOKE=1 python3 scripts/e2e_demo.py
+```
+
+Before running the live tier, build the binary and make sure the spawning
+terminal has Accessibility and Screen Recording permissions:
+
+```bash
+swift build
+.build/debug/computer-use-mcp doctor --prompt
+python3 scripts/e2e_demo.py --live
+```
+
+Do not add the live tier to hosted CI. It depends on an unlocked macOS desktop,
+TCC permissions, Finder/TextEdit behavior, and user-visible app state.
 
 ## License
 
