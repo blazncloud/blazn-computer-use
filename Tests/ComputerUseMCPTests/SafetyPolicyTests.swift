@@ -34,6 +34,26 @@ private let app = ResolvedApp(pid: 1, name: "TestApp", bundleIdentifier: "com.ex
         try SafetyPolicy.checkValueChange(currentValue: "old", newValue: "new", app: app, confirmed: false)
     }
 
+    @Test func closingWindowRequiresConfirmation() {
+        #expect(throws: SafetyError.self) {
+            try SafetyPolicy.checkWindowAction(
+                action: "close", targetDescription: "window \"Draft\" of TestApp", app: app, confirmed: false
+            )
+        }
+    }
+
+    @Test func confirmedWindowClosePasses() throws {
+        try SafetyPolicy.checkWindowAction(
+            action: "close", targetDescription: "window \"Draft\" of TestApp", app: app, confirmed: true
+        )
+    }
+
+    @Test func nonClosingWindowActionPasses() throws {
+        try SafetyPolicy.checkWindowAction(
+            action: "minimize", targetDescription: "window \"Draft\" of TestApp", app: app, confirmed: false
+        )
+    }
+
     @Test func destructiveShortcutIsGated() throws {
         let chord = try Keymap.parse("cmd+Delete")
         #expect(throws: SafetyError.self) {

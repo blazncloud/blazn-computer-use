@@ -102,4 +102,14 @@ enum SafetyPolicy {
             throw SafetyError(reason: "this clears existing content in \(app.name).")
         }
     }
+
+    /// Gate window-level actions. Closing a window can discard user state or
+    /// trigger save/discard dialogs, so require explicit confirmation.
+    static func checkWindowAction(action: String, targetDescription: String, app: ResolvedApp, confirmed: Bool) throws {
+        try check(app: app, confirmed: confirmed)
+        guard isEnabled, !confirmed else { return }
+        if action == "close" {
+            throw SafetyError(reason: "closing \(targetDescription) may discard unsaved state or dismiss important UI.")
+        }
+    }
 }

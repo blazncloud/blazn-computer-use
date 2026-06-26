@@ -1,5 +1,6 @@
 // press_key, scroll, drag — the synthetic-input tools.
 
+import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
@@ -25,7 +26,8 @@ func pressKeyImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         windowFrame: window?.frame,
         allowGlobalCursor: args.bool("allow_global_cursor") ?? false
     )
-    try deliverKey(chord, context: context)
+    let targetAppIsActive = NSRunningApplication(processIdentifier: app.pid)?.isActive == true
+    try deliverKey(chord, context: context, targetAppIsActive: targetAppIsActive)
     try? await Task.sleep(for: .milliseconds(80))
 
     return try await stateResult(

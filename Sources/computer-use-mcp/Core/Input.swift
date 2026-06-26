@@ -36,6 +36,11 @@ enum InputTier: String {
     case globalCursor = "tier4-global-cursor"
 }
 
+enum KeyDeliveryMode: Equatable {
+    case perPid
+    case globalSessionTap
+}
+
 struct DeliveryContext {
     let pid: pid_t
     /// CGWindowID of the target window, when resolvable (enables Tier 2).
@@ -234,8 +239,23 @@ func deliverDrag(from: CGPoint, to: CGPoint, context: DeliveryContext) async {
     post(.leftMouseUp, to)
 }
 
+func keyDeliveryMode(context: DeliveryContext, targetAppIsActive: Bool) throws -> KeyDeliveryMode {
+    guard context.allowGlobalCursor, context.windowNumber == nil else {
+        return .perPid
+    }
+    guard targetAppIsActive else {
+        throw ToolError.failed(
+            "Global keyboard delivery was requested, but the target app is not foreground. "
+                + "Bring the target app to the foreground or retry without allow_global_cursor."
+        )
+    }
+    return .globalSessionTap
+}
+
 /// Deliver a key chord to the target process.
-func deliverKey(_ chord: KeyChord, context: DeliveryContext) throws {
+@discardableResult
+func deliverKey(_ chord: KeyChord, context: DeliveryContext, targetAppIsActive: Bool) throws -> KeyDeliveryMode {
+    let mode = try keyDeliveryMode(context: context, targetAppIsActive: targetAppIsActive)
     let source = CGEventSource(stateID: .privateState)
     guard let down = CGEvent(keyboardEventSource: source, virtualKey: chord.keyCode, keyDown: true),
         let up = CGEvent(keyboardEventSource: source, virtualKey: chord.keyCode, keyDown: false)
@@ -244,11 +264,12 @@ func deliverKey(_ chord: KeyChord, context: DeliveryContext) throws {
     }
     down.flags = chord.flags
     up.flags = chord.flags
-    if context.allowGlobalCursor && context.windowNumber == nil {
+    if mode == .globalSessionTap {
         down.post(tap: .cgSessionEventTap)
         up.post(tap: .cgSessionEventTap)
     } else {
         down.postToPid(context.pid)
         up.postToPid(context.pid)
     }
+    return mode
 }

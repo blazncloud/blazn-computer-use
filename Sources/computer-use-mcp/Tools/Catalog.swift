@@ -25,6 +25,12 @@ private let allowGlobalCursorParam = boolParam(
         + "background delivery did not land for a stubborn app."
 )
 
+private let allowGlobalKeyboardParam = boolParam(
+    "Escape hatch (default false). When true, allows global keyboard delivery only "
+        + "when the target app is already foreground. Use only if per-app delivery "
+        + "did not land for a stubborn app."
+)
+
 private let confirmParam = boolParam(
     "Set true to confirm a potentially destructive or irreversible action (e.g. a "
         + "Delete button, typing into a password field, or an app on the confirmation "
@@ -164,7 +170,7 @@ let toolCatalog: [ToolSpec] = [
             [
                 "app": appParam,
                 "key": stringParam("Key or combination in xdotool syntax, e.g. \"Return\", \"cmd+n\"."),
-                "allow_global_cursor": allowGlobalCursorParam,
+                "allow_global_cursor": allowGlobalKeyboardParam,
                 "include_screenshot": includeScreenshotParam,
                 "include_state": includeStateParam,
                 "confirm": confirmParam,
@@ -285,6 +291,7 @@ let toolCatalog: [ToolSpec] = [
                 ),
                 "include_screenshot": includeScreenshotParam,
                 "include_state": includeStateParam,
+                "confirm": confirmParam,
             ],
             required: ["app", "element_id"]
         ),
@@ -341,7 +348,7 @@ let toolCatalog: [ToolSpec] = [
             Manage an app window: raise (bring to front within the app), minimize, \
             unminimize, move, resize, fullscreen, exit_fullscreen, or close. Targets the \
             front window unless window_title is given. Move/resize use global screen \
-            points (not screenshot pixels).
+            points (not screenshot pixels). close requires confirm:true.
             """,
         inputSchema: objectSchema(
             [
@@ -355,6 +362,7 @@ let toolCatalog: [ToolSpec] = [
                 "y": numberParam("Target Y for move (global screen points)."),
                 "width": numberParam("Target width for resize (points)."),
                 "height": numberParam("Target height for resize (points)."),
+                "confirm": confirmParam,
             ],
             required: ["app", "action"]
         ),

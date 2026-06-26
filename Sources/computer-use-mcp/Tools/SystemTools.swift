@@ -170,6 +170,8 @@ func manageWindowImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let action = try args.requireString("action")
     let window = try targetWindow(for: app, title: args.string("window_title"))
     let described = "window \"\(window.title ?? "untitled")\" of \(app.name)"
+    let confirmed = SafetyPolicy.confirmed(args)
+    try SafetyPolicy.checkWindowAction(action: action, targetDescription: described, app: app, confirmed: confirmed)
 
     func setAttribute(_ name: String, _ value: CFTypeRef) throws {
         let error = AXUIElementSetAttributeValue(window.element, name as CFString, value)
