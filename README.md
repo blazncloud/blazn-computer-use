@@ -141,11 +141,18 @@ TCC grants attach to a stable identity.
 
 ```bash
 swift build
+swift test
 .build/debug/computer-use-mcp serve                  # run the stdio MCP server
 .build/debug/computer-use-mcp call get_app_state '{"app":"Calculator"}'   # drive one tool
 .build/debug/computer-use-mcp doctor                 # check permissions
 python3 scripts/e2e_demo.py                          # end-to-end demo over stdio
 ```
+
+Default CI covers the non-mutating path: package build, pure unit tests, and
+CLI `version`/`help` smoke checks. Live app-control checks are local-only because
+they require a logged-in macOS desktop plus Accessibility/Screen Recording
+permission and can operate real apps. See [Testing and Preflight](docs/TESTING.md)
+for the testing tiers, local command loop, and release preflight expectations.
 
 ## License
 

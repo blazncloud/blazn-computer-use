@@ -18,7 +18,9 @@ jobs:
         # GUI-dependent paths (AX, ScreenCaptureKit, overlay) need a logged-in
         # desktop session and TCC grants, so CI covers the pure logic only.
         run: swift test
-      - name: Smoke-test CLI surface
+      - name: CLI smoke (no GUI/TCC)
+        # Keep hosted CI deterministic: do not open apps, prompt for TCC, or
+        # exercise live input/capture paths here.
         run: |
           .build/debug/computer-use-mcp version
           .build/debug/computer-use-mcp help
