@@ -32,7 +32,12 @@ actor DaemonClient {
         while true {
             if let connected = Self.connect() {
                 adopt(fd: connected)
-                if try await handshake() { return }
+                do {
+                    if try await handshake() { return }
+                } catch {
+                    disconnect(error: error)
+                    throw error
+                }
                 // Version mismatch: the old daemon was asked to shut down;
                 // loop to spawn/connect a current one.
                 disconnect(error: ToolError.failed("daemon version handover"))
@@ -51,9 +56,18 @@ actor DaemonClient {
     /// Returns true when the daemon speaks our version; otherwise tells it to
     /// shut down (so a fresh one can take over) and returns false.
     private func handshake() async throws -> Bool {
-        let reply = try await send(DaemonRequest(id: allocateID(), method: "hello", version: version))
-        if reply.version == version { return true }
-        _ = try? await send(DaemonRequest(id: allocateID(), method: "shutdown"))
+        let token = try daemonAuthToken()
+        let reply = try await send(DaemonRequest(id: allocateID(), method: "hello", version: version, authToken: token))
+        if reply.isError == true {
+            let message = reply.content?.compactMap(\.text).joined(separator: "\n")
+                ?? "daemon authentication failed"
+            throw ToolError.failed(message)
+        }
+        if reply.version == version, reply.authenticated == true { return true }
+        guard reply.version != nil else {
+            throw ToolError.failed("daemon handshake did not return a version")
+        }
+        _ = try? await send(DaemonRequest(id: allocateID(), method: "shutdown", authToken: token))
         try? await Task.sleep(for: .milliseconds(200))
         return false
     }

@@ -8,12 +8,6 @@
 import Foundation
 import MCP
 
-/// Tools that mutate app state and therefore take the app lease.
-private let leasedTools: Set<String> = [
-    "click", "type_text", "press_key", "scroll", "drag", "set_value",
-    "select_text", "perform_secondary_action", "click_menu_item", "manage_window",
-]
-
 private let leaseDuration: TimeInterval = Config.double("app_lease_seconds") ?? 10
 
 actor AppLeases {
@@ -33,7 +27,7 @@ actor AppLeases {
     /// resolved with the same lookup the tools use; an unresolvable app is
     /// not gated (the tool will produce its own, better error).
     func check(tool: String, arguments: [String: Value], session: Int32) -> String? {
-        guard enabled, leasedTools.contains(tool) else { return nil }
+        guard enabled, appLeaseToolNames.contains(tool) else { return nil }
         guard case .string(let appName)? = arguments["app"],
             let app = try? resolveApp(appName)
         else { return nil }

@@ -7,6 +7,7 @@
 // shared system services, and per-app leases (AppLeases) keep two sessions
 // from interleaving actions inside the same app.
 
+import Darwin
 import Foundation
 import MCP
 
@@ -19,6 +20,14 @@ func runDaemon() async -> Never {
         exit(0)
     }
 
+    let authToken: String
+    do {
+        authToken = try daemonAuthToken()
+    } catch {
+        daemonLog("daemon auth setup failed: \(error)")
+        exit(1)
+    }
+
     let listenFD = bindDaemonSocket()
     daemonLog("daemon \(version) listening (pid \(ProcessInfo.processInfo.processIdentifier))")
 
@@ -29,9 +38,14 @@ func runDaemon() async -> Never {
         while true {
             let connectionFD = accept(listenFD, nil, nil)
             if connectionFD < 0 { continue }
+            guard isTrustedPeer(connectionFD) else {
+                daemonLog("rejected daemon connection from untrusted peer")
+                close(connectionFD)
+                continue
+            }
             DaemonState.shared.connectionOpened()
             Thread.detachNewThread {
-                serveConnection(fd: connectionFD)
+                serveConnection(fd: connectionFD, authToken: authToken)
                 Task { await AppLeases.shared.dropLeases(session: connectionFD) }
                 DaemonState.shared.connectionClosed()
             }
@@ -75,9 +89,19 @@ private func bindDaemonSocket() -> Int32 {
     return fd
 }
 
-private func serveConnection(fd: Int32) {
+private func isTrustedPeer(_ fd: Int32) -> Bool {
+    var uid: uid_t = 0
+    var gid: gid_t = 0
+    guard getpeereid(fd, &uid, &gid) == 0 else {
+        return false
+    }
+    return uid == geteuid()
+}
+
+private func serveConnection(fd: Int32, authToken: String) {
     // Serializes response writes from concurrently completing tool Tasks.
     let writeLock = NSLock()
+    let authorization = DaemonConnectionAuthorization()
     var buffer = Data()
     var chunk = [UInt8](repeating: 0, count: 64 * 1024)
 
@@ -89,27 +113,70 @@ private func serveConnection(fd: Int32) {
             let line = buffer.prefix(upTo: newline)
             buffer.removeSubrange(...newline)
             guard let request = try? JSONDecoder().decode(DaemonRequest.self, from: line) else { continue }
-            handle(request: request, fd: fd, writeLock: writeLock)
+            handle(request: request, fd: fd, writeLock: writeLock, authToken: authToken, authorization: authorization)
         }
     }
     close(fd)
 }
 
-private func handle(request: DaemonRequest, fd: Int32, writeLock: NSLock) {
+private final class DaemonConnectionAuthorization: @unchecked Sendable {
+    private let lock = NSLock()
+    private var authenticated = false
+
+    func markAuthenticated() {
+        lock.lock()
+        authenticated = true
+        lock.unlock()
+    }
+
+    var isAuthenticated: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return authenticated
+    }
+}
+
+private func handle(
+    request: DaemonRequest,
+    fd: Int32,
+    writeLock: NSLock,
+    authToken: String,
+    authorization: DaemonConnectionAuthorization
+) {
     func respond(_ response: DaemonResponse) {
         writeLock.lock()
         _ = writeJSONLine(response, to: fd)
         writeLock.unlock()
     }
 
+    func unauthorized() {
+        respond(DaemonResponse.from(.text("Unauthorized daemon request.", isError: true), id: request.id))
+    }
+
     switch request.method {
     case "hello":
-        respond(DaemonResponse(id: request.id, version: version))
+        guard let provided = request.authToken, constantTimeEqual(provided, authToken) else {
+            unauthorized()
+            return
+        }
+        authorization.markAuthenticated()
+        respond(DaemonResponse(id: request.id, version: version, authenticated: true))
     case "shutdown":
+        guard authorization.isAuthenticated,
+            let provided = request.authToken,
+            constantTimeEqual(provided, authToken)
+        else {
+            unauthorized()
+            return
+        }
         daemonLog("shutdown requested (version handover)")
         respond(DaemonResponse(id: request.id))
         exit(0)
     default:
+        guard authorization.isAuthenticated else {
+            unauthorized()
+            return
+        }
         DaemonState.shared.noteActivity()
         Task {
             if let denial = await AppLeases.shared.check(

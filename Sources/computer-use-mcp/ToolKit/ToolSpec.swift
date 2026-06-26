@@ -10,6 +10,26 @@ struct ToolSpec: Sendable {
     let handler: @Sendable ([String: Value]) async throws -> CallTool.Result
 }
 
+/// Tools with side effects on apps, windows, the system clipboard, launched
+/// processes, or URL/file handlers. These must go through the daemon unless
+/// the user explicitly opts into in-process operation with no_daemon.
+let mutatingToolNames: Set<String> = [
+    "click", "type_text", "press_key", "scroll", "drag", "set_value",
+    "select_text", "perform_secondary_action", "open_app", "open_url",
+    "manage_window", "click_menu_item", "write_clipboard",
+]
+
+/// Mutating tools that are scoped to an app and should participate in daemon
+/// app leases to avoid two sessions interleaving actions inside one app.
+let appLeaseToolNames: Set<String> = [
+    "click", "type_text", "press_key", "scroll", "drag", "set_value",
+    "select_text", "perform_secondary_action", "click_menu_item", "manage_window",
+]
+
+func isMutatingTool(_ name: String) -> Bool {
+    mutatingToolNames.contains(name)
+}
+
 enum ToolError: Error, CustomStringConvertible {
     case invalidArguments(String)
     case notImplemented(String)

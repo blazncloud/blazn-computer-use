@@ -29,19 +29,7 @@ func runServe() async {
 
     await server.withMethodHandler(CallTool.self) { params in
         let arguments = params.arguments ?? [:]
-        if useDaemon {
-            do {
-                return try await DaemonClient.shared.call(tool: params.name, arguments: arguments)
-            } catch {
-                // Daemon unreachable (failed to spawn, crashed mid-call):
-                // degrade to in-process so one broken daemon never bricks the
-                // session. The next call retries the daemon.
-                FileHandle.standardError.write(
-                    Data("[computer-use-mcp] daemon unavailable (\(error)); running in-process\n".utf8)
-                )
-            }
-        }
-        return await dispatchTool(name: params.name, arguments: arguments)
+        return await dispatchToolWithDaemonPolicy(name: params.name, arguments: arguments, useDaemon: useDaemon)
     }
 
     do {

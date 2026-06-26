@@ -31,18 +31,13 @@ func runCall(_ args: [String]) async {
     }
 
     // Route through the shared daemon (same engine state as live agent
-    // sessions); fall back to in-process if it cannot be reached.
-    var result: CallTool.Result
-    if Config.bool("no_daemon") != true {
-        do {
-            result = try await DaemonClient.shared.call(tool: toolName, arguments: arguments)
-        } catch {
-            FileHandle.standardError.write(Data("daemon unavailable (\(error)); running in-process\n".utf8))
-            result = await dispatchTool(name: toolName, arguments: arguments)
-        }
-    } else {
-        result = await dispatchTool(name: toolName, arguments: arguments)
-    }
+    // sessions). Mutating tools fail closed if the daemon cannot arbitrate;
+    // no_daemon is the explicit opt-in for in-process actions.
+    let result = await dispatchToolWithDaemonPolicy(
+        name: toolName,
+        arguments: arguments,
+        useDaemon: Config.bool("no_daemon") != true
+    )
 
     for content in result.content {
         switch content {

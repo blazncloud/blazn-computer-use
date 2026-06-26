@@ -5,6 +5,38 @@
 import Foundation
 import MCP
 
+typealias DaemonToolCaller = @Sendable (String, [String: Value]) async throws -> CallTool.Result
+typealias LocalToolDispatcher = @Sendable (String, [String: Value]) async -> CallTool.Result
+
+func dispatchToolWithDaemonPolicy(
+    name: String,
+    arguments: [String: Value],
+    useDaemon: Bool,
+    daemonCall: DaemonToolCaller = { name, arguments in
+        try await DaemonClient.shared.call(tool: name, arguments: arguments)
+    },
+    localDispatch: LocalToolDispatcher = dispatchTool
+) async -> CallTool.Result {
+    if useDaemon {
+        do {
+            return try await daemonCall(name, arguments)
+        } catch {
+            if isMutatingTool(name) {
+                return .text(
+                    "Engine daemon unavailable (\(error)); refusing to run mutating tool "
+                        + "\"\(name)\" in-process. Set no_daemon / "
+                        + "COMPUTER_USE_MCP_NO_DAEMON=1 to explicitly accept in-process dispatch.",
+                    isError: true
+                )
+            }
+            FileHandle.standardError.write(
+                Data("[computer-use-mcp] daemon unavailable (\(error)); running read-only tool in-process\n".utf8)
+            )
+        }
+    }
+    return await localDispatch(name, arguments)
+}
+
 func dispatchTool(name: String, arguments: [String: Value]) async -> CallTool.Result {
     guard let spec = toolCatalog.first(where: { $0.name == name }) else {
         return .text("Unknown tool: \(name)", isError: true)
