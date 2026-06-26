@@ -240,7 +240,7 @@ func deliverDrag(from: CGPoint, to: CGPoint, context: DeliveryContext) async {
 }
 
 func keyDeliveryMode(context: DeliveryContext, targetAppIsActive: Bool) throws -> KeyDeliveryMode {
-    guard context.allowGlobalCursor, context.windowNumber == nil else {
+    guard context.allowGlobalCursor else {
         return .perPid
     }
     guard targetAppIsActive else {

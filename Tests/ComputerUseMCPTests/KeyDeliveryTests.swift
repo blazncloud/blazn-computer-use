@@ -9,9 +9,16 @@ import Testing
         #expect(try keyDeliveryMode(context: context, targetAppIsActive: false) == .perPid)
     }
 
-    @Test func windowTargetedKeyboardDeliveryStaysPerPid() throws {
+    @Test func explicitGlobalKeyboardDeliveryWorksForForegroundWindowedApps() throws {
         let context = DeliveryContext(pid: 1, windowNumber: CGWindowID(42), windowFrame: nil, allowGlobalCursor: true)
-        #expect(try keyDeliveryMode(context: context, targetAppIsActive: false) == .perPid)
+        #expect(try keyDeliveryMode(context: context, targetAppIsActive: true) == .globalSessionTap)
+    }
+
+    @Test func explicitGlobalKeyboardDeliveryRequiresForegroundEvenWithWindowTarget() {
+        let context = DeliveryContext(pid: 1, windowNumber: CGWindowID(42), windowFrame: nil, allowGlobalCursor: true)
+        #expect(throws: ToolError.self) {
+            try keyDeliveryMode(context: context, targetAppIsActive: false)
+        }
     }
 
     @Test func globalKeyboardDeliveryRequiresForegroundTarget() {
