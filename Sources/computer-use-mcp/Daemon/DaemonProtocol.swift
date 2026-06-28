@@ -55,6 +55,92 @@ struct DaemonResponse: Codable {
     var authenticated: Bool? = nil
 }
 
+enum DaemonProtocolLimits {
+    static let maxRequestFrameBytes = 1_048_576
+    static let maxResponseFrameBytes = 32 * 1_048_576
+    static let readChunkBytes = 64 * 1024
+    static let maxMalformedFrames = 3
+    static let maxUnauthenticatedFailures = 3
+    static let authenticationTimeoutSeconds = 5
+    static let maxConcurrentConnections = 64
+}
+
+enum DaemonProtocolViolation: Error, Equatable {
+    case frameTooLarge(maxBytes: Int)
+}
+
+enum DaemonDecodedFrame<Message> {
+    case message(Message)
+    case malformed
+}
+
+struct DaemonLineBuffer<Message: Decodable> {
+    private var buffer = Data()
+    private let maxFrameBytes: Int
+    private let decoder: JSONDecoder
+
+    init(maxFrameBytes: Int = DaemonProtocolLimits.maxRequestFrameBytes, decoder: JSONDecoder = JSONDecoder()) {
+        self.maxFrameBytes = maxFrameBytes
+        self.decoder = decoder
+    }
+
+    mutating func append<C: Collection>(contentsOf bytes: C) throws -> [DaemonDecodedFrame<Message>] where C.Element == UInt8 {
+        buffer.append(contentsOf: bytes)
+        var frames: [DaemonDecodedFrame<Message>] = []
+
+        while let newline = buffer.firstIndex(of: 0x0A) {
+            let line = buffer.prefix(upTo: newline)
+            guard line.count <= maxFrameBytes else {
+                throw DaemonProtocolViolation.frameTooLarge(maxBytes: maxFrameBytes)
+            }
+            buffer.removeSubrange(...newline)
+
+            if let message = try? decoder.decode(Message.self, from: Data(line)) {
+                frames.append(.message(message))
+            } else {
+                frames.append(.malformed)
+            }
+        }
+
+        guard buffer.count <= maxFrameBytes else {
+            throw DaemonProtocolViolation.frameTooLarge(maxBytes: maxFrameBytes)
+        }
+        return frames
+    }
+}
+
+final class DaemonConnectionLimiter: @unchecked Sendable {
+    private let lock = NSLock()
+    private let maxConnections: Int
+    private var connections = 0
+
+    init(maxConnections: Int) {
+        self.maxConnections = maxConnections
+    }
+
+    func tryOpen() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard connections < maxConnections else {
+            return false
+        }
+        connections += 1
+        return true
+    }
+
+    func close() {
+        lock.lock()
+        connections = max(0, connections - 1)
+        lock.unlock()
+    }
+
+    var currentCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return connections
+    }
+}
+
 /// Tool.Content is not Codable in a stable wire shape; mirror the two kinds
 /// this server produces.
 struct DaemonContent: Codable {

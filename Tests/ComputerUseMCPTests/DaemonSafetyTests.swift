@@ -32,6 +32,94 @@ import Testing
         #expect(!constantTimeEqual("secret", "secret2"))
     }
 
+    @Test func daemonLineBufferDecodesCompleteFramesAndKeepsPartialData() throws {
+        let first = try JSONEncoder().encode(DaemonRequest(id: 1, method: "hello", authToken: "secret"))
+        let second = try JSONEncoder().encode(DaemonRequest(id: 2, method: "list_apps"))
+        var buffer = DaemonLineBuffer<DaemonRequest>(maxFrameBytes: 256)
+
+        let partialFrames = try buffer.append(contentsOf: Array(first))
+        #expect(partialFrames.isEmpty)
+
+        let frames = try buffer.append(contentsOf: Array("\n".utf8) + Array(second) + Array("\n".utf8))
+        let requests = decodedRequests(frames)
+
+        #expect(requests.count == 2)
+        #expect(requests[0].id == 1)
+        #expect(requests[0].method == "hello")
+        #expect(requests[1].id == 2)
+        #expect(requests[1].method == "list_apps")
+    }
+
+    @Test func daemonLineBufferRejectsOversizedFrameBeforeUnboundedGrowth() throws {
+        var buffer = DaemonLineBuffer<DaemonRequest>(maxFrameBytes: 8)
+
+        do {
+            _ = try buffer.append(contentsOf: Array("123456789".utf8))
+            Issue.record("expected oversized frame rejection")
+        } catch DaemonProtocolViolation.frameTooLarge(let maxBytes) {
+            #expect(maxBytes == 8)
+        }
+    }
+
+    @Test func daemonLineBufferReportsMalformedFrames() throws {
+        var buffer = DaemonLineBuffer<DaemonRequest>(maxFrameBytes: 256)
+        let frames = try buffer.append(contentsOf: Array("not-json\n".utf8))
+
+        guard frames.count == 1 else {
+            Issue.record("expected exactly one decoded frame")
+            return
+        }
+        guard case .malformed = frames[0] else {
+            Issue.record("expected malformed frame")
+            return
+        }
+    }
+
+    @Test func daemonResponseBufferAllowsScreenshotPayloadsBeyondRequestLimit() throws {
+        let imageData = String(repeating: "a", count: DaemonProtocolLimits.maxRequestFrameBytes + 1)
+        let response = DaemonResponse(
+            id: 3,
+            content: [DaemonContent(type: "image", data: imageData, mimeType: "image/png")]
+        )
+        var encoded = try JSONEncoder().encode(response)
+        encoded.append(0x0A)
+        var buffer = DaemonLineBuffer<DaemonResponse>(maxFrameBytes: DaemonProtocolLimits.maxResponseFrameBytes)
+
+        let frames = try buffer.append(contentsOf: encoded)
+        guard frames.count == 1, case .message(let decoded) = frames[0] else {
+            Issue.record("expected one decoded response frame")
+            return
+        }
+
+        #expect(decoded.id == 3)
+        #expect(decoded.content?.first?.data?.count == imageData.count)
+    }
+
+    @Test func daemonAuthorizationBudgetsUnauthenticatedFailures() {
+        let authorization = DaemonConnectionAuthorization()
+
+        for _ in 0..<DaemonProtocolLimits.maxUnauthenticatedFailures {
+            #expect(!authorization.recordUnauthenticatedFailure(maxFailures: DaemonProtocolLimits.maxUnauthenticatedFailures))
+        }
+        #expect(authorization.recordUnauthenticatedFailure(maxFailures: DaemonProtocolLimits.maxUnauthenticatedFailures))
+
+        authorization.markAuthenticated()
+        #expect(!authorization.recordUnauthenticatedFailure(maxFailures: DaemonProtocolLimits.maxUnauthenticatedFailures))
+    }
+
+    @Test func daemonConnectionLimiterCapsConcurrentConnections() {
+        let limiter = DaemonConnectionLimiter(maxConnections: 2)
+
+        #expect(limiter.tryOpen())
+        #expect(limiter.tryOpen())
+        #expect(!limiter.tryOpen())
+        #expect(limiter.currentCount == 2)
+
+        limiter.close()
+        #expect(limiter.tryOpen())
+        #expect(limiter.currentCount == 2)
+    }
+
     @Test func mutatingToolClassifierCoversSystemSideEffects() {
         for name in ["click", "type_text", "open_app", "open_url", "manage_window", "write_clipboard"] {
             #expect(isMutatingTool(name), "\(name) should fail closed when daemon arbitration is unavailable")
@@ -105,4 +193,13 @@ private func textContent(_ result: CallTool.Result) -> String {
         return ""
     }
     return text
+}
+
+private func decodedRequests(_ frames: [DaemonDecodedFrame<DaemonRequest>]) -> [DaemonRequest] {
+    frames.compactMap { frame in
+        guard case .message(let request) = frame else {
+            return nil
+        }
+        return request
+    }
 }

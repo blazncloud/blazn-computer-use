@@ -103,18 +103,23 @@ actor DaemonClient {
         fd = connected
         // Reader thread: blocking reads must not occupy the cooperative pool.
         Thread.detachNewThread { [weak self] in
-            var buffer = Data()
-            var chunk = [UInt8](repeating: 0, count: 64 * 1024)
-            while true {
+            var frames = DaemonLineBuffer<DaemonResponse>(
+                maxFrameBytes: DaemonProtocolLimits.maxResponseFrameBytes
+            )
+            var chunk = [UInt8](repeating: 0, count: DaemonProtocolLimits.readChunkBytes)
+            readLoop: while true {
                 let n = read(connected, &chunk, chunk.count)
                 if n <= 0 { break }
-                buffer.append(contentsOf: chunk[0..<n])
-                while let newline = buffer.firstIndex(of: 0x0A) {
-                    let line = buffer.prefix(upTo: newline)
-                    buffer.removeSubrange(...newline)
-                    if let response = try? JSONDecoder().decode(DaemonResponse.self, from: line) {
+
+                do {
+                    for frame in try frames.append(contentsOf: chunk[0..<n]) {
+                        guard case .message(let response) = frame else {
+                            break readLoop
+                        }
                         Task { await self?.fulfill(response) }
                     }
+                } catch {
+                    break
                 }
             }
             Task { await self?.connectionDropped(fd: connected) }
