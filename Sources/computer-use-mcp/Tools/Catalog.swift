@@ -149,7 +149,7 @@ let toolCatalog: [ToolSpec] = [
             [
                 "app": appParam,
                 "element_id": elementIDParam,
-                "text": stringParam("Literal text to type."),
+                "text": stringParam("Literal text to type. Maximum \(ArgumentBounds.maxTypeTextCharacters) characters."),
                 "include_screenshot": includeScreenshotParam,
                 "include_state": includeStateParam,
                 "confirm": confirmParam,
@@ -196,9 +196,15 @@ let toolCatalog: [ToolSpec] = [
                     "Semantic scroll direction (sized from the element; combine with pages). "
                         + "Alternative to raw deltas."
                 ),
-                "pages": numberParam("How many element-heights/widths to scroll with direction (default 1)."),
-                "delta_x": integerParam("Horizontal scroll amount in pixels (alternative to direction)."),
-                "delta_y": integerParam("Vertical scroll amount in pixels (alternative to direction)."),
+                "pages": numberParam(
+                    "How many element-heights/widths to scroll with direction (default 1, max \(Int(ArgumentBounds.maxScrollPages)))."
+                ),
+                "delta_x": integerParam(
+                    "Horizontal scroll amount in pixels (alternative to direction, max +/-\(ArgumentBounds.maxScrollDelta))."
+                ),
+                "delta_y": integerParam(
+                    "Vertical scroll amount in pixels (alternative to direction, max +/-\(ArgumentBounds.maxScrollDelta))."
+                ),
                 "allow_global_cursor": allowGlobalCursorParam,
                 "include_screenshot": includeScreenshotParam,
                 "include_state": includeStateParam,
@@ -242,7 +248,10 @@ let toolCatalog: [ToolSpec] = [
             [
                 "app": appParam,
                 "element_id": elementIDParam,
-                "value": stringParam("New value. For checkboxes use \"true\"/\"false\"; for sliders a number."),
+                "value": stringParam(
+                    "New value. For checkboxes use \"true\"/\"false\"; for sliders a number. "
+                        + "Maximum \(ArgumentBounds.maxSetValueCharacters) characters."
+                ),
                 "include_screenshot": includeScreenshotParam,
                 "include_state": includeStateParam,
                 "confirm": confirmParam,
@@ -310,6 +319,7 @@ let toolCatalog: [ToolSpec] = [
                 "activate": boolParam(
                     "Default false. When true, brings the app to the foreground — this changes the user's focus."
                 ),
+                "confirm": confirmParam,
             ],
             required: ["app"]
         ),
@@ -319,8 +329,8 @@ let toolCatalog: [ToolSpec] = [
         name: "open_url",
         description: """
             Open a URL or file path with its default handler (browser, document app, …). \
-            Non-http(s) schemes require confirm:true because they can trigger arbitrary \
-            app handlers.
+            Local files and non-http(s) schemes require confirm:true because they can \
+            launch apps or trigger arbitrary handlers.
             """,
         inputSchema: objectSchema(
             [
@@ -400,7 +410,12 @@ let toolCatalog: [ToolSpec] = [
             with press_key cmd+v. Note: this overwrites whatever the user had copied.
             """,
         inputSchema: objectSchema(
-            ["text": stringParam("Text to place on the clipboard.")],
+            [
+                "text": stringParam(
+                    "Text to place on the clipboard. Maximum \(ArgumentBounds.maxClipboardCharacters) characters."
+                ),
+                "confirm": confirmParam,
+            ],
             required: ["text"]
         ),
         handler: { args in try await writeClipboard(args) }
@@ -437,7 +452,10 @@ let toolCatalog: [ToolSpec] = [
                 "app": appParam,
                 "element_id": elementIDParam,
                 "offset": integerParam("Character offset to start from (default 0)."),
-                "length": integerParam("Maximum characters to return (default 20000)."),
+                "length": integerParam(
+                    "Maximum characters to return (default \(ArgumentBounds.maxReadTextCharacters), "
+                        + "max \(ArgumentBounds.maxReadTextCharacters))."
+                ),
             ],
             required: ["app", "element_id"]
         ),

@@ -11,6 +11,7 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
     try requireAccessibilityTrusted()
     let text = try args.requireString("text")
+    try ArgumentBounds.checkStringLength(text, argument: "text", maximum: ArgumentBounds.maxTypeTextCharacters)
     let confirmed = SafetyPolicy.confirmed(args)
     try SafetyPolicy.check(app: app, confirmed: confirmed)
 
@@ -103,6 +104,7 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     guard let value = args.string("value") else {
         throw ToolError.invalidArguments("\"value\" (string) is required.")
     }
+    try ArgumentBounds.checkStringLength(value, argument: "value", maximum: ArgumentBounds.maxSetValueCharacters)
     try SafetyPolicy.checkValueChange(
         currentValue: axString(target.element, kAXValueAttribute), newValue: value, app: app, confirmed: confirmed
     )
@@ -225,8 +227,9 @@ func readTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     guard let value = axString(target.element, kAXValueAttribute) else {
         throw ToolError.failed("\(describeTarget(target)) has no readable text value.")
     }
-    let offset = max(0, args.integer("offset") ?? 0)
+    let offset = args.integer("offset") ?? 0
     let requested = args.integer("length") ?? 20_000
+    try ArgumentBounds.checkReadText(offset: offset, length: requested)
     let characters = Array(value)
     guard offset < characters.count || characters.isEmpty else {
         throw ToolError.invalidArguments("offset \(offset) is past the end (\(characters.count) chars).")

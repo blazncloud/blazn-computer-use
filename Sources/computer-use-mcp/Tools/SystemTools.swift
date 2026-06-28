@@ -11,9 +11,11 @@ import MCP
 func openAppImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let identifier = try args.requireString("app")
     let activate = args.bool("activate") ?? false
+    let confirmed = SafetyPolicy.confirmed(args)
 
     // Already running: report (and optionally activate) rather than relaunch.
     if let running = try? resolveApp(identifier) {
+        try SafetyPolicy.checkOpenApp(identifier: running.name, activate: activate, isAlreadyRunning: true, confirmed: confirmed)
         if activate {
             NSRunningApplication(processIdentifier: running.pid)?.activate()
         }
@@ -30,6 +32,7 @@ func openAppImpl(_ args: [String: Value]) async throws -> CallTool.Result {
                 + "an app name from /Applications, or a full .app path. See list_apps."
         )
     }
+    try SafetyPolicy.checkOpenApp(identifier: url.lastPathComponent, activate: activate, isAlreadyRunning: false, confirmed: confirmed)
 
     let configuration = NSWorkspace.OpenConfiguration()
     // Launch without stealing focus unless explicitly asked to.
@@ -111,14 +114,7 @@ func openURLImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         throw ToolError.invalidArguments("\"\(raw)\" is not a valid URL or existing file path.")
     }
 
-    // http(s) and existing files are routine; other schemes (shortcuts://,
-    // ssh://, app-specific) can trigger arbitrary handlers — confirm those.
-    let scheme = url.scheme?.lowercased() ?? "file"
-    if SafetyPolicy.isEnabled, !confirmed, !["http", "https", "file"].contains(scheme) {
-        throw SafetyError(
-            reason: "opening a \(scheme):// URL can trigger an arbitrary app handler."
-        )
-    }
+    try SafetyPolicy.checkOpenURL(url, confirmed: confirmed)
 
     guard NSWorkspace.shared.open(url) else {
         throw ToolError.failed("macOS refused to open \(url.absoluteString) (no handler?).")
@@ -312,6 +308,8 @@ func readClipboardImpl(_ args: [String: Value]) async throws -> CallTool.Result 
 
 func writeClipboardImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let text = try args.requireString("text")
+    try ArgumentBounds.checkStringLength(text, argument: "text", maximum: ArgumentBounds.maxClipboardCharacters)
+    try SafetyPolicy.checkClipboardWrite(confirmed: SafetyPolicy.confirmed(args))
     let pasteboard = NSPasteboard.general
     pasteboard.clearContents()
     pasteboard.setString(text, forType: .string)

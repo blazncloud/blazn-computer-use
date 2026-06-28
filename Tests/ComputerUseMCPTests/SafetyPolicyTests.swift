@@ -1,8 +1,26 @@
+import Foundation
 import Testing
 
 @testable import computer_use_mcp
 
 private let app = ResolvedApp(pid: 1, name: "TestApp", bundleIdentifier: "com.example.test")
+
+private func invalidArgumentMessage(_ body: () throws -> Void) -> String {
+    do {
+        try body()
+        #expect(Bool(false), "Expected ToolError.invalidArguments.")
+        return ""
+    } catch let error as ToolError {
+        guard case .invalidArguments(let message) = error else {
+            #expect(Bool(false), "Expected ToolError.invalidArguments, got \(error).")
+            return ""
+        }
+        return message
+    } catch {
+        #expect(Bool(false), "Expected ToolError.invalidArguments, got \(error).")
+        return ""
+    }
+}
 
 @Suite struct SafetyPolicyTests {
     @Test func destructiveLabelsRequireConfirmation() {
@@ -70,5 +88,108 @@ private let app = ResolvedApp(pid: 1, name: "TestApp", bundleIdentifier: "com.ex
         let error = SafetyError(reason: "test reason.")
         #expect(error.description.contains("confirm"))
         #expect(error.description.contains("test reason."))
+    }
+
+    @Test func launchingAppRequiresConfirmation() {
+        #expect(throws: SafetyError.self) {
+            try SafetyPolicy.checkOpenApp(
+                identifier: "Notes.app", activate: false, isAlreadyRunning: false, confirmed: false
+            )
+        }
+    }
+
+    @Test func activatingAppRequiresConfirmation() {
+        #expect(throws: SafetyError.self) {
+            try SafetyPolicy.checkOpenApp(
+                identifier: "Notes", activate: true, isAlreadyRunning: true, confirmed: false
+            )
+        }
+    }
+
+    @Test func alreadyRunningOpenAppNoopPassesWithoutConfirmation() throws {
+        try SafetyPolicy.checkOpenApp(identifier: "Notes", activate: false, isAlreadyRunning: true, confirmed: false)
+    }
+
+    @Test func confirmedOpenAppPasses() throws {
+        try SafetyPolicy.checkOpenApp(identifier: "Notes.app", activate: false, isAlreadyRunning: false, confirmed: true)
+        try SafetyPolicy.checkOpenApp(identifier: "Notes", activate: true, isAlreadyRunning: true, confirmed: true)
+    }
+
+    @Test func routineHttpURLsPassWithoutConfirmation() throws {
+        try SafetyPolicy.checkOpenURL(#require(URL(string: "https://example.com")), confirmed: false)
+        try SafetyPolicy.checkOpenURL(#require(URL(string: "http://example.com")), confirmed: false)
+    }
+
+    @Test func localFilesAndAppSchemesRequireConfirmation() {
+        #expect(throws: SafetyError.self) {
+            try SafetyPolicy.checkOpenURL(URL(fileURLWithPath: "/tmp/example.txt"), confirmed: false)
+        }
+        #expect(throws: SafetyError.self) {
+            try SafetyPolicy.checkOpenURL(#require(URL(string: "shortcuts://run-shortcut?name=demo")), confirmed: false)
+        }
+    }
+
+    @Test func confirmedLocalFileAndAppSchemeOpenPasses() throws {
+        try SafetyPolicy.checkOpenURL(URL(fileURLWithPath: "/tmp/example.txt"), confirmed: true)
+        try SafetyPolicy.checkOpenURL(#require(URL(string: "shortcuts://run-shortcut?name=demo")), confirmed: true)
+    }
+
+    @Test func clipboardWriteRequiresConfirmation() {
+        #expect(throws: SafetyError.self) {
+            try SafetyPolicy.checkClipboardWrite(confirmed: false)
+        }
+    }
+
+    @Test func confirmedClipboardWritePasses() throws {
+        try SafetyPolicy.checkClipboardWrite(confirmed: true)
+    }
+
+    @Test func overlongStringArgumentsFailWithUsefulErrors() {
+        let typeTextMessage = invalidArgumentMessage {
+            try ArgumentBounds.checkStringLength(
+                String(repeating: "x", count: ArgumentBounds.maxTypeTextCharacters + 1),
+                argument: "text",
+                maximum: ArgumentBounds.maxTypeTextCharacters
+            )
+        }
+        #expect(typeTextMessage.contains("\"text\""))
+        #expect(typeTextMessage.contains("maximum"))
+
+        let clipboardMessage = invalidArgumentMessage {
+            try ArgumentBounds.checkStringLength(
+                String(repeating: "x", count: ArgumentBounds.maxClipboardCharacters + 1),
+                argument: "text",
+                maximum: ArgumentBounds.maxClipboardCharacters
+            )
+        }
+        #expect(clipboardMessage.contains("split"))
+    }
+
+    @Test func readTextBoundsFailWithUsefulErrors() {
+        let negativeOffset = invalidArgumentMessage {
+            try ArgumentBounds.checkReadText(offset: -1, length: 100)
+        }
+        #expect(negativeOffset.contains("\"offset\""))
+
+        let tooLong = invalidArgumentMessage {
+            try ArgumentBounds.checkReadText(offset: 0, length: ArgumentBounds.maxReadTextCharacters + 1)
+        }
+        #expect(tooLong.contains("\"length\""))
+        #expect(tooLong.contains("chunking"))
+    }
+
+    @Test func scrollBoundsFailWithUsefulErrors() throws {
+        let badPages = invalidArgumentMessage {
+            _ = try ArgumentBounds.checkScrollPages(ArgumentBounds.maxScrollPages + 0.1)
+        }
+        #expect(badPages.contains("\"pages\""))
+
+        let badDelta = invalidArgumentMessage {
+            try ArgumentBounds.checkScrollDelta(deltaX: ArgumentBounds.maxScrollDelta + 1, deltaY: 0)
+        }
+        #expect(badDelta.contains("\"delta_x\""))
+
+        _ = try ArgumentBounds.checkScrollPages(1)
+        try ArgumentBounds.checkScrollDelta(deltaX: ArgumentBounds.maxScrollDelta, deltaY: -ArgumentBounds.maxScrollDelta)
     }
 }

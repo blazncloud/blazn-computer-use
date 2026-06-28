@@ -46,6 +46,34 @@ enum SafetyPolicy {
         args.bool("confirm") == true
     }
 
+    static func checkOpenApp(identifier: String, activate: Bool, isAlreadyRunning: Bool, confirmed: Bool) throws {
+        guard isEnabled, !confirmed else { return }
+        if activate {
+            throw SafetyError(reason: "activating \(identifier) changes the user's foreground app.")
+        }
+        if !isAlreadyRunning {
+            throw SafetyError(reason: "launching \(identifier) starts a local application and may run app startup handlers.")
+        }
+    }
+
+    static func checkOpenURL(_ url: URL, confirmed: Bool) throws {
+        guard isEnabled, !confirmed else { return }
+        let scheme = url.scheme?.lowercased() ?? "file"
+        switch scheme {
+        case "http", "https":
+            return
+        case "file":
+            throw SafetyError(reason: "opening a local file can launch apps or trigger document handlers.")
+        default:
+            throw SafetyError(reason: "opening a \(scheme):// URL can trigger an arbitrary app handler.")
+        }
+    }
+
+    static func checkClipboardWrite(confirmed: Bool) throws {
+        guard isEnabled, !confirmed else { return }
+        throw SafetyError(reason: "writing the system clipboard overwrites the user's current clipboard contents.")
+    }
+
     /// Gate an action against an app. Throws when confirmation is required and
     /// not given.
     static func check(app: ResolvedApp, confirmed: Bool) throws {
@@ -110,6 +138,57 @@ enum SafetyPolicy {
         guard isEnabled, !confirmed else { return }
         if action == "close" {
             throw SafetyError(reason: "closing \(targetDescription) may discard unsaved state or dismiss important UI.")
+        }
+    }
+}
+
+enum ArgumentBounds {
+    static let maxTypeTextCharacters = 100_000
+    static let maxSetValueCharacters = 100_000
+    static let maxClipboardCharacters = 200_000
+    static let maxReadTextCharacters = 20_000
+    static let maxScrollPages = 10.0
+    static let minScrollPages = 0.1
+    static let maxScrollDelta = 10_000
+
+    static func checkStringLength(_ value: String, argument: String, maximum: Int) throws {
+        if value.count > maximum {
+            throw ToolError.invalidArguments(
+                "\"\(argument)\" is \(value.count) characters; maximum is \(maximum). "
+                    + "Send a smaller value or split the operation into chunks."
+            )
+        }
+    }
+
+    static func checkReadText(offset: Int, length: Int) throws {
+        if offset < 0 {
+            throw ToolError.invalidArguments("\"offset\" must be at least 0.")
+        }
+        if length < 1 {
+            throw ToolError.invalidArguments("\"length\" must be at least 1.")
+        }
+        if length > maxReadTextCharacters {
+            throw ToolError.invalidArguments(
+                "\"length\" is \(length); maximum is \(maxReadTextCharacters). Use offset/length chunking."
+            )
+        }
+    }
+
+    static func checkScrollPages(_ pages: Double) throws -> Double {
+        guard pages.isFinite else {
+            throw ToolError.invalidArguments("\"pages\" must be a finite number.")
+        }
+        if pages < minScrollPages || pages > maxScrollPages {
+            throw ToolError.invalidArguments("\"pages\" must be between \(minScrollPages) and \(maxScrollPages).")
+        }
+        return pages
+    }
+
+    static func checkScrollDelta(deltaX: Int, deltaY: Int) throws {
+        if deltaX < -maxScrollDelta || deltaX > maxScrollDelta || deltaY < -maxScrollDelta || deltaY > maxScrollDelta {
+            throw ToolError.invalidArguments(
+                "\"delta_x\" and \"delta_y\" must be between -\(maxScrollDelta) and \(maxScrollDelta)."
+            )
         }
     }
 }

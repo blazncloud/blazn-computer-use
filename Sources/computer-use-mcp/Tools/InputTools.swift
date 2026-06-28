@@ -47,7 +47,7 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     // Semantic alternative to raw deltas: a direction and a page count, sized
     // from the scrolled element itself.
     if let direction = args.string("direction") {
-        let pages = max(0.1, args.number("pages") ?? 1)
+        let pages = try ArgumentBounds.checkScrollPages(args.number("pages") ?? 1)
         let frame = target.element.flatMap(axFrame)
         switch direction {
         case "down": deltaY = Int(Double(frame?.height ?? 400) * pages)
@@ -61,6 +61,7 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     guard deltaX != 0 || deltaY != 0 else {
         throw ToolError.invalidArguments("Provide direction (+ optional pages), or a non-zero delta_x/delta_y.")
     }
+    try ArgumentBounds.checkScrollDelta(deltaX: deltaX, deltaY: deltaY)
 
     let point = try target.requirePoint()
     await AgentCursor.shared.glide(to: point)
