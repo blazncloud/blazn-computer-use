@@ -17,8 +17,9 @@ in the background, without hijacking your cursor or stealing focus.**
   and structural wrapper nodes are collapsed so deeply nested page content actually
   reaches the agent.
 - **Background-safe.** A layered input ladder (AX action → per-window event → per-PID
-  event → last-resort global) delivers actions to the target app without moving the real
-  cursor or changing focus. You keep working while the agent works.
+  event, with explicit global fallback for clicks) delivers actions to the target app
+  without moving the real cursor or changing focus by default. You keep working while
+  the agent works.
 - **Agent-agnostic.** Standard MCP over stdio. Any compliant client connects with one line
   of config — no lock-in.
 - **Observable.** A smooth self-drawn agent cursor (separate from your real pointer) glides
@@ -51,6 +52,10 @@ valid). Pass `include_screenshot: false` for tree-only results, `include_state: 
 for a bare confirmation (fastest), and call `get_app_state` whenever full-resolution
 pixels are needed.
 
+For the precise production contract across observation, dispatch, coordinate
+spaces, foreground/background guarantees, TCC requirements, stale snapshots, and
+failure recovery, see [Modality Contract](docs/architecture/modality-contract.md).
+
 ## How it works
 
 Each MCP client spawns `serve`, a thin stdio shim; tool calls are forwarded to a
@@ -60,8 +65,8 @@ process means concurrent agent sessions cannot collide on shared system services
 short per-app leases keep two sessions from interleaving actions inside the same app.
 `COMPUTER_USE_MCP_NO_DAEMON=1` runs the engine in-process instead.
 
-Every interaction first resolves to an accessibility element and a screen
-point, then descends a delivery ladder, stopping at the first tier that works:
+Click interactions first resolve to an accessibility element and a screen
+point, then descend a delivery ladder, stopping at the first tier that works:
 
 1. **Accessibility action** (`AXPress`, etc.) — precise, background, no event posted.
 2. **Per-window event** — a `windowNumber`-routed event delivered to the target
@@ -130,8 +135,8 @@ TCC grants attach to a stable identity.
 
 - Background delivery uses macOS per-process event posting, which is
   app-dependent: a few apps that require real keyboard focus (e.g. some pro
-  audio apps, secure input fields) may ignore background events. Use
-  `allow_global_cursor: true` as an explicit fallback.
+  audio apps, secure input fields) may ignore background events. For clicks,
+  use `allow_global_cursor: true` as an explicit fallback.
 - Menu key-equivalents (e.g. `cmd+a`) are reliable when the app is the key
   window; some apps ignore them when targeted purely in the background.
 - macOS only (the engine is built on Accessibility, ScreenCaptureKit, and
@@ -153,6 +158,8 @@ CLI `version`/`help` smoke checks. Live app-control checks are local-only becaus
 they require a logged-in macOS desktop plus Accessibility/Screen Recording
 permission and can operate real apps. See [Testing and Preflight](docs/TESTING.md)
 for the testing tiers, local command loop, and release preflight expectations.
+The architecture-level behavior target for these tiers is captured in
+[Modality Contract](docs/architecture/modality-contract.md).
 
 ### Benchmark and smoke tiers
 

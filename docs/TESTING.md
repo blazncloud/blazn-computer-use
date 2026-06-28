@@ -3,6 +3,10 @@
 Use the lowest-risk tier that proves the change, then add stronger local checks
 only when the change touches runtime macOS automation.
 
+Use [Modality Contract](architecture/modality-contract.md) as the contract-level
+source of truth for observation, dispatch, coordinate, permission, and recovery
+behavior when deciding which tier proves a change.
+
 ## Local Commands
 
 ```bash
