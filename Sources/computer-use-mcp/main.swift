@@ -28,6 +28,8 @@ case "call":
     await runCall(Array(arguments.dropFirst()))
 case "doctor":
     await runDoctor(prompt: arguments.contains("--prompt"))
+case "health_report":
+    await runHealthReport(json: arguments.contains("--json"), probeCaptureService: arguments.contains("--probe-capture"))
 case "overlay":
     runOverlay()
 case "version", "--version", "-v":
@@ -51,6 +53,8 @@ func printUsage() {
           computer-use-mcp daemon                Run the shared engine daemon (spawned on demand)
           computer-use-mcp call <tool> [<json>]  Invoke a single tool (dev harness)
           computer-use-mcp doctor [--prompt]     Check required macOS permissions
+          computer-use-mcp health_report [--json] [--probe-capture]
+                                                 Report identity, permissions, capture, and daemon diagnostics
           computer-use-mcp version               Print version
           computer-use-mcp help                  Show this help
         """

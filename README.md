@@ -83,7 +83,9 @@ generation, so reusing a stale id fails loudly instead of mis-clicking.
 
 - macOS 14+
 - Permissions granted on first run: **Accessibility** and **Screen Recording**
-  (Input Monitoring is *not* required). Run `computer-use-mcp doctor --prompt`.
+  (Input Monitoring is *not* required). Run `computer-use-mcp health_report`
+  to inspect current identity/permission state, or
+  `computer-use-mcp doctor --prompt` when you intentionally want macOS prompts.
 
 ## Usage (MCP client config)
 
@@ -127,9 +129,15 @@ key in `~/.config/computer-use-mcp.json` (env wins):
 The binary needs **Accessibility** and **Screen Recording** permission, and macOS
 ties those grants to the *host process* that spawns the server (your terminal or
 agent app). A rebuilt binary keeps its grants; a different host needs its own.
-For redistribution, codesign with a Developer ID and notarize
-(`codesign --sign "Developer ID Application: …" && xcrun notarytool submit …`) so
-TCC grants attach to a stable identity.
+Use `computer-use-mcp health_report --json` to record the current executable,
+bundle id (if any), parent process, permission state, and daemon socket/secret
+paths without revealing daemon secrets. Add `--probe-capture` when you
+intentionally want a bounded ScreenCaptureKit/replayd responsiveness probe. For
+redistribution, codesign with a Developer ID and notarize
+(`codesign --sign "Developer ID Application: ..." && xcrun notarytool submit ...`)
+so TCC grants attach to a stable identity. See
+[Permissions and app identity](docs/release/permissions.md) for the first
+productionization checklist.
 
 ## Known limitations
 
@@ -149,16 +157,19 @@ swift build
 swift test
 .build/debug/computer-use-mcp serve                  # run the stdio MCP server
 .build/debug/computer-use-mcp call get_app_state '{"app":"Calculator"}'   # drive one tool
+.build/debug/computer-use-mcp health_report --json   # non-mutating diagnostics
+.build/debug/computer-use-mcp health_report --probe-capture   # bounded capture-service probe
 .build/debug/computer-use-mcp doctor                 # check permissions
 python3 scripts/e2e_demo.py                          # safe structured smoke artifact; no GUI mutation
 ```
 
-Default CI covers the non-mutating path: package build, pure unit tests, and
-CLI `version`/`help` smoke checks. Live app-control checks are local-only because
-they require a logged-in macOS desktop plus Accessibility/Screen Recording
-permission and can operate real apps. See [Testing and Preflight](docs/TESTING.md)
-for the testing tiers, local command loop, and release preflight expectations.
-The architecture-level behavior target for these tiers is captured in
+Default CI covers the non-mutating path: package build, pure unit tests, and CLI
+`version`/`help`/`health_report --json` smoke checks. Live app-control checks are
+local-only because they require a logged-in macOS desktop plus
+Accessibility/Screen Recording permission and can operate real apps. See
+[Testing and Preflight](docs/TESTING.md) for the testing tiers, local command
+loop, and release preflight expectations. The architecture-level behavior target
+for these tiers is captured in
 [Modality Contract](docs/architecture/modality-contract.md).
 
 ### Benchmark and smoke tiers

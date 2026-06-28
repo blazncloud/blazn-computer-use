@@ -1,82 +1,80 @@
-// `doctor` — check (and optionally prompt for) the TCC permissions this tool
-// needs: Accessibility (read UI + deliver actions) and Screen Recording
+// `doctor` and `health_report` — check the TCC permissions this tool needs:
+// Accessibility (read UI + deliver actions) and Screen Recording
 // (screenshots). Input Monitoring is intentionally not required.
 //
-// Note: TCC attributes a CLI's permissions to its responsible process — when
-// spawned from a terminal or an MCP client, the grant may attach to that host
-// app. `doctor` reports what the current process actually has at runtime.
+// Note: TCC attributes a CLI's permissions to its responsible process. These
+// diagnostics report what the current process actually has at runtime, plus
+// caller/app-bundle context to make that attribution visible.
 
-import ApplicationServices
-import CoreGraphics
 import Foundation
-import ScreenCaptureKit
 
 func runDoctor(prompt: Bool) async {
-    let accessibility: Bool
-    if prompt {
-        // Literal key for kAXTrustedCheckOptionPrompt; the C global is not
-        // concurrency-safe to reference under Swift 6.
-        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
-        accessibility = AXIsProcessTrustedWithOptions(options)
-    } else {
-        accessibility = AXIsProcessTrusted()
-    }
+    let report = await makeHealthReport(prompt: prompt, probeCaptureService: true)
+    printDoctorText(report)
 
-    var screenRecording = CGPreflightScreenCaptureAccess()
-    if prompt && !screenRecording {
-        screenRecording = CGRequestScreenCaptureAccess()
-    }
-
-    print("computer-use-mcp doctor")
-    print("  Accessibility:    \(accessibility ? "granted" : "NOT GRANTED")")
-    print("  Screen Recording: \(screenRecording ? "granted" : "NOT GRANTED")")
-
-    // The screen-capture daemon (replayd) serves every screenshot and can
-    // wedge — especially under concurrent captures from multiple server
-    // processes. Probe it so a wedged daemon shows up here, not as every
-    // screenshot timing out.
-    var captureServiceHealthy = true
-    if screenRecording {
-        do {
-            _ = try await withTimeout(seconds: 5, label: "Capture service probe") {
-                try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
-                    .windows.count
-            }
-            print("  Capture service:  responsive")
-        } catch {
-            captureServiceHealthy = false
-            print("  Capture service:  NOT RESPONDING")
-            print(
-                """
-
-                The macOS screen-capture service (replayd) is not answering. Run \
-                `killall -9 replayd` — launchd restarts it clean — then re-run doctor.
-                """
-            )
-        }
-    }
-
-    if accessibility && screenRecording && captureServiceHealthy {
+    if report.ready {
         print("All permissions granted. Ready to use.")
         return
     }
-    if accessibility && screenRecording {
+    if report.permissions.accessibility.granted && report.permissions.screenRecording.granted {
+        print("\n\(report.recommendedNextAction)")
         exit(1)
     }
 
     print(
         """
 
-        To grant, open System Settings → Privacy & Security and enable this binary's \
+        To grant, open System Settings -> Privacy & Security and enable this binary's \
         host app (your terminal or MCP client) under:
         """
     )
-    if !accessibility {
+    if !report.permissions.accessibility.granted {
         print("  - Accessibility (required to read app UI and deliver actions)")
     }
-    if !screenRecording {
+    if !report.permissions.screenRecording.granted {
         print("  - Screen Recording (required for screenshots)")
     }
     print("\nRe-run `computer-use-mcp doctor --prompt` to trigger the system permission dialogs.")
     exit(1)
+}
+
+func runHealthReport(json: Bool, probeCaptureService: Bool) async {
+    let report = await makeHealthReport(prompt: false, probeCaptureService: probeCaptureService)
+    if json {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(report), let text = String(data: data, encoding: .utf8) {
+            print(text)
+        } else {
+            FileHandle.standardError.write(Data("Could not encode health report.\n".utf8))
+            exit(1)
+        }
+        return
+    }
+
+    printHealthReportText(report)
+}
+
+private func printDoctorText(_ report: HealthReport) {
+    print("computer-use-mcp doctor")
+    print("  Accessibility:    \(report.permissions.accessibility.displayStatus)")
+    print("  Screen Recording: \(report.permissions.screenRecording.displayStatus)")
+    print("  Capture service:  \(report.captureService.displayStatus)")
+}
+
+private func printHealthReportText(_ report: HealthReport) {
+    print("computer-use-mcp health_report")
+    print("  Version:           \(report.version)")
+    print("  Executable:        \(report.executablePath)")
+    print("  Bundle ID:         \(report.bundleIdentifier ?? "none")")
+    print("  Current process:   \(report.process.current.summary)")
+    print("  Parent process:    \(report.process.parent?.summary ?? "unknown")")
+    print("  Accessibility:     \(report.permissions.accessibility.displayStatus)")
+    print("  Screen Recording:  \(report.permissions.screenRecording.displayStatus)")
+    print("  Capture service:   \(report.captureService.displayStatus)")
+    print("  Daemon runtime:    \(report.daemon.runtimeDirectory)")
+    print("  Daemon socket:     \(report.daemon.socketPath) (\(report.daemon.socketExists ? "present" : "absent"))")
+    print("  Daemon secret:     \(report.daemon.secretPath) (\(report.daemon.secretExists ? "present" : "absent"))")
+    print("  TCC attribution:   \(report.tccAttribution)")
+    print("  Next action:       \(report.recommendedNextAction)")
 }

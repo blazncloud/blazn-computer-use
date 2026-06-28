@@ -7,32 +7,64 @@ import Security
 import MCP
 
 func daemonSocketPath() -> String {
-    runtimeDirectory().appendingPathComponent("daemon.sock").path
+    daemonRuntimePaths().socket
 }
 
 func daemonLockPath() -> String {
-    runtimeDirectory().appendingPathComponent("daemon.lock").path
+    daemonRuntimePaths().lock
 }
 
 func daemonLogPath() -> String {
-    runtimeDirectory().appendingPathComponent("daemon.log").path
+    daemonRuntimePaths().log
 }
 
 func daemonSecretPath() -> String {
-    runtimeDirectory().appendingPathComponent("daemon.secret").path
+    daemonRuntimePaths().secret
+}
+
+func daemonRuntimePaths(createRuntimeDirectory: Bool = true) -> DaemonRuntimePaths {
+    let directory = runtimeDirectoryURL(create: createRuntimeDirectory)
+    return DaemonRuntimePaths(
+        directory: directory.path,
+        socket: directory.appendingPathComponent(DaemonPathComponent.socket).path,
+        lock: directory.appendingPathComponent(DaemonPathComponent.lock).path,
+        log: directory.appendingPathComponent(DaemonPathComponent.log).path,
+        secret: directory.appendingPathComponent(DaemonPathComponent.secret).path
+    )
 }
 
 func runtimeDirectory() -> URL {
+    runtimeDirectoryURL(create: true)
+}
+
+struct DaemonRuntimePaths: Codable {
+    let directory: String
+    let socket: String
+    let lock: String
+    let log: String
+    let secret: String
+}
+
+private func runtimeDirectoryURL(create: Bool) -> URL {
     let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
         ?? FileManager.default.temporaryDirectory
     let directory = base.appendingPathComponent("computer-use-mcp", isDirectory: true)
-    try? FileManager.default.createDirectory(
-        at: directory,
-        withIntermediateDirectories: true,
-        attributes: [.posixPermissions: 0o700]
-    )
-    try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+    if create {
+        try? FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+    }
     return directory
+}
+
+private enum DaemonPathComponent {
+    static let socket = "daemon.sock"
+    static let lock = "daemon.lock"
+    static let log = "daemon.log"
+    static let secret = "daemon.secret"
 }
 
 struct DaemonRequest: Codable {

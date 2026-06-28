@@ -24,3 +24,4 @@ jobs:
         run: |
           .build/debug/computer-use-mcp version
           .build/debug/computer-use-mcp help
+          .build/debug/computer-use-mcp health_report --json
