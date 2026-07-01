@@ -123,6 +123,8 @@ key in `~/.config/computer-use-mcp.json` (env wins):
 | `no_daemon` / `COMPUTER_USE_MCP_NO_DAEMON=1` | Run the engine in-process instead of through the shared daemon. |
 | `no_app_lease` | Disable per-app session arbitration. |
 | `app_lease_seconds` | How long an app stays leased to a session after its last action (default 10). |
+| `no_interference_yield` | Disable yielding to real user input (yield is on by default). |
+| `interference_idle_seconds` | Hardware quiet time required before acting in the app the user is working in, or via the global cursor (default 1; 0 disables). |
 | `log` / `COMPUTER_USE_MCP_LOG=1` | Per-tool-call stderr log lines (name, ok/error, duration). |
 | `max_actions_per_sec` | Optional global throttle on tool calls (off by default). |
 

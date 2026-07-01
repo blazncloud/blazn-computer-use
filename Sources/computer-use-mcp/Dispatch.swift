@@ -43,6 +43,10 @@ func dispatchTool(name: String, arguments: [String: Value]) async -> CallTool.Re
     }
     await RateLimiter.shared.acquire()
     let start = ContinuousClock.now
+    if let yieldMessage = await InterferenceGuard.waitForUserPause(toolName: name, arguments: arguments) {
+        logToolCall(name, isError: true, since: start)
+        return .text(yieldMessage, isError: true)
+    }
     let result: CallTool.Result
     do {
         result = try await spec.handler(arguments)
