@@ -14,8 +14,26 @@ struct ResolvedApp {
     }
 }
 
+/// Fresh enumeration of running GUI apps. NSWorkspace.runningApplications is
+/// a KVO-updated snapshot that goes stale in the daemon (its main thread never
+/// services a run loop), silently hiding every app launched after daemon
+/// start. Building NSRunningApplication objects from a raw pid scan queries
+/// LaunchServices directly and is always current.
+func freshRunningApplications() -> [NSRunningApplication] {
+    var pids = [pid_t](repeating: 0, count: 8192)
+    let bytes = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+    guard bytes > 0 else { return NSWorkspace.shared.runningApplications }
+    let count = min(Int(bytes) / MemoryLayout<pid_t>.size, pids.count)
+    return pids.prefix(count).compactMap { pid in
+        guard pid > 0, let app = NSRunningApplication(processIdentifier: pid),
+            app.activationPolicy != .prohibited
+        else { return nil }
+        return app
+    }
+}
+
 func resolveApp(_ identifier: String) throws -> ResolvedApp {
-    let running = NSWorkspace.shared.runningApplications
+    let running = freshRunningApplications()
     let query = identifier.lowercased()
 
     let match = running.first { $0.bundleIdentifier?.lowercased() == query }
@@ -43,7 +61,7 @@ func resolveApp(_ identifier: String) throws -> ResolvedApp {
 }
 
 func runningAppsDescription() -> String {
-    let running = NSWorkspace.shared.runningApplications
+    let running = freshRunningApplications()
         .filter { $0.activationPolicy == .regular }
         .sorted { ($0.localizedName ?? "") < ($1.localizedName ?? "") }
 
