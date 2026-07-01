@@ -56,6 +56,10 @@ private func requiredProperties(for toolName: String) throws -> [String] {
         #expect(try schemaType(schemaProperty("confirm", in: "write_clipboard")) == "boolean")
     }
 
+    @Test func getAppStateExposesScreenshotOptOut() throws {
+        #expect(try schemaType(schemaProperty("include_screenshot", in: "get_app_state")) == "boolean")
+    }
+
     @Test func manageWindowKeepsRequiredContractNarrow() throws {
         #expect(try requiredProperties(for: "manage_window") == ["app", "action"])
     }

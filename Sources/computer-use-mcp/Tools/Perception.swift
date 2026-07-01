@@ -21,7 +21,7 @@ func getAppStateImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     }
     return try await stateResult(
         app: app, windowTitle: args.string("window_title"),
-        screenshot: args.bool("include_screenshot") == false ? .none : .full,
+        screenshot: appStateScreenshotDetail(args),
         scope: scope, maxElements: args.integer("max_elements") ?? defaultMaxTreeElements,
         ocr: args.bool("ocr") == true
     )
@@ -53,6 +53,12 @@ func sparseTreeHint(webAXUnsupported: Bool) -> String {
 struct TreeScope: @unchecked Sendable {
     let root: AXUIElement
     let pathPrefix: [LocatorStep]
+}
+
+/// Result detail for get_app_state: full screenshot by default,
+/// include_screenshot=false is a tree-only read.
+func appStateScreenshotDetail(_ args: [String: Value]) -> ScreenshotDetail {
+    args.bool("include_screenshot") == false ? .none : .full
 }
 
 /// Result detail for an action: reduced screenshot by default,
