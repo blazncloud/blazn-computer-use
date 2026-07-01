@@ -19,11 +19,14 @@ import sys
 import time
 from pathlib import Path
 
+from common import resolve_binary
+
 
 ROOT = Path(__file__).resolve().parents[1]
 LIVE_ENV = "COMPUTER_USE_MCP_RUN_LIVE_BACKGROUND_EVAL"
 FIXTURE_NAME = "BackgroundControlFixture"
 FIXTURE_BUNDLE_ID = "dev.computer-use-mcp.background-fixture"
+TOOL_BIN = resolve_binary()
 
 
 def run(args: list[str], *, timeout: int = 30, capture: bool = True) -> subprocess.CompletedProcess[str]:
@@ -102,9 +105,8 @@ def wait_for_fixture() -> None:
 
 
 def mcp_call(tool: str, args: dict[str, object]) -> str:
-    binary = ROOT / ".build" / "debug" / "computer-use-mcp"
     try:
-        completed = run([str(binary), "call", tool, json.dumps(args)], timeout=45)
+        completed = run([str(TOOL_BIN), "call", tool, json.dumps(args)], timeout=45)
         return completed.stdout + completed.stderr
     except subprocess.CalledProcessError as error:
         output = (error.stdout or "") + (error.stderr or "")
@@ -245,6 +247,7 @@ def live_eval() -> dict[str, object]:
 
     return {
         "live": True,
+        "tool_binary": str(TOOL_BIN),
         "fixture_app": str(bundle),
         "frontmost_before": before,
         "frontmost_after": after,

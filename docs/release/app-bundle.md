@@ -27,8 +27,13 @@ python3 scripts/build_app_bundle.py --app-name "Computer Use MCP Dev" --bundle-i
 ```
 
 This is not notarization, packaging, or runtime proof that the MCP checks used
-the bundle identity. `scripts/preflight.py --build-app` only verifies that the
-bundle can be produced; the current smoke and eval scripts still execute
-`.build/debug/computer-use-mcp` directly. Keep future bundle-executed TCC checks
-separate from the default preflight so development preflight stays fast and
-reproducible.
+the bundle identity for live TCC prompts. For non-live runtime proof, use:
+
+```bash
+python3 scripts/preflight.py --use-app-bundle
+```
+
+That mode builds the wrapper and runs CLI/dry-run checks through
+`Contents/MacOS/computer-use-mcp`. `--build-app` remains build-only. Keep live
+bundle-executed TCC checks separate from hosted CI so development preflight
+stays fast and reproducible.

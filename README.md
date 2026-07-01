@@ -164,6 +164,7 @@ swift test
 .build/debug/computer-use-mcp doctor                 # check permissions
 python3 scripts/preflight.py                         # CI-safe release preflight
 python3 scripts/build_app_bundle.py                  # local .app wrapper build
+python3 scripts/preflight.py --use-app-bundle        # non-live checks through the .app executable
 python3 scripts/e2e_demo.py                          # safe structured smoke artifact; no GUI mutation
 ```
 
@@ -186,7 +187,7 @@ or a future self-hosted macOS runner with explicit permissions.
 | Deterministic unit tests | Pure Swift behavior such as parsing, safety policy, coordinates, and tree shaping. | Yes | `swift test` |
 | Structured dry-run smoke | The benchmark entrypoint, schema, git/macOS metadata collection, and opt-in gate. It does not start the MCP server or open apps. | Yes | `python3 scripts/e2e_demo.py` |
 | Release preflight | Build, unit tests, CLI smoke, health report, and dry-run background eval in one JSON report. | Yes | `python3 scripts/preflight.py` |
-| Local app-bundle build | Produces an ad-hoc signed `.app` wrapper for manual stable-identity testing. Preflight only verifies the bundle can be built; it does not run MCP checks through that bundle. | No | `python3 scripts/build_app_bundle.py` |
+| Local app-bundle runtime | Produces an ad-hoc signed `.app` wrapper and runs non-live CLI/dry-run checks through `Contents/MacOS/computer-use-mcp`. | No | `python3 scripts/preflight.py --use-app-bundle` |
 | Deterministic background eval | The fixture-app path mutates a stable AX text field while preserving the current frontmost app. | No | `python3 scripts/live_background_eval.py --live` |
 | Real-app compatibility smoke | Lightweight live matrix for Finder read-only discovery and TextEdit background stdio behavior. | No | `python3 scripts/real_app_smoke.py --live` |
 | Live GUI smoke | The real MCP stdio path against TextEdit in the background, including perceive, type, select, and focus-stability checks. Setup launches TextEdit without activation and fails if the current frontmost app changes. | No | `python3 scripts/e2e_demo.py --live` |
@@ -197,6 +198,7 @@ also write JSONL for trend ingestion:
 ```bash
 python3 scripts/e2e_demo.py --format jsonl --output /tmp/computer-use-mcp-smoke.jsonl
 python3 scripts/preflight.py --build-app --output /tmp/computer-use-mcp-preflight.json
+python3 scripts/preflight.py --use-app-bundle --output /tmp/computer-use-mcp-bundle-preflight.json
 ```
 
 Live GUI mutation is opt-in. Use `--live` for local manual runs; the environment
@@ -217,8 +219,8 @@ python3 scripts/e2e_demo.py --live
 
 Do not add the live tier to hosted CI. It depends on an unlocked macOS desktop,
 TCC permissions, Finder/TextEdit behavior, and user-visible app state.
-`--build-app` is build-only today: live/preflight checks still invoke the Swift
-package binary at `.build/debug/computer-use-mcp`, not the `.app` wrapper.
+Use `--use-app-bundle` when the preflight should run the non-live CLI and dry-run
+checks through the `.app` executable. `--build-app` remains build-only.
 
 ## License
 

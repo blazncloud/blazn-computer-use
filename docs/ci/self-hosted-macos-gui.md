@@ -19,18 +19,19 @@ stable app identity, so they belong on a separately managed self-hosted Mac.
 ## Recommended Lane
 
 ```bash
-python3 scripts/preflight.py --build-app --live-background --output /tmp/computer-use-mcp-gui-preflight.json
+python3 scripts/preflight.py --use-app-bundle --live-background --output /tmp/computer-use-mcp-gui-preflight.json
 ```
 
 Add the real-app matrix only for release candidates or compatibility work:
 
 ```bash
-python3 scripts/preflight.py --build-app --live-background --live-real-app --output /tmp/computer-use-mcp-gui-preflight.json
+python3 scripts/preflight.py --use-app-bundle --live-background --live-real-app --output /tmp/computer-use-mcp-gui-preflight.json
 ```
 
 The fixture eval is the deterministic source of truth for background-control
-regressions. `--build-app` currently proves only that the local `.app` wrapper
-can be produced; the live checks still execute `.build/debug/computer-use-mcp`.
+regressions. `--use-app-bundle` builds the local `.app` wrapper and points the
+smoke scripts at its executable; live TCC attribution still depends on the
+runner's macOS grants and should be verified on the dedicated runner.
 Real-app checks are compatibility smoke tests because Finder, TextEdit, and
 macOS timing can change outside this repository.
 
@@ -45,7 +46,7 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
-      - run: python3 scripts/preflight.py --build-app --live-background --output gui-preflight.json
+      - run: python3 scripts/preflight.py --use-app-bundle --live-background --output gui-preflight.json
       - uses: actions/upload-artifact@v4
         with:
           name: gui-preflight

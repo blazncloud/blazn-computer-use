@@ -15,9 +15,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+from common import resolve_binary
+
 
 ROOT = Path(__file__).resolve().parents[1]
 LIVE_ENV = "COMPUTER_USE_MCP_RUN_REAL_APP_SMOKE"
+TOOL_BIN = resolve_binary()
 
 
 def run(
@@ -27,7 +30,11 @@ def run(
 
 
 def textedit_smoke() -> dict[str, object]:
-    completed = run(["python3", "scripts/e2e_demo.py", "--live"], timeout=180, check=False)
+    completed = run(
+        ["python3", "scripts/e2e_demo.py", "--live", "--bin", str(TOOL_BIN)],
+        timeout=180,
+        check=False,
+    )
     return {
         "name": "textedit_background_stdio",
         "passed": completed.returncode == 0,
@@ -38,8 +45,7 @@ def textedit_smoke() -> dict[str, object]:
 
 
 def finder_readonly_smoke() -> dict[str, object]:
-    binary = ROOT / ".build" / "debug" / "computer-use-mcp"
-    completed = run([str(binary), "call", "list_windows", '{"app":"Finder"}'], timeout=45, check=False)
+    completed = run([str(TOOL_BIN), "call", "list_windows", '{"app":"Finder"}'], timeout=45, check=False)
     return {
         "name": "finder_list_windows",
         "passed": completed.returncode == 0,
@@ -70,7 +76,12 @@ def main() -> int:
 
     run(["swift", "build"], timeout=180)
     steps = [finder_readonly_smoke(), textedit_smoke()]
-    result = {"live": True, "passed": all(step["passed"] for step in steps), "steps": steps}
+    result = {
+        "live": True,
+        "tool_binary": str(TOOL_BIN),
+        "passed": all(step["passed"] for step in steps),
+        "steps": steps,
+    }
     print(json.dumps(result, indent=2))
     return 0 if result["passed"] else 1
 
