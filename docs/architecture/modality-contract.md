@@ -4,6 +4,9 @@ This document is the production contract for how `computer-use-mcp` observes
 and operates a local macOS desktop. It is meant to be specific enough for tool
 docs, tests, evals, and future driver comparisons.
 
+For foreground focus and cursor guarantees, see
+[Background Control Contract](background-control-contract.md).
+
 The default mode is a local, unlocked Mac with a visible desktop. The server is
 not a sandboxed browser, VM stream, or remote framebuffer driver: it can combine
 macOS Accessibility, ScreenCaptureKit, CoreGraphics event posting, AppKit

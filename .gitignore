@@ -7,3 +7,4 @@ DerivedData/
 *.xcodeproj
 *.pem
 *.p12
+/plans/

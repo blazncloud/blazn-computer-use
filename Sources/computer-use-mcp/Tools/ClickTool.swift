@@ -14,25 +14,31 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let buttonName = args.string("mouse_button") ?? "left"
     let confirmed = SafetyPolicy.confirmed(args)
     try SafetyPolicy.check(app: app, confirmed: confirmed)
-    let target = try await resolvePointTarget(args, app: app)
+    let allowGlobalCursor = try allowGlobalCursorArgument(args)
+    let focus = FocusChangeTracker.start(
+        focusChangeAllowed: allowGlobalCursor,
+        cursorMovementAllowed: allowGlobalCursor
+    )
+    let target = try await resolvePointTarget(args, app: app, allowGlobalCursor: allowGlobalCursor)
     try SafetyPolicy.checkClick(label: clickTargetLabel(target), app: app, confirmed: confirmed)
 
-    let note: String
+    let outcome: InputActionOutcome
     switch buttonName {
     case "left":
-        note = try await leftClick(target, clickCount: clickCount)
+        outcome = try await leftClick(target, clickCount: clickCount)
     case "right":
-        note = try rightClick(target)
+        outcome = try rightClick(target)
     case "middle":
         let tier = try deliverClick(at: target.requirePoint(), button: .middle, clickCount: clickCount, context: target.deliveryContext)
-        note = "Middle-clicked \(target.description) [\(tier.rawValue)]."
+        outcome = InputActionOutcome(note: "Middle-clicked \(target.description) [\(tier.rawValue)].", deliveryTier: tier)
     default:
         throw ToolError.invalidArguments("mouse_button \"\(buttonName)\" is not supported.")
     }
 
     return try await stateResult(
-        app: app, windowTitle: target.snapshot.windowTitle, note: note,
-        screenshot: screenshotDetail(args)
+        app: app, windowTitle: target.snapshot.windowTitle, note: outcome.note,
+        screenshot: screenshotDetail(args),
+        focusTelemetry: focus.finish(deliveryTier: outcome.deliveryTier.rawValue)
     )
 }
 
@@ -51,7 +57,12 @@ private func clickTargetLabel(_ target: PointTarget) -> String? {
     target.element.flatMap(clickableLabel)
 }
 
-private func leftClick(_ target: PointTarget, clickCount: Int) async throws -> String {
+private struct InputActionOutcome {
+    let note: String
+    let deliveryTier: InputTier
+}
+
+private func leftClick(_ target: PointTarget, clickCount: Int) async throws -> InputActionOutcome {
     // Animate the (cosmetic) agent cursor to the target before acting.
     if let point = target.point { await AgentCursor.shared.glide(to: point) }
 
@@ -67,16 +78,19 @@ private func leftClick(_ target: PointTarget, clickCount: Int) async throws -> S
             try? await Task.sleep(for: .milliseconds(80))
         }
         let verb = clickCount > 1 ? "Double-pressed" : "Pressed"
-        return "\(verb) \(target.description) via accessibility [tier1-ax-action]."
+        return InputActionOutcome(
+            note: "\(verb) \(target.description) via accessibility [tier1-ax-action].",
+            deliveryTier: .accessibilityAction
+        )
     }
 
     // Tiers 2–4: synthetic click at the point.
     let tier = try deliverClick(at: target.requirePoint(), button: .left, clickCount: clickCount, context: target.deliveryContext)
     let verb = clickCount > 1 ? "Double-clicked" : "Clicked"
-    return "\(verb) \(target.description) [\(tier.rawValue)]."
+    return InputActionOutcome(note: "\(verb) \(target.description) [\(tier.rawValue)].", deliveryTier: tier)
 }
 
-private func rightClick(_ target: PointTarget) throws -> String {
+private func rightClick(_ target: PointTarget) throws -> InputActionOutcome {
     // Tier 1: accessibility context-menu action.
     if let element = target.element,
         let menu = selfOrAncestor(of: element, supporting: "AXShowMenu")
@@ -85,8 +99,11 @@ private func rightClick(_ target: PointTarget) throws -> String {
         guard error == .success else {
             throw ToolError.failed("AXShowMenu failed on \(target.description) (\(axErrorDescription(error))).")
         }
-        return "Opened context menu on \(target.description) via accessibility [tier1-ax-action]."
+        return InputActionOutcome(
+            note: "Opened context menu on \(target.description) via accessibility [tier1-ax-action].",
+            deliveryTier: .accessibilityAction
+        )
     }
     let tier = try deliverClick(at: target.requirePoint(), button: .right, clickCount: 1, context: target.deliveryContext)
-    return "Right-clicked \(target.description) [\(tier.rawValue)]."
+    return InputActionOutcome(note: "Right-clicked \(target.description) [\(tier.rawValue)].", deliveryTier: tier)
 }

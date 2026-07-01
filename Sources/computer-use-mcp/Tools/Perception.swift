@@ -52,7 +52,8 @@ func stateResult(
     screenshot detail: ScreenshotDetail = .reduced,
     scope: TreeScope? = nil,
     maxElements: Int = defaultMaxTreeElements,
-    ocr: Bool = false
+    ocr: Bool = false,
+    focusTelemetry: FocusTelemetry? = nil
 ) async throws -> CallTool.Result {
     try requireAccessibilityTrusted()
 
@@ -62,7 +63,8 @@ func stateResult(
 
     if detail == .noState {
         let confirmation = note ?? "Action completed."
-        return .text(confirmation + " Call get_app_state when you need the updated UI state.")
+        return CallTool.Result.text(confirmation + " Call get_app_state when you need the updated UI state.")
+            .withFocusTelemetry(focusTelemetry)
     }
 
     // Give the UI a brief beat to settle after whatever just happened.
@@ -196,5 +198,5 @@ func stateResult(
             )
         )
     }
-    return .init(content: content, isError: false)
+    return .init(content: content, isError: false).withFocusTelemetry(focusTelemetry)
 }

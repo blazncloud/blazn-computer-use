@@ -26,6 +26,22 @@ import Testing
         #expect(decoded.authenticated == true)
     }
 
+    @Test func daemonResponsePreservesCallToolMetadata() throws {
+        let result = CallTool.Result(
+            content: [.text(text: "ok", annotations: nil, _meta: nil)],
+            _meta: Metadata(additionalFields: ["computer-use-mcp/focus": .object(["focus_changed": .bool(false)])])
+        )
+        let response = DaemonResponse.from(result, id: 9)
+        let data = try JSONEncoder().encode(response)
+        let decoded = try JSONDecoder().decode(DaemonResponse.self, from: data).asCallToolResult
+
+        guard case let .object(fields)? = decoded._meta?["computer-use-mcp/focus"] else {
+            Issue.record("expected focus metadata")
+            return
+        }
+        #expect(fields["focus_changed"]?.boolValue == false)
+    }
+
     @Test func constantTimeEqualityChecksValueAndLength() {
         #expect(constantTimeEqual("secret", "secret"))
         #expect(!constantTimeEqual("secret", "SECRET"))

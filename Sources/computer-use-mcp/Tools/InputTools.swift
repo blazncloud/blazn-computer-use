@@ -11,6 +11,8 @@ func pressKeyImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     try requireAccessibilityTrusted()
     let confirmed = SafetyPolicy.confirmed(args)
     try SafetyPolicy.check(app: app, confirmed: confirmed)
+    let allowGlobalKeyboard = try allowGlobalKeyboardArgument(args)
+    let focus = FocusChangeTracker.start(focusChangeAllowed: allowGlobalKeyboard)
     let combo = try args.requireString("key")
     let chord = try Keymap.parse(combo)
     try SafetyPolicy.checkKey(
@@ -24,15 +26,16 @@ func pressKeyImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         pid: app.pid,
         windowNumber: window.flatMap { windowID(for: $0.element) },
         windowFrame: window?.frame,
-        allowGlobalCursor: args.bool("allow_global_cursor") ?? false
+        allowGlobalCursor: allowGlobalKeyboard
     )
     let targetAppIsActive = NSRunningApplication(processIdentifier: app.pid)?.isActive == true
-    try deliverKey(chord, context: context, targetAppIsActive: targetAppIsActive)
+    let deliveryMode = try deliverKey(chord, context: context, targetAppIsActive: targetAppIsActive)
     try? await Task.sleep(for: .milliseconds(80))
 
     return try await stateResult(
         app: app, windowTitle: window?.title, note: "Pressed \(combo).",
-        screenshot: screenshotDetail(args)
+        screenshot: screenshotDetail(args),
+        focusTelemetry: focus.finish(deliveryTier: deliveryMode.rawValue)
     )
 }
 
@@ -40,6 +43,7 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
     try requireAccessibilityTrusted()
     try SafetyPolicy.check(app: app, confirmed: SafetyPolicy.confirmed(args))
+    let focus = FocusChangeTracker.start()
     let target = try await resolvePointTarget(args, app: app)
 
     var deltaX = args.integer("delta_x") ?? 0
@@ -65,13 +69,14 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
     let point = try target.requirePoint()
     await AgentCursor.shared.glide(to: point)
-    deliverScroll(at: point, deltaX: deltaX, deltaY: deltaY, context: target.deliveryContext)
+    let tier = deliverScroll(at: point, deltaX: deltaX, deltaY: deltaY, context: target.deliveryContext)
     try? await Task.sleep(for: .milliseconds(80))
 
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle,
         note: "Scrolled (\(deltaX),\(deltaY)) at \(target.description).",
-        screenshot: screenshotDetail(args)
+        screenshot: screenshotDetail(args),
+        focusTelemetry: focus.finish(deliveryTier: tier.rawValue)
     )
 }
 
@@ -79,6 +84,7 @@ func dragImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
     try requireAccessibilityTrusted()
     try SafetyPolicy.check(app: app, confirmed: SafetyPolicy.confirmed(args))
+    let focus = FocusChangeTracker.start()
     guard let snapshot = await SnapshotStore.shared.load(forPid: app.pid) else {
         throw ToolError.failed("Call get_app_state for \(app.name) before dragging.")
     }
@@ -96,16 +102,17 @@ func dragImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         pid: app.pid,
         windowNumber: window.flatMap { windowID(for: $0.element) },
         windowFrame: window?.frame,
-        allowGlobalCursor: args.bool("allow_global_cursor") ?? false
+        allowGlobalCursor: false
     )
     await AgentCursor.shared.glide(to: from)
-    await deliverDrag(from: from, to: to, context: context)
+    let tier = await deliverDrag(from: from, to: to, context: context)
     try? await Task.sleep(for: .milliseconds(80))
 
     return try await stateResult(
         app: app, windowTitle: snapshot.windowTitle,
         note: "Dragged from (\(Int(from.x.rounded())),\(Int(from.y.rounded()))) "
             + "to (\(Int(to.x.rounded())),\(Int(to.y.rounded()))).",
-        screenshot: screenshotDetail(args)
+        screenshot: screenshotDetail(args),
+        focusTelemetry: focus.finish(deliveryTier: tier.rawValue)
     )
 }

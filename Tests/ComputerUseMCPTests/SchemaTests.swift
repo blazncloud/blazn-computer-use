@@ -59,4 +59,19 @@ private func requiredProperties(for toolName: String) throws -> [String] {
     @Test func manageWindowKeepsRequiredContractNarrow() throws {
         #expect(try requiredProperties(for: "manage_window") == ["app", "action"])
     }
+
+    @Test func clickExposesFocusChangeOptInForGlobalCursorEscalation() throws {
+        #expect(try schemaType(schemaProperty("allow_global_cursor", in: "click")) == "boolean")
+        #expect(try schemaType(schemaProperty("allow_focus_change", in: "click")) == "boolean")
+    }
+
+    @Test func pressKeyExposesFocusChangeOptInForGlobalKeyboardEscalation() throws {
+        #expect(try schemaType(schemaProperty("allow_global_cursor", in: "press_key")) == "boolean")
+        #expect(try schemaType(schemaProperty("allow_focus_change", in: "press_key")) == "boolean")
+    }
+
+    @Test func focusMutatingSystemToolsExposeFocusChangeOptIn() throws {
+        #expect(try schemaType(schemaProperty("allow_focus_change", in: "open_url")) == "boolean")
+        #expect(try schemaType(schemaProperty("allow_focus_change", in: "manage_window")) == "boolean")
+    }
 }

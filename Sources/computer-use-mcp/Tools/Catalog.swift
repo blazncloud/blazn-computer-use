@@ -22,13 +22,19 @@ private let elementIDParam = stringParam(
 private let allowGlobalCursorParam = boolParam(
     "Escape hatch (default false). When true, uses the real system cursor to deliver "
         + "the action — this MOVES the pointer and may change focus. Only set it if "
-        + "background delivery did not land for a stubborn app."
+        + "background delivery did not land for a stubborn app. Requires allow_focus_change:true."
+)
+
+private let allowFocusChangeParam = boolParam(
+    "Default false. Set true only when you explicitly allow this call to change "
+        + "the user's foreground app/focus. The result metadata reports whether focus changed."
 )
 
 private let allowGlobalKeyboardParam = boolParam(
     "Escape hatch (default false). When true, allows global keyboard delivery only "
         + "when the target app is already foreground. Use only if per-app delivery "
-        + "did not land for a stubborn app."
+        + "did not land for a stubborn app. Requires allow_focus_change:true because "
+        + "global shortcuts can change foreground focus."
 )
 
 private let confirmParam = boolParam(
@@ -132,6 +138,7 @@ let toolCatalog: [ToolSpec] = [
                 ),
                 "mouse_button": enumParam(["left", "right", "middle"], "Mouse button. Defaults to left."),
                 "allow_global_cursor": allowGlobalCursorParam,
+                "allow_focus_change": allowFocusChangeParam,
                 "include_screenshot": includeScreenshotParam,
                 "include_state": includeStateParam,
                 "confirm": confirmParam,
@@ -173,6 +180,7 @@ let toolCatalog: [ToolSpec] = [
                 "app": appParam,
                 "key": stringParam("Key or combination in xdotool syntax, e.g. \"Return\", \"cmd+n\"."),
                 "allow_global_cursor": allowGlobalKeyboardParam,
+                "allow_focus_change": allowFocusChangeParam,
                 "include_screenshot": includeScreenshotParam,
                 "include_state": includeStateParam,
                 "confirm": confirmParam,
@@ -207,7 +215,6 @@ let toolCatalog: [ToolSpec] = [
                 "delta_y": integerParam(
                     "Vertical scroll amount in pixels (alternative to direction, max +/-\(ArgumentBounds.maxScrollDelta))."
                 ),
-                "allow_global_cursor": allowGlobalCursorParam,
                 "include_screenshot": includeScreenshotParam,
                 "include_state": includeStateParam,
                 "confirm": confirmParam,
@@ -230,7 +237,6 @@ let toolCatalog: [ToolSpec] = [
                 "from_y": numberParam("Start Y pixel coordinate in the latest screenshot."),
                 "to_x": numberParam("End X pixel coordinate in the latest screenshot."),
                 "to_y": numberParam("End Y pixel coordinate in the latest screenshot."),
-                "allow_global_cursor": allowGlobalCursorParam,
                 "include_screenshot": includeScreenshotParam,
                 "include_state": includeStateParam,
                 "confirm": confirmParam,
@@ -332,11 +338,13 @@ let toolCatalog: [ToolSpec] = [
         description: """
             Open a URL or file path with its default handler (browser, document app, …). \
             Local files and non-http(s) schemes require confirm:true because they can \
-            launch apps or trigger arbitrary handlers.
+            launch apps or trigger arbitrary handlers. Requires allow_focus_change:true \
+            because LaunchServices may activate the handling app.
             """,
         inputSchema: objectSchema(
             [
                 "url": stringParam("URL (https://…, file://…, app schemes) or an existing file path."),
+                "allow_focus_change": allowFocusChangeParam,
                 "confirm": confirmParam,
             ],
             required: ["url"]
@@ -389,6 +397,7 @@ let toolCatalog: [ToolSpec] = [
                         + "\(Int(ArgumentBounds.minWindowDimension))..."
                         + "\(Int(ArgumentBounds.maxWindowDimension)))."
                 ),
+                "allow_focus_change": allowFocusChangeParam,
                 "confirm": confirmParam,
             ],
             required: ["app", "action"]

@@ -55,6 +55,8 @@ pixels are needed.
 For the precise production contract across observation, dispatch, coordinate
 spaces, foreground/background guarantees, TCC requirements, stale snapshots, and
 failure recovery, see [Modality Contract](docs/architecture/modality-contract.md).
+For strict background focus/cursor behavior, see
+[Background Control Contract](docs/architecture/background-control-contract.md).
 
 ## How it works
 
@@ -181,6 +183,7 @@ or a future self-hosted macOS runner with explicit permissions.
 | --- | --- | --- | --- |
 | Deterministic unit tests | Pure Swift behavior such as parsing, safety policy, coordinates, and tree shaping. | Yes | `swift test` |
 | Structured dry-run smoke | The benchmark entrypoint, schema, git/macOS metadata collection, and opt-in gate. It does not start the MCP server or open apps. | Yes | `python3 scripts/e2e_demo.py` |
+| Deterministic background eval | The fixture-app path mutates a stable AX text field while Finder remains frontmost. | No | `python3 scripts/live_background_eval.py --live` |
 | Live GUI smoke | The real MCP stdio path against TextEdit in the background, including perceive, type, select, and focus-stability checks. This opens TextEdit/Finder and edits a TextEdit document. | No | `python3 scripts/e2e_demo.py --live` |
 
 The smoke script writes JSON by default and can write JSONL for trend ingestion:

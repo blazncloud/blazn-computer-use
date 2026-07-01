@@ -31,14 +31,19 @@ func windowID(for axWindow: AXUIElement) -> CGWindowID? {
 }
 
 enum InputTier: String {
+    case accessibilityAction = "tier1-ax-action"
+    case accessibilityAttribute = "tier1-ax-attribute"
     case perWindow = "tier2-per-window-nsevent"
     case perPid = "tier3-cgeventpostto-pid"
     case globalCursor = "tier4-global-cursor"
+    case pasteboard = "pasteboard"
+    case launchServices = "launchservices"
+    case windowManagement = "ax-window-management"
 }
 
-enum KeyDeliveryMode: Equatable {
-    case perPid
-    case globalSessionTap
+enum KeyDeliveryMode: String, Equatable {
+    case perPid = "tier3-cgeventpostto-pid"
+    case globalSessionTap = "tier4-global-session-tap"
 }
 
 struct DeliveryContext {
@@ -189,7 +194,7 @@ private func deliverClickGlobal(
 /// Deliver scroll wheel events at a global point. Distributes the delta across
 /// steps with error diffusion so the posted amounts sum exactly to the request
 /// and a small axis is never truncated to zero.
-func deliverScroll(at point: CGPoint, deltaX: Int, deltaY: Int, context: DeliveryContext) {
+func deliverScroll(at point: CGPoint, deltaX: Int, deltaY: Int, context: DeliveryContext) -> InputTier {
     let source = CGEventSource(stateID: .privateState)
     let stepCount = max(1, max(abs(deltaX), abs(deltaY)) / 40)
     var emittedX = 0
@@ -211,11 +216,13 @@ func deliverScroll(at point: CGPoint, deltaX: Int, deltaY: Int, context: Deliver
         event.location = point
         event.postToPid(context.pid)
     }
+    return .perPid
 }
 
 /// Deliver a drag gesture from one global point to another.
-func deliverDrag(from: CGPoint, to: CGPoint, context: DeliveryContext) async {
+func deliverDrag(from: CGPoint, to: CGPoint, context: DeliveryContext) async -> InputTier {
     let source = CGEventSource(stateID: .privateState)
+    var tier: InputTier = context.windowNumber != nil ? .perWindow : .perPid
     func post(_ type: CGEventType, _ p: CGPoint) {
         guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: p, mouseButton: .left)
         else { return }
@@ -224,8 +231,10 @@ func deliverDrag(from: CGPoint, to: CGPoint, context: DeliveryContext) async {
             let bridged = bridgedWindowEvent(from: event, point: p, windowNumber: windowNumber, windowFrame: frame)
         {
             bridged.postToPid(context.pid)
+            tier = .perWindow
         } else {
             event.postToPid(context.pid)
+            tier = .perPid
         }
     }
     post(.leftMouseDown, from)
@@ -237,6 +246,7 @@ func deliverDrag(from: CGPoint, to: CGPoint, context: DeliveryContext) async {
         try? await Task.sleep(for: .milliseconds(16))
     }
     post(.leftMouseUp, to)
+    return tier
 }
 
 func keyDeliveryMode(context: DeliveryContext, targetAppIsActive: Bool) throws -> KeyDeliveryMode {

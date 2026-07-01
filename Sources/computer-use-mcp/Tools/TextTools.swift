@@ -14,6 +14,7 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     try ArgumentBounds.checkStringLength(text, argument: "text", maximum: ArgumentBounds.maxTypeTextCharacters)
     let confirmed = SafetyPolicy.confirmed(args)
     try SafetyPolicy.check(app: app, confirmed: confirmed)
+    let focus = FocusChangeTracker.start()
 
     let element: AXUIElement
     let described: String
@@ -37,7 +38,8 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     return try await stateResult(
         app: app, windowTitle: snapshot?.windowTitle,
         note: "Typed \(text.count) characters into \(described). Verify the new value below.",
-        screenshot: screenshotDetail(args)
+        screenshot: screenshotDetail(args),
+        focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAttribute.rawValue)
     )
 }
 
@@ -97,6 +99,7 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     try requireAccessibilityTrusted()
     let confirmed = SafetyPolicy.confirmed(args)
     try SafetyPolicy.check(app: app, confirmed: confirmed)
+    let focus = FocusChangeTracker.start()
     let target = try await resolveTarget(app: app, elementID: args.requireString("element_id"))
     try SafetyPolicy.checkTyping(into: target.element, app: app, confirmed: confirmed)
     // An empty value is valid (clearing a field), so accept "" rather than
@@ -122,7 +125,8 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         return try await stateResult(
             app: app, windowTitle: target.snapshot.windowTitle,
             note: "Set \(describeTarget(target)) to \(desired).",
-            screenshot: screenshotDetail(args)
+            screenshot: screenshotDetail(args),
+            focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAction.rawValue)
         )
     }
 
@@ -153,7 +157,8 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle,
         note: "Set the value of \(describeTarget(target)). Verify it below.",
-        screenshot: screenshotDetail(args)
+        screenshot: screenshotDetail(args),
+        focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAttribute.rawValue)
     )
 }
 
@@ -162,6 +167,7 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 func selectTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
     try requireAccessibilityTrusted()
+    let focus = FocusChangeTracker.start()
     let target = try await resolveTarget(app: app, elementID: args.requireString("element_id"))
     let text = try args.requireString("text")
     let occurrence = max(1, args.integer("occurrence") ?? 1)
@@ -214,7 +220,8 @@ func selectTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle,
         note: note,
-        screenshot: screenshotDetail(args)
+        screenshot: screenshotDetail(args),
+        focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAttribute.rawValue)
     )
 }
 
@@ -249,6 +256,7 @@ func performSecondaryActionImpl(_ args: [String: Value]) async throws -> CallToo
     try requireAccessibilityTrusted()
     let confirmed = SafetyPolicy.confirmed(args)
     try SafetyPolicy.check(app: app, confirmed: confirmed)
+    let focus = FocusChangeTracker.start()
     let target = try await resolveTarget(app: app, elementID: args.requireString("element_id"))
     let action = args.string("action") ?? "AXShowMenu"
 
@@ -271,6 +279,7 @@ func performSecondaryActionImpl(_ args: [String: Value]) async throws -> CallToo
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle,
         note: "Performed \(action) on \(describeTarget(target)).",
-        screenshot: screenshotDetail(args)
+        screenshot: screenshotDetail(args),
+        focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAction.rawValue)
     )
 }

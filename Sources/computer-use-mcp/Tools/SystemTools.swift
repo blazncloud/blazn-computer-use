@@ -12,6 +12,7 @@ func openAppImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let identifier = try args.requireString("app")
     let activate = args.bool("activate") ?? false
     let confirmed = SafetyPolicy.confirmed(args)
+    let focus = FocusChangeTracker.start(focusChangeAllowed: activate)
 
     // Already running: report (and optionally activate) rather than relaunch.
     if let running = try? resolveApp(identifier) {
@@ -21,9 +22,10 @@ func openAppImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         }
         let note = "\(running.name) is already running\(activate ? " (activated)" : "")."
         if let result = try? await stateResult(app: running, windowTitle: nil, note: note) {
-            return result
+            return result.withFocusTelemetry(focus.finish(deliveryTier: InputTier.launchServices.rawValue))
         }
-        return .text(note + " It has no queryable window — press_key cmd+n may create one.")
+        return CallTool.Result.text(note + " It has no queryable window — press_key cmd+n may create one.")
+            .withFocusTelemetry(focus.finish(deliveryTier: InputTier.launchServices.rawValue))
     }
 
     guard let url = applicationURL(for: identifier) else {
@@ -64,12 +66,12 @@ func openAppImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         try? await Task.sleep(for: .milliseconds(300))
     }
     if let result = try? await stateResult(app: app, windowTitle: nil, note: "Launched \(app.name).") {
-        return result
+        return result.withFocusTelemetry(focus.finish(deliveryTier: InputTier.launchServices.rawValue))
     }
-    return .text(
+    return CallTool.Result.text(
         "Launched \(app.name) (pid \(app.pid)), but it has no queryable window yet — it may "
             + "be showing an open-file dialog or need press_key cmd+n to create one."
-    )
+    ).withFocusTelemetry(focus.finish(deliveryTier: InputTier.launchServices.rawValue))
 }
 
 /// Find an app on disk by bundle id, /Applications name, or full path.
@@ -104,6 +106,11 @@ private func applicationURL(for identifier: String) -> URL? {
 func openURLImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let raw = try args.requireString("url")
     let confirmed = SafetyPolicy.confirmed(args)
+    try requireFocusChangeAllowed(
+        args,
+        reason: "Opening a URL or file path can launch or activate its default handler."
+    )
+    let focus = FocusChangeTracker.start(focusChangeAllowed: true)
 
     let url: URL
     if let parsed = URL(string: raw), parsed.scheme != nil {
@@ -119,7 +126,9 @@ func openURLImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     guard NSWorkspace.shared.open(url) else {
         throw ToolError.failed("macOS refused to open \(url.absoluteString) (no handler?).")
     }
-    return .text("Opened \(url.absoluteString) in the default handler. Call get_app_state on the handling app to continue.")
+    try? await Task.sleep(for: .milliseconds(300))
+    return CallTool.Result.text("Opened \(url.absoluteString) in the default handler. Call get_app_state on the handling app to continue.")
+        .withFocusTelemetry(focus.finish(deliveryTier: InputTier.launchServices.rawValue))
 }
 
 // MARK: - list_windows
@@ -168,6 +177,10 @@ func manageWindowImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let described = "window \"\(window.title ?? "untitled")\" of \(app.name)"
     let confirmed = SafetyPolicy.confirmed(args)
     try SafetyPolicy.checkWindowAction(action: action, targetDescription: described, app: app, confirmed: confirmed)
+    if action == "raise" {
+        try requireFocusChangeAllowed(args, reason: "Raising a window can change foreground focus.")
+    }
+    let focus = FocusChangeTracker.start(focusChangeAllowed: action == "raise")
 
     func setAttribute(_ name: String, _ value: CFTypeRef) throws {
         let error = AXUIElementSetAttributeValue(window.element, name as CFString, value)
@@ -224,9 +237,10 @@ func manageWindowImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     try? await Task.sleep(for: .milliseconds(120))
     // Minimize/close can leave no queryable window; degrade to the note.
     if let result = try? await stateResult(app: app, windowTitle: nil, note: note) {
-        return result
+        return result.withFocusTelemetry(focus.finish(deliveryTier: InputTier.windowManagement.rawValue))
     }
-    return .text(note)
+    return CallTool.Result.text(note)
+        .withFocusTelemetry(focus.finish(deliveryTier: InputTier.windowManagement.rawValue))
 }
 
 // MARK: - click_menu_item
@@ -236,6 +250,7 @@ func clickMenuItemImpl(_ args: [String: Value]) async throws -> CallTool.Result 
     try requireAccessibilityTrusted()
     let confirmed = SafetyPolicy.confirmed(args)
     try SafetyPolicy.check(app: app, confirmed: confirmed)
+    let focus = FocusChangeTracker.start()
     let path = try args.requireString("path")
     let segments = path.split(separator: ">").map { $0.trimmingCharacters(in: .whitespaces) }
     guard segments.count >= 2 else {
@@ -279,7 +294,8 @@ func clickMenuItemImpl(_ args: [String: Value]) async throws -> CallTool.Result 
     try? await Task.sleep(for: .milliseconds(120))
     return try await stateResult(
         app: app, windowTitle: nil, note: "Selected menu \(segments.joined(separator: " > ")).",
-        screenshot: screenshotDetail(args)
+        screenshot: screenshotDetail(args),
+        focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAction.rawValue)
     )
 }
 
@@ -312,10 +328,12 @@ func writeClipboardImpl(_ args: [String: Value]) async throws -> CallTool.Result
     let text = try args.requireString("text")
     try ArgumentBounds.checkStringLength(text, argument: "text", maximum: ArgumentBounds.maxClipboardCharacters)
     try SafetyPolicy.checkClipboardWrite(confirmed: SafetyPolicy.confirmed(args))
+    let focus = FocusChangeTracker.start()
     let pasteboard = NSPasteboard.general
     pasteboard.clearContents()
     pasteboard.setString(text, forType: .string)
-    return .text("Replaced the clipboard with \(text.count) characters. Paste with press_key cmd+v.")
+    return CallTool.Result.text("Replaced the clipboard with \(text.count) characters. Paste with press_key cmd+v.")
+        .withFocusTelemetry(focus.finish(deliveryTier: InputTier.pasteboard.rawValue))
 }
 
 // MARK: - wait_for
