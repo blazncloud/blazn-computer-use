@@ -127,7 +127,9 @@ let toolCatalog: [ToolSpec] = [
                 "element_id": elementIDParam,
                 "x": numberParam("X pixel coordinate in the latest screenshot (fallback when no element_id)."),
                 "y": numberParam("Y pixel coordinate in the latest screenshot (fallback when no element_id)."),
-                "click_count": integerParam("Number of clicks: 1 (default) or 2 for double-click."),
+                "click_count": integerParam(
+                    "Number of clicks: 1 (default) or \(ArgumentBounds.maxClickCount) for double-click."
+                ),
                 "mouse_button": enumParam(["left", "right", "middle"], "Mouse button. Defaults to left."),
                 "allow_global_cursor": allowGlobalCursorParam,
                 "include_screenshot": includeScreenshotParam,
@@ -358,7 +360,8 @@ let toolCatalog: [ToolSpec] = [
             Manage an app window: raise (bring to front within the app), minimize, \
             unminimize, move, resize, fullscreen, exit_fullscreen, or close. Targets the \
             front window unless window_title is given. Move/resize use global screen \
-            points (not screenshot pixels). close requires confirm:true.
+            points (not screenshot pixels). Geometry must be finite and within \
+            server-enforced bounds. close requires confirm:true.
             """,
         inputSchema: objectSchema(
             [
@@ -368,10 +371,24 @@ let toolCatalog: [ToolSpec] = [
                     "What to do with the window."
                 ),
                 "window_title": stringParam("Optional window title; defaults to the front window."),
-                "x": numberParam("Target X for move (global screen points, top-left origin)."),
-                "y": numberParam("Target Y for move (global screen points)."),
-                "width": numberParam("Target width for resize (points)."),
-                "height": numberParam("Target height for resize (points)."),
+                "x": numberParam(
+                    "Target X for move (global screen points, top-left origin, max +/-"
+                        + "\(Int(ArgumentBounds.maxWindowCoordinateMagnitude)))."
+                ),
+                "y": numberParam(
+                    "Target Y for move (global screen points, max +/-"
+                        + "\(Int(ArgumentBounds.maxWindowCoordinateMagnitude)))."
+                ),
+                "width": numberParam(
+                    "Target width for resize (points, "
+                        + "\(Int(ArgumentBounds.minWindowDimension))..."
+                        + "\(Int(ArgumentBounds.maxWindowDimension)))."
+                ),
+                "height": numberParam(
+                    "Target height for resize (points, "
+                        + "\(Int(ArgumentBounds.minWindowDimension))..."
+                        + "\(Int(ArgumentBounds.maxWindowDimension)))."
+                ),
                 "confirm": confirmParam,
             ],
             required: ["app", "action"]

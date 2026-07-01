@@ -178,6 +178,32 @@ private func invalidArgumentMessage(_ body: () throws -> Void) -> String {
         #expect(tooLong.contains("chunking"))
     }
 
+    @Test func clickCountBoundsFailWithUsefulErrors() throws {
+        let zeroClicks = invalidArgumentMessage {
+            _ = try ArgumentBounds.checkClickCount(0)
+        }
+        #expect(zeroClicks.contains("\"click_count\""))
+
+        let tooManyClicks = invalidArgumentMessage {
+            _ = try ArgumentBounds.checkClickCount(ArgumentBounds.maxClickCount + 1)
+        }
+        #expect(tooManyClicks.contains("\(ArgumentBounds.maxClickCount)"))
+
+        #expect(try ArgumentBounds.checkClickCount(1) == 1)
+        #expect(try ArgumentBounds.checkClickCount(ArgumentBounds.maxClickCount) == ArgumentBounds.maxClickCount)
+    }
+
+    @Test func clickCountArgumentRejectsNonIntegerValues() throws {
+        #expect(try clickCountArgument([:]) == 1)
+        #expect(try clickCountArgument(["click_count": .int(2)]) == 2)
+
+        let fractional = invalidArgumentMessage {
+            _ = try clickCountArgument(["click_count": .double(1.5)])
+        }
+        #expect(fractional.contains("\"click_count\""))
+        #expect(fractional.contains("integer"))
+    }
+
     @Test func scrollBoundsFailWithUsefulErrors() throws {
         let badPages = invalidArgumentMessage {
             _ = try ArgumentBounds.checkScrollPages(ArgumentBounds.maxScrollPages + 0.1)
@@ -191,5 +217,34 @@ private func invalidArgumentMessage(_ body: () throws -> Void) -> String {
 
         _ = try ArgumentBounds.checkScrollPages(1)
         try ArgumentBounds.checkScrollDelta(deltaX: ArgumentBounds.maxScrollDelta, deltaY: -ArgumentBounds.maxScrollDelta)
+    }
+
+    @Test func windowGeometryBoundsFailWithUsefulErrors() throws {
+        let nonFinitePosition = invalidArgumentMessage {
+            try ArgumentBounds.checkWindowPosition(x: .infinity, y: 0)
+        }
+        #expect(nonFinitePosition.contains("\"x\""))
+        #expect(nonFinitePosition.contains("finite"))
+
+        let hugePosition = invalidArgumentMessage {
+            try ArgumentBounds.checkWindowPosition(x: ArgumentBounds.maxWindowCoordinateMagnitude + 1, y: 0)
+        }
+        #expect(hugePosition.contains("\"x\""))
+        #expect(hugePosition.contains("\"y\""))
+
+        let zeroSize = invalidArgumentMessage {
+            try ArgumentBounds.checkWindowSize(width: 0, height: 100)
+        }
+        #expect(zeroSize.contains("\"width\""))
+        #expect(zeroSize.contains("\"height\""))
+
+        let nonFiniteSize = invalidArgumentMessage {
+            try ArgumentBounds.checkWindowSize(width: 100, height: .nan)
+        }
+        #expect(nonFiniteSize.contains("\"height\""))
+        #expect(nonFiniteSize.contains("finite"))
+
+        try ArgumentBounds.checkWindowPosition(x: -ArgumentBounds.maxWindowCoordinateMagnitude, y: 0)
+        try ArgumentBounds.checkWindowSize(width: ArgumentBounds.minWindowDimension, height: ArgumentBounds.maxWindowDimension)
     }
 }

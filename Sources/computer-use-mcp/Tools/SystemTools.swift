@@ -194,6 +194,7 @@ func manageWindowImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         guard let x = args.number("x"), let y = args.number("y") else {
             throw ToolError.invalidArguments("move requires x and y (global screen points, top-left origin).")
         }
+        try ArgumentBounds.checkWindowPosition(x: x, y: y)
         var point = CGPoint(x: x, y: y)
         try setAttribute(kAXPositionAttribute, AXValueCreate(.cgPoint, &point)!)
         note = "Moved \(described) to (\(Int(x)),\(Int(y))) pt."
@@ -201,6 +202,7 @@ func manageWindowImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         guard let width = args.number("width"), let height = args.number("height") else {
             throw ToolError.invalidArguments("resize requires width and height (points).")
         }
+        try ArgumentBounds.checkWindowSize(width: width, height: height)
         var size = CGSize(width: width, height: height)
         try setAttribute(kAXSizeAttribute, AXValueCreate(.cgSize, &size)!)
         note = "Resized \(described) to \(Int(width))x\(Int(height)) pt."

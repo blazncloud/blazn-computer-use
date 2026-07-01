@@ -9,9 +9,9 @@ import MCP
 
 func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
+    let clickCount = try clickCountArgument(args)
     try requireAccessibilityTrusted()
     let buttonName = args.string("mouse_button") ?? "left"
-    let clickCount = max(1, args.integer("click_count") ?? 1)
     let confirmed = SafetyPolicy.confirmed(args)
     try SafetyPolicy.check(app: app, confirmed: confirmed)
     let target = try await resolvePointTarget(args, app: app)
@@ -34,6 +34,16 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         app: app, windowTitle: target.snapshot.windowTitle, note: note,
         screenshot: screenshotDetail(args)
     )
+}
+
+func clickCountArgument(_ args: [String: Value]) throws -> Int {
+    if args["click_count"] != nil {
+        guard let rawClickCount = args.integer("click_count") else {
+            throw ToolError.invalidArguments("\"click_count\" must be an integer.")
+        }
+        return try ArgumentBounds.checkClickCount(rawClickCount)
+    }
+    return 1
 }
 
 /// Best-effort label for the click target, for the safety check.

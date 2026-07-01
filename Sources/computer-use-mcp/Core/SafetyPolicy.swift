@@ -143,6 +143,7 @@ enum SafetyPolicy {
 }
 
 enum ArgumentBounds {
+    static let maxClickCount = 2
     static let maxTypeTextCharacters = 100_000
     static let maxSetValueCharacters = 100_000
     static let maxClipboardCharacters = 200_000
@@ -150,6 +151,9 @@ enum ArgumentBounds {
     static let maxScrollPages = 10.0
     static let minScrollPages = 0.1
     static let maxScrollDelta = 10_000
+    static let maxWindowCoordinateMagnitude = 100_000.0
+    static let minWindowDimension = 1.0
+    static let maxWindowDimension = 100_000.0
 
     static func checkStringLength(_ value: String, argument: String, maximum: Int) throws {
         if value.count > maximum {
@@ -158,6 +162,13 @@ enum ArgumentBounds {
                     + "Send a smaller value or split the operation into chunks."
             )
         }
+    }
+
+    static func checkClickCount(_ count: Int) throws -> Int {
+        if count < 1 || count > maxClickCount {
+            throw ToolError.invalidArguments("\"click_count\" must be between 1 and \(maxClickCount).")
+        }
+        return count
     }
 
     static func checkReadText(offset: Int, length: Int) throws {
@@ -189,6 +200,36 @@ enum ArgumentBounds {
             throw ToolError.invalidArguments(
                 "\"delta_x\" and \"delta_y\" must be between -\(maxScrollDelta) and \(maxScrollDelta)."
             )
+        }
+    }
+
+    static func checkWindowPosition(x: Double, y: Double) throws {
+        try checkFinite(x, argument: "x")
+        try checkFinite(y, argument: "y")
+        if abs(x) > maxWindowCoordinateMagnitude || abs(y) > maxWindowCoordinateMagnitude {
+            throw ToolError.invalidArguments(
+                "\"x\" and \"y\" must be between -\(Int(maxWindowCoordinateMagnitude)) "
+                    + "and \(Int(maxWindowCoordinateMagnitude)) global screen points."
+            )
+        }
+    }
+
+    static func checkWindowSize(width: Double, height: Double) throws {
+        try checkFinite(width, argument: "width")
+        try checkFinite(height, argument: "height")
+        if width < minWindowDimension || width > maxWindowDimension
+            || height < minWindowDimension || height > maxWindowDimension
+        {
+            throw ToolError.invalidArguments(
+                "\"width\" and \"height\" must be between \(Int(minWindowDimension)) "
+                    + "and \(Int(maxWindowDimension)) points."
+            )
+        }
+    }
+
+    private static func checkFinite(_ value: Double, argument: String) throws {
+        guard value.isFinite else {
+            throw ToolError.invalidArguments("\"\(argument)\" must be a finite number.")
         }
     }
 }
