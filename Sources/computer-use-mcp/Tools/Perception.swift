@@ -217,6 +217,12 @@ func stateResult(
         text += "\n\n" + sparseTreeHint(webAXUnsupported: webAXUnsupported)
     }
 
+    var enrichedTelemetry = focusTelemetry
+    enrichedTelemetry?.uiChanged = !unchanged
+    if unchanged, let hint = droppedEventHint(deliveryTier: focusTelemetry?.deliveryTier) {
+        text += "\n\n" + hint
+    }
+
     var content: [Tool.Content] = [.text(text: text, annotations: nil, _meta: nil)]
     if let capture {
         content.append(
@@ -228,5 +234,19 @@ func stateResult(
             )
         )
     }
-    return .init(content: content, isError: false).withFocusTelemetry(focusTelemetry)
+    return .init(content: content, isError: false).withFocusTelemetry(enrichedTelemetry)
+}
+
+/// Guidance when a synthetic background-event delivery produced no visible
+/// UI change — the one observable hint that the app may have dropped the
+/// event. AX-tier actions either succeed or throw, so they get no hint.
+func droppedEventHint(deliveryTier: String?) -> String? {
+    let backgroundEventTiers: Set<String> = [
+        InputTier.perWindow.rawValue, InputTier.perPid.rawValue,
+    ]
+    guard let deliveryTier, backgroundEventTiers.contains(deliveryTier) else { return nil }
+    return
+        "No visible UI change followed this action. It was delivered via background events, "
+        + "which some apps drop. If the intended effect did not happen, retry with "
+        + "allow_global_cursor:true and allow_focus_change:true."
 }

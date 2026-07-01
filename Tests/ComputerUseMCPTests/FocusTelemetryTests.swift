@@ -44,6 +44,45 @@ import Testing
         #expect(fields["cursor_movement_allowed"]?.boolValue == true)
     }
 
+    @Test func focusTelemetryReportsUIChangeBit() throws {
+        let app = FrontmostAppSnapshot(name: "Finder", bundleIdentifier: "com.apple.finder", pid: 42)
+        var telemetry = FocusTelemetry(
+            before: app, after: app,
+            deliveryTier: InputTier.perPid.rawValue,
+            focusChangeAllowed: false, cursorMovementAllowed: false
+        )
+        guard case let .object(unset) = telemetry.value else {
+            Issue.record("expected object telemetry")
+            return
+        }
+        #expect(unset["ui_changed"] == nil)
+
+        telemetry.uiChanged = false
+        guard case let .object(fields) = telemetry.value else {
+            Issue.record("expected object telemetry")
+            return
+        }
+        #expect(fields["ui_changed"]?.boolValue == false)
+    }
+
+    @Test func droppedEventHintOnlyForBackgroundEventTiers() {
+        #expect(droppedEventHint(deliveryTier: InputTier.perWindow.rawValue) != nil)
+        #expect(droppedEventHint(deliveryTier: InputTier.perPid.rawValue) != nil)
+        #expect(droppedEventHint(deliveryTier: InputTier.accessibilityAction.rawValue) == nil)
+        #expect(droppedEventHint(deliveryTier: InputTier.accessibilityAttribute.rawValue) == nil)
+        #expect(droppedEventHint(deliveryTier: InputTier.globalCursor.rawValue) == nil)
+        #expect(droppedEventHint(deliveryTier: nil) == nil)
+    }
+
+    @Test func typedTextReadBackWarnsOnlyOnMissingText() {
+        #expect(typedTextWarning(typed: "hello", currentValue: "say hello world") == nil)
+        #expect(typedTextWarning(typed: "hello", currentValue: "unrelated") != nil)
+        // Not verifiable: no value, empty text, or text too long to compare.
+        #expect(typedTextWarning(typed: "hello", currentValue: nil) == nil)
+        #expect(typedTextWarning(typed: "", currentValue: "anything") == nil)
+        #expect(typedTextWarning(typed: String(repeating: "a", count: 501), currentValue: "x") == nil)
+    }
+
     @Test func globalCursorRequiresExplicitFocusChangeAllowance() throws {
         let message = invalidArgumentMessage {
             _ = try allowGlobalCursorArgument(["allow_global_cursor": .bool(true)])

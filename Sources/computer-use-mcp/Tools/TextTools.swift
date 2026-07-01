@@ -34,13 +34,40 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
     try SafetyPolicy.checkTyping(into: element, app: app, confirmed: confirmed)
     try insertText(text, into: element, described: described)
+    let warning = readBackWarning(typed: text, element: element)
     let snapshot = await SnapshotStore.shared.load(forPid: app.pid)
     return try await stateResult(
         app: app, windowTitle: snapshot?.windowTitle,
-        note: "Typed \(text.count) characters into \(described). Verify the new value below.",
+        note: "Typed \(text.count) characters into \(described). "
+            + (warning ?? "Verify the new value below."),
         screenshot: screenshotDetail(args),
         focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAttribute.rawValue)
     )
+}
+
+/// Read the element's value back after insertion and verify the typed text
+/// actually landed — some apps report success for the AX write and then
+/// ignore it. Skipped for secure fields (never echo), long texts, and huge
+/// documents where the full-value read would be expensive.
+private func readBackWarning(typed: String, element: AXUIElement) -> String? {
+    guard axString(element, kAXSubroleAttribute) != "AXSecureTextField" else { return nil }
+    if let count = (axAttribute(element, "AXNumberOfCharacters") as? NSNumber)?.intValue,
+        count > 200_000
+    {
+        return nil
+    }
+    return typedTextWarning(typed: typed, currentValue: axString(element, kAXValueAttribute))
+}
+
+/// Pure part of the read-back check, separated for tests. nil when the typed
+/// text is present or verification is not feasible.
+func typedTextWarning(typed: String, currentValue: String?) -> String? {
+    guard typed.count <= 500, !typed.isEmpty, let currentValue else { return nil }
+    guard !currentValue.contains(typed) else { return nil }
+    return
+        "Warning: the element's value does not contain the typed text after insertion — "
+        + "the app may have ignored or transformed the input. Inspect the state below "
+        + "before proceeding."
 }
 
 /// Insert text at the element's current selection (collapsed selection =

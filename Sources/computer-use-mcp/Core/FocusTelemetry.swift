@@ -33,6 +33,10 @@ struct FocusTelemetry: Equatable {
     let deliveryTier: String?
     let focusChangeAllowed: Bool
     let cursorMovementAllowed: Bool
+    /// Whether the re-perceived UI tree differed from the pre-action snapshot.
+    /// Factual dirty bit — an unchanged tree after a background-event delivery
+    /// is the one observable hint that the app may have dropped the event.
+    var uiChanged: Bool? = nil
 
     var focusChanged: Bool {
         before != after
@@ -52,6 +56,9 @@ struct FocusTelemetry: Equatable {
         }
         if let deliveryTier {
             fields["delivery_tier"] = .string(deliveryTier)
+        }
+        if let uiChanged {
+            fields["ui_changed"] = .bool(uiChanged)
         }
         return .object(fields)
     }
