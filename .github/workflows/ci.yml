@@ -12,16 +12,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_16.4.app || sudo xcode-select -s /Applications/Xcode.app
-      - name: Build
-        run: swift build
-      - name: Unit tests
+      - name: Preflight (no GUI/TCC)
         # GUI-dependent paths (AX, ScreenCaptureKit, overlay) need a logged-in
-        # desktop session and TCC grants, so CI covers the pure logic only.
-        run: swift test
-      - name: CLI smoke (no GUI/TCC)
-        # Keep hosted CI deterministic: do not open apps, prompt for TCC, or
-        # exercise live input/capture paths here.
-        run: |
-          .build/debug/computer-use-mcp version
-          .build/debug/computer-use-mcp help
-          .build/debug/computer-use-mcp health_report --json
+        # desktop session and TCC grants, so hosted CI stays on the pure,
+        # non-mutating path.
+        run: python3 scripts/preflight.py

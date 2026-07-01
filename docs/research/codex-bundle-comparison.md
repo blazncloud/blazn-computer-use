@@ -28,6 +28,16 @@ Read-only snapshot taken from `/Applications/Codex.app` on this machine.
 
 ## Follow-Up Comparison Checklist
 
+- Re-run these read-only identity probes after Codex upgrades:
+
+```bash
+/usr/libexec/PlistBuddy -c Print:CFBundleIdentifier /Applications/Codex.app/Contents/Info.plist
+/usr/libexec/PlistBuddy -c Print:CFBundleShortVersionString /Applications/Codex.app/Contents/Info.plist
+codesign -dv /Applications/Codex.app
+codesign -d --entitlements :- /Applications/Codex.app
+find /Applications/Codex.app/Contents -maxdepth 2 -type f
+```
+
 - Inspect helper launch relationships and parent process attribution while
   Codex computer-use is active.
 - Compare frontmost-app behavior for observe, AX value set, AX press, menu
