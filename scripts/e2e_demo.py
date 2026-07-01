@@ -22,6 +22,8 @@ DEFAULT_BIN = ".build/debug/computer-use-mcp"
 LIVE_OPT_IN_ENV = "COMPUTER_USE_MCP_RUN_LIVE_SMOKE"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+from common import frontmost_app  # noqa: E402
+
 
 class MCP:
     def __init__(self, bin_path, request_timeout):
@@ -118,18 +120,6 @@ def run_text(args, timeout=5):
     if completed.returncode != 0:
         return None
     return completed.stdout.strip()
-
-
-def frontmost_app():
-    script = 'tell application "System Events" to name of first process whose frontmost is true'
-    return subprocess.run(
-        ["osascript", "-e", script],
-        cwd=REPO_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    ).stdout.strip()
 
 
 def wait_for_process(process_name, timeout=10):

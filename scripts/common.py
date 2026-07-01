@@ -19,3 +19,24 @@ def resolve_binary(path: str | None = None) -> Path:
     if not candidate.is_absolute():
         candidate = ROOT / candidate
     return candidate
+
+
+def frontmost_app() -> str:
+    """Name of the frontmost app via lsappinfo.
+
+    lsappinfo needs no TCC grant; osascript -> System Events hangs on an
+    Automation permission prompt when the terminal was never approved.
+    """
+    import subprocess
+
+    def run(args: list[str]) -> str:
+        return subprocess.run(
+            args, cwd=ROOT, check=True, capture_output=True, text=True, timeout=10
+        ).stdout.strip()
+
+    front = run(["lsappinfo", "front"])
+    info = run(["lsappinfo", "info", "-only", "name", front])
+    # Output looks like: "LSDisplayName"="Finder"
+    if "=" in info:
+        return info.split("=", 1)[1].strip().strip('"')
+    return info

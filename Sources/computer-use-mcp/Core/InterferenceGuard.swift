@@ -33,11 +33,11 @@ func interferenceShouldYield(
 
 enum InterferenceGuard {
     /// Disable with no_interference_yield / COMPUTER_USE_MCP_NO_INTERFERENCE_YIELD=1.
-    static var isEnabled: Bool { Config.bool("no_interference_yield") != true }
+    static let isEnabled: Bool = Config.bool("no_interference_yield") != true
 
     /// Seconds the hardware must be quiet before acting where the user is
     /// working ("interference_idle_seconds", default 1). 0 disables the guard.
-    static var idleThreshold: Double { Config.double("interference_idle_seconds") ?? 1.0 }
+    static let idleThreshold: Double = Config.double("interference_idle_seconds") ?? 1.0
 
     /// How long to wait for the user to pause before returning the error.
     static let graceSeconds: Double = 2.0
@@ -57,10 +57,12 @@ enum InterferenceGuard {
     /// Returns nil when clear to act. Otherwise waits up to graceSeconds for
     /// the user to pause, then returns a recoverable error message.
     static func waitForUserPause(toolName: String, arguments: [String: Value]) async -> String? {
-        guard isEnabled, appLeaseToolNames.contains(toolName) else { return nil }
+        guard isEnabled, appScopedToolNames.contains(toolName) else { return nil }
+        let threshold = idleThreshold
+        // Fast path: an idle user can never yield — skip resolving the app.
+        guard threshold > 0, secondsSinceUserInput() < threshold else { return nil }
         let usesGlobalPath = arguments.bool("allow_global_cursor") == true
         let targetPid = arguments.string("app").flatMap { try? resolveApp($0).pid }
-        let threshold = idleThreshold
         let deadline = ContinuousClock.now + .seconds(graceSeconds)
         while true {
             let idle = secondsSinceUserInput()

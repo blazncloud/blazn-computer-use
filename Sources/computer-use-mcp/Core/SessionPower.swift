@@ -31,7 +31,7 @@ func screenIsLocked() -> Bool {
 /// released after a quiet period. Disable with no_sleep_assertion.
 actor SleepAssertion {
     static let shared = SleepAssertion()
-    static var isEnabled: Bool { Config.bool("no_sleep_assertion") != true }
+    static let isEnabled: Bool = Config.bool("no_sleep_assertion") != true
     static let idleReleaseSeconds: Double = 120
 
     private var assertionID = IOPMAssertionID(0)

@@ -50,7 +50,7 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 /// ignore it. Skipped for secure fields (never echo), long texts, and huge
 /// documents where the full-value read would be expensive.
 private func readBackWarning(typed: String, element: AXUIElement) -> String? {
-    guard axString(element, kAXSubroleAttribute) != "AXSecureTextField" else { return nil }
+    guard axString(element, kAXSubroleAttribute) != (kAXSecureTextFieldSubrole as String) else { return nil }
     if let count = (axAttribute(element, "AXNumberOfCharacters") as? NSNumber)?.intValue,
         count > 200_000
     {

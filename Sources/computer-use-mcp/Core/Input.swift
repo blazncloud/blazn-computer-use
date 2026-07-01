@@ -46,6 +46,16 @@ enum KeyDeliveryMode: String, Equatable {
     case globalSessionTap = "tier4-global-session-tap"
 }
 
+/// Tiers that post synthetic events an app can silently drop (no success
+/// signal). AX tiers fail loudly and the global tiers use the real input
+/// path, so neither needs a "did it land" hint. Kept next to the tier enums
+/// so a new tier is classified where it is defined.
+func isDroppableBackgroundDeliveryTier(_ rawTier: String) -> Bool {
+    rawTier == InputTier.perWindow.rawValue
+        || rawTier == InputTier.perPid.rawValue
+        || rawTier == KeyDeliveryMode.perPid.rawValue
+}
+
 struct DeliveryContext {
     let pid: pid_t
     /// CGWindowID of the target window, when resolvable (enables Tier 2).

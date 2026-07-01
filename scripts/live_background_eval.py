@@ -19,7 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-from common import resolve_binary
+from common import frontmost_app, resolve_binary
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,17 +72,6 @@ def build_fixture() -> Path:
         encoding="utf-8",
     )
     return bundle
-
-
-def frontmost_app() -> str:
-    # lsappinfo needs no TCC grant; osascript → System Events hangs on an
-    # Automation permission prompt when the terminal was never approved.
-    front = run(["lsappinfo", "front"], timeout=10).stdout.strip()
-    info = run(["lsappinfo", "info", "-only", "name", front], timeout=10).stdout.strip()
-    # Output looks like: "LSDisplayName"="Finder"
-    if "=" in info:
-        return info.split("=", 1)[1].strip().strip('"')
-    return info
 
 
 def require_frontmost(expected: str, phase: str) -> str:

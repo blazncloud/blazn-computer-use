@@ -151,21 +151,25 @@ func stateResult(
 
     var (snapshot, tree, unchanged) = await captureSnapshot()
     var webAXUnsupported = false
-    let needsWebAX =
-        hasEmptyWebArea(tree.elements)
-        || (tree.elements.count < sparseTreeThreshold && appLooksLikeWebRenderer(pid: app.pid))
+    let emptyWebArea = hasEmptyWebArea(tree.elements)
+    var needsWebAX = emptyWebArea
+    if !needsWebAX && tree.elements.count < sparseTreeThreshold {
+        needsWebAX = await AssistiveAccess.shared.looksLikeWebRenderer(pid: app.pid)
+    }
     if needsWebAX {
         // Web accessibility was off or mid-build: force the flags on, give
         // the renderer a beat to populate the tree, and rebuild once. Some
         // embedded-web apps (CEF builds without accessibility wiring) reject
         // the opt-in — skip the settle-and-rebuild and say so in the hint.
+        // A sparse tree that stayed sparse after an earlier forced enable is
+        // just a small window: don't re-pay the settle on every call.
         switch await AssistiveAccess.shared.enable(pid: app.pid, force: true) {
-        case .applied:
+        case .applied, .alreadyApplied where emptyWebArea:
             try? await Task.sleep(for: .milliseconds(500))
             (snapshot, tree, unchanged) = await captureSnapshot()
         case .unsupported:
             webAXUnsupported = true
-        case .skipped:
+        case .alreadyApplied, .skipped:
             break
         }
     }
@@ -241,10 +245,7 @@ func stateResult(
 /// UI change — the one observable hint that the app may have dropped the
 /// event. AX-tier actions either succeed or throw, so they get no hint.
 func droppedEventHint(deliveryTier: String?) -> String? {
-    let backgroundEventTiers: Set<String> = [
-        InputTier.perWindow.rawValue, InputTier.perPid.rawValue,
-    ]
-    guard let deliveryTier, backgroundEventTiers.contains(deliveryTier) else { return nil }
+    guard let deliveryTier, isDroppableBackgroundDeliveryTier(deliveryTier) else { return nil }
     return
         "No visible UI change followed this action. It was delivered via background events, "
         + "which some apps drop. If the intended effect did not happen, retry with "

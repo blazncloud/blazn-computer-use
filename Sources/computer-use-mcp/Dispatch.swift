@@ -44,17 +44,9 @@ func dispatchTool(name: String, arguments: [String: Value]) async -> CallTool.Re
     await RateLimiter.shared.acquire()
     let start = ContinuousClock.now
     await SleepAssertion.shared.noteActivity()
-    if let lockMessage = lockedScreenMessage(toolName: name, isLocked: screenIsLocked()) {
+    if let refusal = await preflightRefusal(name: name, arguments: arguments) {
         logToolCall(name, isError: true, since: start)
-        return .text(lockMessage, isError: true)
-    }
-    if let yieldMessage = await InterferenceGuard.waitForUserPause(toolName: name, arguments: arguments) {
-        logToolCall(name, isError: true, since: start)
-        return .text(yieldMessage, isError: true)
-    }
-    if let policyMessage = URLPolicy.check(toolName: name, arguments: arguments) {
-        logToolCall(name, isError: true, since: start)
-        return .text(policyMessage, isError: true)
+        return .text(refusal, isError: true)
     }
     let result: CallTool.Result
     do {
@@ -64,6 +56,20 @@ func dispatchTool(name: String, arguments: [String: Value]) async -> CallTool.Re
     }
     logToolCall(name, isError: result.isError == true, since: start)
     return result
+}
+
+/// The gates every tool call passes before its handler runs: screen-lock
+/// pause (mutating tools only — the check gates the window-server query),
+/// human-interference yield, and the browser URL policy. Returns the first
+/// refusal message, or nil when clear to act.
+private func preflightRefusal(name: String, arguments: [String: Value]) async -> String? {
+    if isMutatingTool(name), screenIsLocked() {
+        return lockedScreenMessage(toolName: name, isLocked: true)
+    }
+    if let yieldMessage = await InterferenceGuard.waitForUserPause(toolName: name, arguments: arguments) {
+        return yieldMessage
+    }
+    return URLPolicy.check(toolName: name, arguments: arguments)
 }
 
 /// Stderr per-call log line, enabled with COMPUTER_USE_MCP_LOG=1 (or "log" in

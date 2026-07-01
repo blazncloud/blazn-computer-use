@@ -18,17 +18,41 @@ struct ResolvedApp {
 /// a KVO-updated snapshot that goes stale in the daemon (its main thread never
 /// services a run loop), silently hiding every app launched after daemon
 /// start. Building NSRunningApplication objects from a raw pid scan queries
-/// LaunchServices directly and is always current.
+/// LaunchServices directly and is always current. The scan is cached for one
+/// second so the gate pipeline and tool handler resolving the same app within
+/// a single call do not repeat it.
 func freshRunningApplications() -> [NSRunningApplication] {
-    var pids = [pid_t](repeating: 0, count: 8192)
-    let bytes = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
-    guard bytes > 0 else { return NSWorkspace.shared.runningApplications }
-    let count = min(Int(bytes) / MemoryLayout<pid_t>.size, pids.count)
-    return pids.prefix(count).compactMap { pid in
-        guard pid > 0, let app = NSRunningApplication(processIdentifier: pid),
-            app.activationPolicy != .prohibited
-        else { return nil }
-        return app
+    RunningApplicationsCache.shared.current()
+}
+
+private final class RunningApplicationsCache: @unchecked Sendable {
+    static let shared = RunningApplicationsCache()
+    private let lock = NSLock()
+    private var apps: [NSRunningApplication] = []
+    private var fetchedAt: ContinuousClock.Instant?
+
+    func current() -> [NSRunningApplication] {
+        lock.lock()
+        defer { lock.unlock() }
+        if let fetchedAt, fetchedAt + .seconds(1) > .now {
+            return apps
+        }
+        apps = Self.scan()
+        fetchedAt = .now
+        return apps
+    }
+
+    private static func scan() -> [NSRunningApplication] {
+        var pids = [pid_t](repeating: 0, count: 8192)
+        let bytes = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        guard bytes > 0 else { return NSWorkspace.shared.runningApplications }
+        let count = min(Int(bytes) / MemoryLayout<pid_t>.size, pids.count)
+        return pids.prefix(count).compactMap { pid in
+            guard pid > 0, let app = NSRunningApplication(processIdentifier: pid),
+                app.activationPolicy != .prohibited
+            else { return nil }
+            return app
+        }
     }
 }
 

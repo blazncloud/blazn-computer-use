@@ -48,12 +48,19 @@ func urlPolicyDecision(
             : .allow
     }
     if let hit = denyPatterns.first(where: { !$0.isEmpty && url.contains($0) }) {
-        return .deny("the current browser URL matches the deny pattern \"\(hit)\"")
+        return .deny("the URL matches the deny pattern \"\(hit)\"")
     }
     if let hit = confirmPatterns.first(where: { !$0.isEmpty && url.contains($0) }) {
-        return .requireConfirm("the current browser URL matches the sensitive pattern \"\(hit)\"")
+        return .requireConfirm("the URL matches the sensitive pattern \"\(hit)\"")
     }
     return .allow
+}
+
+/// One authoring point for the hard-block wording, shared by the browser
+/// action gate and open_url.
+func urlDenyMessage(_ reason: String) -> String {
+    "Denied by URL policy: \(reason). This stays blocked regardless of confirm; "
+        + "adjust the url_deny configuration if it should be allowed."
 }
 
 enum URLPolicy {
@@ -61,16 +68,16 @@ enum URLPolicy {
     /// url_confirm; disable with no_safety.
     static let defaultConfirmPatterns = ["checkout", "payment", "paypal.com", "banking"]
 
-    static var denyPatterns: [String] { Config.list("url_deny") }
-    static var confirmPatterns: [String] { defaultConfirmPatterns + Config.list("url_confirm") }
-    static var hasExplicitPolicy: Bool {
-        !Config.list("url_deny").isEmpty || !Config.list("url_confirm").isEmpty
-    }
+    // Config cannot change mid-process; read once.
+    static let denyPatterns: [String] = Config.list("url_deny")
+    static let confirmPatterns: [String] = defaultConfirmPatterns + Config.list("url_confirm")
+    static let hasExplicitPolicy: Bool =
+        !denyPatterns.isEmpty || confirmPatterns.count > defaultConfirmPatterns.count
 
     /// Gate an app-scoped mutating tool call. Returns nil when clear to act,
     /// or the error message to send back.
     static func check(toolName: String, arguments: [String: Value]) -> String? {
-        guard SafetyPolicy.isEnabled, appLeaseToolNames.contains(toolName) else { return nil }
+        guard SafetyPolicy.isEnabled, appScopedToolNames.contains(toolName) else { return nil }
         guard let appName = arguments.string("app"),
             let app = try? resolveApp(appName),
             isBrowserApp(bundleIdentifier: app.bundleIdentifier)
@@ -85,12 +92,10 @@ enum URLPolicy {
         case .allow:
             return nil
         case .deny(let reason):
-            return
-                "Denied by URL policy: \(reason). This action stays blocked regardless of "
-                + "confirm; adjust the url_deny configuration if this page should be allowed."
+            return urlDenyMessage(reason)
         case .requireConfirm(let reason):
             guard !SafetyPolicy.confirmed(arguments) else { return nil }
-            return "Confirmation required: \(reason). Re-run the same call with \"confirm\": true to proceed."
+            return SafetyError(reason: reason + ".").description
         }
     }
 }

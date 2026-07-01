@@ -43,8 +43,11 @@ func appIsGone(pid: pid_t) -> Bool {
 
 /// What came of asking an app to render its web-content accessibility tree.
 enum WebAXEnableOutcome: Sendable {
-    /// A flag was set successfully — the renderer may need a beat to populate.
+    /// A flag was newly set — the renderer may need a beat to populate.
     case applied
+    /// The flags were already force-set this run; re-asserted cheaply, but a
+    /// settle-and-rebuild will not discover anything new for a sparse tree.
+    case alreadyApplied
     /// The app rejected the opt-in outright (e.g. a CEF build without
     /// accessibility wiring); its web UI cannot be exposed as elements.
     case unsupported
@@ -61,7 +64,9 @@ enum WebAXEnableOutcome: Sendable {
 actor AssistiveAccess {
     static let shared = AssistiveAccess()
     private var attemptedPids: Set<pid_t> = []
+    private var forcedPids: Set<pid_t> = []
     private var unsupportedPids: Set<pid_t> = []
+    private var webRendererPids: [pid_t: Bool] = [:]
 
     /// Cheap once-per-pid enable for apps that advertise the attributes.
     /// `force` re-sets the flags regardless (used when a web area came back
@@ -85,10 +90,22 @@ actor AssistiveAccess {
                 succeeded = true
             }
         }
-        if succeeded { return .applied }
+        if succeeded {
+            guard force else { return .applied }
+            return forcedPids.insert(pid).inserted ? .applied : .alreadyApplied
+        }
         guard attempted else { return .skipped }
         if force { unsupportedPids.insert(pid) }
         return .unsupported
+    }
+
+    /// Memoized appLooksLikeWebRenderer — the bundle's Frameworks directory
+    /// does not change while the app runs.
+    func looksLikeWebRenderer(pid: pid_t) -> Bool {
+        if let known = webRendererPids[pid] { return known }
+        let result = appLooksLikeWebRenderer(pid: pid)
+        webRendererPids[pid] = result
+        return result
     }
 }
 

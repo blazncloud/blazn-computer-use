@@ -62,19 +62,21 @@ enum SafetyPolicy {
         confirmPatterns: [String] = URLPolicy.confirmPatterns
     ) throws {
         guard isEnabled else { return }
-        let absolute = url.absoluteString.lowercased()
-        // url_deny is a hard block: confirm does not override it.
-        if let hit = denyPatterns.first(where: { !$0.isEmpty && absolute.contains($0) }) {
-            throw ToolError.failed(
-                "Denied by URL policy: the URL matches the deny pattern \"\(hit)\". This stays "
-                    + "blocked regardless of confirm; adjust the url_deny configuration if this "
-                    + "URL should be allowed."
-            )
+        // Same decision function as the browser action gate; the URL argument
+        // is always known here, so unreadable-URL handling does not apply.
+        switch urlPolicyDecision(
+            url: url.absoluteString, denyPatterns: denyPatterns,
+            confirmPatterns: confirmPatterns, hasExplicitPolicy: false
+        ) {
+        case .deny(let reason):
+            // url_deny is a hard block: confirm does not override it.
+            throw ToolError.failed(urlDenyMessage(reason))
+        case .requireConfirm(let reason):
+            if !confirmed { throw SafetyError(reason: reason + ".") }
+        case .allow:
+            break
         }
         guard !confirmed else { return }
-        if let hit = confirmPatterns.first(where: { !$0.isEmpty && absolute.contains($0) }) {
-            throw SafetyError(reason: "the URL matches the sensitive pattern \"\(hit)\".")
-        }
         let scheme = url.scheme?.lowercased() ?? "file"
         switch scheme {
         case "http", "https":

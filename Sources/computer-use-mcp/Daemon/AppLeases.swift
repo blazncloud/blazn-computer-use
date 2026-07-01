@@ -27,7 +27,7 @@ actor AppLeases {
     /// resolved with the same lookup the tools use; an unresolvable app is
     /// not gated (the tool will produce its own, better error).
     func check(tool: String, arguments: [String: Value], session: Int32) -> String? {
-        guard enabled, appLeaseToolNames.contains(tool) else { return nil }
+        guard enabled, appScopedToolNames.contains(tool) else { return nil }
         guard case .string(let appName)? = arguments["app"],
             let app = try? resolveApp(appName)
         else { return nil }
