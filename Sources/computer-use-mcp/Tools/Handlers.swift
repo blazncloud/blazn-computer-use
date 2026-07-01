@@ -86,3 +86,19 @@ func readText(_ args: [String: Value]) async throws -> CallTool.Result {
 func batch(_ args: [String: Value]) async throws -> CallTool.Result {
     try await batchImpl(args)
 }
+
+func saveSkill(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await saveSkillImpl(args)
+}
+
+func runSkill(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await runSkillImpl(args)
+}
+
+func listSkills(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await listSkillsImpl(args)
+}
+
+func deleteSkill(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await deleteSkillImpl(args)
+}

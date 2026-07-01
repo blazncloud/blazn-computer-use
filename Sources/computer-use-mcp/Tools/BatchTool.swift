@@ -16,7 +16,7 @@ let maxBatchActions = 10
 /// sequences that trigger loading). Never batch itself, and nothing that
 /// targets a different app — one app per batch keeps lease arbitration and
 /// the URL/interference gates coherent.
-let batchableToolNames: Set<String> = appScopedToolNames.subtracting(["batch"]).union(["wait_for"])
+let batchableToolNames: Set<String> = appScopedToolNames.subtracting(["batch", "run_skill"]).union(["wait_for"])
 
 func batchImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let appName = try args.requireString("app")
@@ -94,7 +94,7 @@ func batchImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     return CallTool.Result(content: content, isError: result.isError, _meta: result._meta)
 }
 
-private func batchResultText(_ result: CallTool.Result) -> String {
+func batchResultText(_ result: CallTool.Result) -> String {
     result.content.compactMap { content in
         if case .text(let text, _, _) = content { return text }
         return nil

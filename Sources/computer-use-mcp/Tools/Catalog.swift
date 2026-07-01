@@ -92,6 +92,10 @@ let toolCatalog: [ToolSpec] = [
                         + "with pixel boxes — the fallback for apps whose accessibility tree is "
                         + "missing or sparse (custom-drawn UIs, games, remote desktops)."
                 ),
+                "include_screenshot": boolParam(
+                    "Default true. Set false for a tree-only read — faster and cheaper when "
+                        + "pixels are not needed."
+                ),
             ],
             required: ["app"]
         ),
@@ -516,5 +520,85 @@ let toolCatalog: [ToolSpec] = [
             required: ["app", "actions"]
         ),
         handler: { args in try await batch(args) }
+    ),
+    ToolSpec(
+        name: "save_skill",
+        description: """
+            Save a repeatable task as a named skill after performing it once. Steps are \
+            the normal action tools; element_id anchors are frozen into durable locators \
+            (role + label + tree path) that re-resolve on every run, so the skill \
+            survives app restarts. Use {{param_name}} placeholders in any string \
+            argument and declare them in params. Replay with run_skill.
+            """,
+        inputSchema: objectSchema(
+            [
+                "name": stringParam("Skill name: 1-64 lowercase letters, digits, hyphens."),
+                "description": stringParam("One line: what the skill does, for list_skills."),
+                "app": appParam,
+                "params": .object([
+                    "type": .string("array"),
+                    "description": .string(
+                        "Placeholders the skill takes, each {\"name\": \"invoice_number\", "
+                            + "\"description\": …}. Reference them as {{name}} in step arguments."),
+                    "items": .object(["type": .string("object")]),
+                ]),
+                "steps": .object([
+                    "type": .string("array"),
+                    "description": .string(
+                        "1-\(maxSkillSteps) steps, each {\"tool\": one of "
+                            + batchableToolNames.sorted().joined(separator: ", ")
+                            + ", plus that tool's usual arguments}. Element-targeted steps: pass "
+                            + "\"element_id\" from the CURRENT state (frozen into a locator at save "
+                            + "time) or an explicit \"locator\": {\"role\", \"label\"}. Optional "
+                            + "\"expect\": {\"role\", \"label\", \"value_contains\", \"gone\", "
+                            + "\"timeout_seconds\"} asserts the step's effect (wait_for terms)."),
+                    "items": .object(["type": .string("object")]),
+                ]),
+                "overwrite": boolParam("Default false. Set true to replace an existing skill of the same name."),
+            ],
+            required: ["name", "description", "app", "steps"]
+        ),
+        handler: { args in try await saveSkill(args) }
+    ),
+    ToolSpec(
+        name: "run_skill",
+        description: """
+            Replay a saved skill deterministically: each step re-resolves its locator \
+            against the live tree, runs through the normal per-step safety checks, and \
+            verifies its expectation. No reasoning happens between steps, so replay is \
+            fast; if the UI changed and a step cannot resolve or its expectation fails, \
+            the run stops with a report of exactly which step broke — fix that step and \
+            re-save the skill. Returns final app state.
+            """,
+        inputSchema: objectSchema(
+            [
+                "name": stringParam("Name of the saved skill (see list_skills)."),
+                "params": .object([
+                    "type": .string("object"),
+                    "description": .string(
+                        "Values for the skill's declared params, e.g. {\"week\": \"2026-W27\"}."),
+                ]),
+            ],
+            required: ["name"]
+        ),
+        handler: { args in try await runSkill(args) }
+    ),
+    ToolSpec(
+        name: "list_skills",
+        description: "List saved skills with their target app, step count, description, and params.",
+        inputSchema: objectSchema([:]),
+        handler: { args in try await listSkills(args) }
+    ),
+    ToolSpec(
+        name: "delete_skill",
+        description: "Delete a saved skill by name. Irreversible, so it requires confirm:true.",
+        inputSchema: objectSchema(
+            [
+                "name": stringParam("Name of the skill to delete."),
+                "confirm": confirmParam,
+            ],
+            required: ["name"]
+        ),
+        handler: { args in try await deleteSkill(args) }
     ),
 ]

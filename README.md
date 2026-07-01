@@ -45,6 +45,13 @@ fast way to locate a control) · `list_apps` · `list_windows` · `read_text` ·
 `select_text` · `perform_secondary_action` · `click_menu_item` · `batch` (a short
 action sequence in one round-trip, stopping at the first failure)
 **System** `open_app` · `open_url` · `manage_window` · `read_clipboard` · `write_clipboard`
+**Skills** `save_skill` · `run_skill` · `list_skills` · `delete_skill` — teach/replay: an
+agent performs a task once and saves it as a named, parameterized skill; element anchors
+are frozen into durable locators (role + label + tree path) that re-resolve on every run,
+so the skill survives app restarts and replays at engine speed with no model in the loop.
+Each replayed step passes the same per-step safety gates as a live action, steps can
+assert their effect (`expect`, in `wait_for` terms), and a step that no longer resolves
+stops the run with a report of exactly what broke — fix that step, re-save, run again.
 
 Every interaction tool accepts **either** a stable element id **or** raw screenshot
 coordinates.
