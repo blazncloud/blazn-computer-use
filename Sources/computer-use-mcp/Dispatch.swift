@@ -47,6 +47,10 @@ func dispatchTool(name: String, arguments: [String: Value]) async -> CallTool.Re
         logToolCall(name, isError: true, since: start)
         return .text(yieldMessage, isError: true)
     }
+    if let policyMessage = URLPolicy.check(toolName: name, arguments: arguments) {
+        logToolCall(name, isError: true, since: start)
+        return .text(policyMessage, isError: true)
+    }
     let result: CallTool.Result
     do {
         result = try await spec.handler(arguments)

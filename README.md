@@ -107,6 +107,15 @@ secure password fields, and actions against apps on a confirmation list return
 a recoverable `Confirmation required: …` error until the caller retries with
 `"confirm": true`.
 
+Browser pages get their own gate: before acting in a known browser the server
+reads the current URL from the accessibility tree and applies the URL policy —
+`url_deny` patterns block the action outright (confirm does not override),
+`url_confirm` patterns (plus built-in payment-page defaults) require `confirm`
+per action. The server also yields to the human: when real hardware input was
+seen in the last second and the target app is the one the user is working in
+(or the action uses the global cursor), the call returns a recoverable error
+instead of interleaving with the user (see `interference_idle_seconds`).
+
 ## Configuration
 
 Every option is settable as an environment variable (`COMPUTER_USE_MCP_<KEY>`) or a
@@ -119,6 +128,8 @@ key in `~/.config/computer-use-mcp.json` (env wins):
 | `no_safety` / `COMPUTER_USE_MCP_NO_SAFETY=1` | Disable the safety policy entirely. |
 | `confirm_apps` | Apps (name or bundle id) where every action needs `confirm`. |
 | `destructive` | Extra destructive label substrings to gate. |
+| `url_deny` | URL substrings where browser actions are blocked outright (`confirm` does not override). |
+| `url_confirm` | Extra URL substrings where browser actions need `confirm` (defaults cover payment pages). |
 | `ax_timeout` | Per-call accessibility timeout in seconds (default 2). |
 | `no_daemon` / `COMPUTER_USE_MCP_NO_DAEMON=1` | Run the engine in-process instead of through the shared daemon. |
 | `no_app_lease` | Disable per-app session arbitration. |

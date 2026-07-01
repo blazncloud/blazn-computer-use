@@ -56,8 +56,25 @@ enum SafetyPolicy {
         }
     }
 
-    static func checkOpenURL(_ url: URL, confirmed: Bool) throws {
-        guard isEnabled, !confirmed else { return }
+    static func checkOpenURL(
+        _ url: URL, confirmed: Bool,
+        denyPatterns: [String] = URLPolicy.denyPatterns,
+        confirmPatterns: [String] = URLPolicy.confirmPatterns
+    ) throws {
+        guard isEnabled else { return }
+        let absolute = url.absoluteString.lowercased()
+        // url_deny is a hard block: confirm does not override it.
+        if let hit = denyPatterns.first(where: { !$0.isEmpty && absolute.contains($0) }) {
+            throw ToolError.failed(
+                "Denied by URL policy: the URL matches the deny pattern \"\(hit)\". This stays "
+                    + "blocked regardless of confirm; adjust the url_deny configuration if this "
+                    + "URL should be allowed."
+            )
+        }
+        guard !confirmed else { return }
+        if let hit = confirmPatterns.first(where: { !$0.isEmpty && absolute.contains($0) }) {
+            throw SafetyError(reason: "the URL matches the sensitive pattern \"\(hit)\".")
+        }
         let scheme = url.scheme?.lowercased() ?? "file"
         switch scheme {
         case "http", "https":
