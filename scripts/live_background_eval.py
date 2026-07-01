@@ -75,8 +75,14 @@ def build_fixture() -> Path:
 
 
 def frontmost_app() -> str:
-    script = 'tell application "System Events" to get name of first application process whose frontmost is true'
-    return run(["osascript", "-e", script], timeout=10).stdout.strip()
+    # lsappinfo needs no TCC grant; osascript → System Events hangs on an
+    # Automation permission prompt when the terminal was never approved.
+    front = run(["lsappinfo", "front"], timeout=10).stdout.strip()
+    info = run(["lsappinfo", "info", "-only", "name", front], timeout=10).stdout.strip()
+    # Output looks like: "LSDisplayName"="Finder"
+    if "=" in info:
+        return info.split("=", 1)[1].strip().strip('"')
+    return info
 
 
 def require_frontmost(expected: str, phase: str) -> str:
