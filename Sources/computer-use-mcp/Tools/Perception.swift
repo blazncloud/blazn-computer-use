@@ -20,7 +20,8 @@ func getAppStateImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         scope = TreeScope(root: target.element, pathPrefix: target.snapshotElement.path)
     }
     return try await stateResult(
-        app: app, windowTitle: args.string("window_title"), screenshot: .full,
+        app: app, windowTitle: args.string("window_title"),
+        screenshot: args.bool("include_screenshot") == false ? .none : .full,
         scope: scope, maxElements: args.integer("max_elements") ?? defaultMaxTreeElements,
         ocr: args.bool("ocr") == true
     )
