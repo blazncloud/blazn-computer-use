@@ -156,12 +156,15 @@ def wait_for_fixture_state() -> str:
     deadline = time.time() + 10
     last_state = ""
     while time.time() < deadline:
-        last_state = mcp_call("get_app_state", {"app": FIXTURE_NAME, "max_elements": 200})
         try:
+            # Mid-launch the fixture resolves before its window/AX tree
+            # registers; treat tool errors as transient until the deadline.
+            last_state = mcp_call("get_app_state", {"app": FIXTURE_NAME, "max_elements": 200})
             extract_text_field_id(last_state)
             extract_element_id(last_state, "AXButton", "Mark Pressed")
             return last_state
-        except RuntimeError:
+        except RuntimeError as error:
+            last_state = last_state or str(error)
             time.sleep(0.2)
     raise RuntimeError(f"{FIXTURE_NAME} did not expose expected AX elements:\n{last_state}")
 
