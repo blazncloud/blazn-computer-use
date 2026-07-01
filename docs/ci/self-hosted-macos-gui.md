@@ -37,6 +37,11 @@ macOS timing can change outside this repository.
 
 ## Workflow Shape
 
+This repo includes a manual workflow at
+`.github/workflows/gui-preflight.yml`. It is intentionally
+`workflow_dispatch`-only and defaults to non-live bundle preflight. Select the
+live inputs only on a dedicated runner with the required TCC grants.
+
 ```yaml
 jobs:
   gui-preflight:
@@ -46,12 +51,15 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
-      - run: python3 scripts/preflight.py --use-app-bundle --live-background --output gui-preflight.json
+      - run: python3 scripts/preflight.py --use-app-bundle --output gui-preflight.json
       - uses: actions/upload-artifact@v4
         with:
           name: gui-preflight
           path: gui-preflight.json
 ```
+
+The actual workflow adds `--live-background` and `--live-real-app` only when
+those manual dispatch inputs are selected.
 
 Keep this lane out of hosted CI. If it fails, record the macOS version, TCC
 state, frontmost app before and after, and whether the failure reproduced with

@@ -1,0 +1,51 @@
+name: GUI Preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      live_background:
+        description: Run the live background fixture eval on the self-hosted Mac
+        required: true
+        default: false
+        type: boolean
+      live_real_app:
+        description: Run the live real-app compatibility smoke on the self-hosted Mac
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  gui-preflight:
+    runs-on: [self-hosted, macOS, computer-use-gui]
+    concurrency:
+      group: computer-use-gui
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build command
+        id: command
+        shell: bash
+        env:
+          LIVE_BACKGROUND: ${{ inputs.live_background }}
+          LIVE_REAL_APP: ${{ inputs.live_real_app }}
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import os
+
+          command = ["python3", "scripts/preflight.py", "--use-app-bundle", "--output", "gui-preflight.json"]
+          if os.environ["LIVE_BACKGROUND"] == "true":
+              command.append("--live-background")
+          if os.environ["LIVE_REAL_APP"] == "true":
+              command.append("--live-real-app")
+
+          escaped = " ".join(command)
+          Path(os.environ["GITHUB_OUTPUT"]).write_text(f"command={escaped}\n", encoding="utf-8")
+          PY
+      - name: Preflight
+        run: ${{ steps.command.outputs.command }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gui-preflight
+          path: gui-preflight.json
