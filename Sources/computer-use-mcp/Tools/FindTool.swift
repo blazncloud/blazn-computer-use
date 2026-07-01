@@ -24,7 +24,7 @@ func findImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let pixelsPerPoint = await SnapshotStore.shared.load(forPid: app.pid)
         .map(\.pixelsPerPoint).flatMap { $0 > 0 ? $0 : nil } ?? 1
 
-    func capture() async -> (snapshot: AppSnapshot, tree: BuiltTree, unchanged: Bool) {
+    func capture() async -> (snapshot: AppSnapshot, tree: BuiltTree, unchanged: Bool, diff: TreeDiff?) {
         await SnapshotStore.shared.capture(
             pid: app.pid,
             bundleIdentifier: app.bundleIdentifier,
@@ -44,11 +44,11 @@ func findImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         }
     }
 
-    var (snapshot, tree, unchanged) = await capture()
+    var (snapshot, tree, unchanged, _) = await capture()
     if hasEmptyWebArea(tree.elements) {
         await AssistiveAccess.shared.enable(pid: app.pid, force: true)
         try? await Task.sleep(for: .milliseconds(500))
-        (snapshot, tree, unchanged) = await capture()
+        (snapshot, tree, unchanged, _) = await capture()
     }
 
     // Tree text lines map 1:1 onto elements (truncation notices trail them),

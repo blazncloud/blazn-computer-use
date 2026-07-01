@@ -19,16 +19,19 @@ func resolveTarget(app: ResolvedApp, elementID: String) async throws -> Resolved
                 + "then use the element ids it returns."
         )
     }
-    if let atIndex = elementID.firstIndex(of: "@"),
-        String(elementID[elementID.index(after: atIndex)...]) != snapshot.generation
-    {
-        throw ToolError.invalidArguments(
-            "\"\(elementID)\" is from an older app state (the current state is "
-                + "\(snapshot.generation)). Every action returns fresh state — use element "
-                + "ids from the most recent result, or call get_app_state."
-        )
-    }
+    // Membership in the latest snapshot is the validity test: elements that
+    // survive a UI change carry their id (and older generation tag) forward,
+    // so an older-looking tag can still be current.
     guard let snapshotElement = snapshot.element(withID: elementID) else {
+        if let atIndex = elementID.firstIndex(of: "@"),
+            String(elementID[elementID.index(after: atIndex)...]) != snapshot.generation
+        {
+            throw ToolError.invalidArguments(
+                "\"\(elementID)\" is from an older app state and did not survive the UI "
+                    + "change (the current state is \(snapshot.generation)). Use element ids "
+                    + "from the most recent result, or call get_app_state."
+            )
+        }
         throw ToolError.invalidArguments(
             "\"\(elementID)\" is not an element id from the latest \(app.name) state. "
                 + "Call get_app_state and use a fresh id (e.g. \"e12@\(snapshot.generation)\")."

@@ -128,7 +128,7 @@ func stateResult(
     // render web content into the accessibility tree.
     await AssistiveAccess.shared.enable(pid: app.pid)
 
-    func captureSnapshot() async -> (snapshot: AppSnapshot, tree: BuiltTree, unchanged: Bool) {
+    func captureSnapshot() async -> (snapshot: AppSnapshot, tree: BuiltTree, unchanged: Bool, diff: TreeDiff?) {
         await SnapshotStore.shared.capture(
             pid: app.pid,
             bundleIdentifier: app.bundleIdentifier,
@@ -136,7 +136,8 @@ func stateResult(
             windowOrigin: window.frame.origin,
             pixelsPerPoint: pixelsPerPoint,
             windowSize: [window.frame.width * pixelsPerPoint, window.frame.height * pixelsPerPoint],
-            createdAt: Date()
+            createdAt: Date(),
+            scoped: scope != nil
         ) { generation in
             buildTree(
                 window: scope?.root ?? window.element,
@@ -149,7 +150,7 @@ func stateResult(
         }
     }
 
-    var (snapshot, tree, unchanged) = await captureSnapshot()
+    var (snapshot, tree, unchanged, diff) = await captureSnapshot()
     var webAXUnsupported = false
     let emptyWebArea = hasEmptyWebArea(tree.elements)
     var needsWebAX = emptyWebArea
@@ -166,7 +167,7 @@ func stateResult(
         switch await AssistiveAccess.shared.enable(pid: app.pid, force: true) {
         case .applied, .alreadyApplied where emptyWebArea:
             try? await Task.sleep(for: .milliseconds(500))
-            (snapshot, tree, unchanged) = await captureSnapshot()
+            (snapshot, tree, unchanged, diff) = await captureSnapshot()
         case .unsupported:
             webAXUnsupported = true
         case .alreadyApplied, .skipped:
@@ -194,11 +195,18 @@ func stateResult(
         text += captureNote + "\n"
     }
     // Action results skip resending a tree the agent already has; explicit
-    // perception (get_app_state, .full) always returns it.
+    // perception (get_app_state, .full) always returns it. A changed tree
+    // whose diff is compact is sent as the diff — surviving elements carried
+    // their ids over, so everything the agent holds stays valid.
     if unchanged && detail != .full {
         text +=
             "UI tree unchanged by this action: element ids from generation "
             + "\(snapshot.generation) remain valid, reuse them."
+    } else if detail != .full, let diff, diff.entryCount > 0, diff.entryCount * 2 <= diff.totalElements {
+        text +=
+            "Changed since the last state (~ changed, + added, - removed; "
+            + "all other element ids remain valid):\n"
+        text += diff.text
     } else {
         text += "Elements: id role \"label\" (x,y,w,h) …\n"
         text += tree.text

@@ -43,11 +43,18 @@ struct AppSnapshot: Codable {
     let createdAt: Date
     /// Generation tag baked into element ids (e.g. "e11@s3"), so an id from
     /// an older state is rejected loudly instead of silently resolving to
-    /// whatever occupies that index now.
+    /// whatever occupies that index now. Elements that survive a UI change
+    /// carry their id (and so an older tag) forward — see stabilizeTree.
     let generation: String
     /// Hash of the id-normalized tree text, for unchanged-tree detection.
     /// Optional: predates some persisted snapshots.
     var treeFingerprint: String? = nil
+    /// The rendered outline this snapshot was built from, kept for diffing
+    /// the next capture against. Optional: predates some persisted snapshots.
+    var treeText: String? = nil
+    /// True when the element list covers a scoped subtree rather than the
+    /// whole window; scoped snapshots are never diffed against.
+    var scoped: Bool? = nil
     let elements: [SnapshotElement]
 
     func element(withID id: String) -> SnapshotElement? {
@@ -89,14 +96,16 @@ actor SnapshotStore {
     ///
     /// When the rebuilt tree is identical to the previous snapshot's (same
     /// content, window placement, and scale — only the ids differ), the
-    /// previous snapshot is kept and returned with `unchanged: true`: the
-    /// agent's existing element ids stay valid and the caller can skip
-    /// resending an identical tree.
+    /// previous snapshot is kept and returned with `unchanged: true`. When it
+    /// changed, elements that still resolve to the same place carry their
+    /// previous id forward and a diff against the previous state is returned,
+    /// so the caller can send only what changed while existing ids stay valid.
     func capture(
         pid: pid_t, bundleIdentifier: String, windowTitle: String?,
         windowOrigin: CGPoint, pixelsPerPoint: Double, windowSize: [Double]?, createdAt: Date,
+        scoped: Bool = false,
         buildTree: (String) -> BuiltTree
-    ) -> (snapshot: AppSnapshot, tree: BuiltTree, unchanged: Bool) {
+    ) -> (snapshot: AppSnapshot, tree: BuiltTree, unchanged: Bool, diff: TreeDiff?) {
         // Always consult disk, not just on first touch: other server
         // processes (each MCP client spawns its own) persist to the same
         // file, and two servers must never issue the same generation tag for
@@ -105,28 +114,40 @@ actor SnapshotStore {
         let next = max(counters[pid] ?? 0, diskGeneration) + 1
         counters[pid] = next
         let generation = "s\(next)"
-        let tree = buildTree(generation)
+        var tree = buildTree(generation)
         let fingerprint = treeFingerprint(tree.text)
 
-        if let previous = cache[pid] ?? loadFromDisk(pid),
+        let previous = cache[pid] ?? loadFromDisk(pid)
+        if let previous,
             previous.treeFingerprint == fingerprint,
             previous.windowTitle == windowTitle,
             previous.windowOrigin == [windowOrigin.x, windowOrigin.y],
             previous.pixelsPerPoint == pixelsPerPoint
         {
             cache[pid] = previous
-            return (previous, tree, true)
+            return (previous, tree, true, nil)
+        }
+
+        var diff: TreeDiff?
+        if let previous, !scoped, previous.scoped != true,
+            previous.windowTitle == windowTitle,
+            previous.pixelsPerPoint == pixelsPerPoint,
+            let stabilized = stabilizeTree(tree, against: previous)
+        {
+            tree = stabilized.tree
+            diff = stabilized.diff
         }
 
         let snapshot = AppSnapshot(
             pid: pid, bundleIdentifier: bundleIdentifier, windowTitle: windowTitle,
             windowOrigin: [windowOrigin.x, windowOrigin.y], pixelsPerPoint: pixelsPerPoint,
             windowSize: windowSize, createdAt: createdAt, generation: generation,
-            treeFingerprint: fingerprint, elements: tree.elements
+            treeFingerprint: fingerprint, treeText: tree.text, scoped: scoped,
+            elements: tree.elements
         )
         cache[pid] = snapshot
         persist(snapshot)
-        return (snapshot, tree, false)
+        return (snapshot, tree, false, diff)
     }
 
     func load(forPid pid: pid_t) -> AppSnapshot? {
@@ -185,6 +206,87 @@ func treeFingerprint(_ treeText: String) -> String {
     let normalized = treeText.replacing(/e\d+@s\d+/, with: "e@")
     let digest = SHA256.hash(data: Data(normalized.utf8))
     return digest.map { String(format: "%02x", $0) }.joined()
+}
+
+/// What changed between the previous snapshot and a fresh capture, after id
+/// stabilization. Entries are outline lines with a `~` (content changed),
+/// `+` (new element), or `-` (element gone) prefix.
+struct TreeDiff {
+    let changed: [String]
+    let added: [String]
+    let removed: [String]
+    let totalElements: Int
+
+    var entryCount: Int { changed.count + added.count + removed.count }
+    var text: String { (changed + added + removed).joined(separator: "\n") }
+}
+
+/// Carry element ids forward across a UI change and compute the diff.
+///
+/// An element that still resolves to the same locator path with the same role
+/// and label is the same control, so it keeps its previous id — the agent's
+/// references survive the change — and appears in the diff only if its
+/// rendered line (value, frame, flags) differs. Elements at new paths are
+/// added under fresh ids; previous paths with no counterpart are removed.
+/// Returns nil when the previous snapshot cannot be diffed against (no stored
+/// text, or line/element misalignment).
+func stabilizeTree(_ tree: BuiltTree, against previous: AppSnapshot) -> (tree: BuiltTree, diff: TreeDiff)? {
+    guard let previousText = previous.treeText else { return nil }
+    let previousLines = previousText.components(separatedBy: "\n")
+    guard previous.elements.count <= previousLines.count else { return nil }
+    var newLines = tree.text.components(separatedBy: "\n")
+    guard tree.elements.count <= newLines.count else { return nil }
+
+    func pathKey(_ path: [LocatorStep]) -> String {
+        path.map { "\($0.role)#\($0.indexOfRole)" }.joined(separator: "/")
+    }
+    func normalized(_ line: String) -> String {
+        line.replacing(/e\d+@s\d+/, with: "e@")
+    }
+    func stripIndent(_ line: String) -> String {
+        String(line.drop(while: { $0 == "\t" }))
+    }
+
+    var previousByPath: [String: (element: SnapshotElement, line: String)] = [:]
+    for (index, element) in previous.elements.enumerated() {
+        previousByPath[pathKey(element.path)] = (element, previousLines[index])
+    }
+
+    var elements = tree.elements
+    var changed: [String] = []
+    var added: [String] = []
+    var matchedPaths = Set<String>()
+
+    for index in elements.indices {
+        let element = elements[index]
+        let key = pathKey(element.path)
+        if let prior = previousByPath[key],
+            prior.element.role == element.role, prior.element.label == element.label
+        {
+            matchedPaths.insert(key)
+            if prior.element.id != element.id {
+                newLines[index] = newLines[index].replacingOccurrences(of: element.id, with: prior.element.id)
+                elements[index] = SnapshotElement(
+                    id: prior.element.id, role: element.role, label: element.label,
+                    path: element.path, frame: element.frame
+                )
+            }
+            if normalized(prior.line) != normalized(newLines[index]) {
+                changed.append("~ " + stripIndent(newLines[index]))
+            }
+        } else {
+            added.append("+ " + stripIndent(newLines[index]))
+        }
+    }
+
+    var removed: [String] = []
+    for element in previous.elements where !matchedPaths.contains(pathKey(element.path)) {
+        let label = element.label.map { " \"\($0)\"" } ?? ""
+        removed.append("- \(element.id) \(element.role)\(label) is gone")
+    }
+
+    let stabilized = BuiltTree(text: newLines.joined(separator: "\n"), elements: elements)
+    return (stabilized, TreeDiff(changed: changed, added: added, removed: removed, totalElements: elements.count))
 }
 
 /// Re-resolve a snapshot element against the live accessibility tree.

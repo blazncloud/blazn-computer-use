@@ -190,9 +190,12 @@ def live_eval() -> dict[str, object]:
     verification = mcp_call("get_app_state", {"app": FIXTURE_NAME, "max_elements": 200})
     steps.append(make_step("set_value_background", expected in verification, observed=expected in verification))
 
+    # Element ids are stable across UI changes (surviving elements carry
+    # their id forward), so the ids extracted from the initial state remain
+    # valid for the whole eval — later action results return diffs, not full
+    # trees, and this reliance doubles as a live check of that contract.
     typed = f"{expected}-typed"
-    element_id = extract_text_field_id(verification)
-    clear_result = mcp_call(
+    mcp_call(
         "set_value",
         {
             "app": FIXTURE_NAME,
@@ -204,7 +207,6 @@ def live_eval() -> dict[str, object]:
         },
     )
     record_frontmost_step(steps, "clear_value_kept_frontmost", before)
-    element_id = extract_text_field_id(clear_result)
     typed_result = mcp_call(
         "type_text",
         {
@@ -217,7 +219,6 @@ def live_eval() -> dict[str, object]:
     )
     record_frontmost_step(steps, "type_text_kept_frontmost", before)
     steps.append(make_step("type_text_background", typed in typed_result, observed=typed in typed_result))
-    button_id = extract_element_id(typed_result, "AXButton", "Mark Pressed")
 
     click_result = mcp_call(
         "click",
