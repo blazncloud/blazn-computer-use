@@ -72,9 +72,9 @@ python3 scripts/live_background_eval.py --live
 ```
 
 The default command is CI-safe and skips live GUI work. `--live` builds a small
-AppKit fixture with stable Accessibility identifiers, keeps Finder frontmost,
-mutates the fixture through MCP, and asserts Finder remains frontmost while the
-fixture value changes.
+AppKit fixture with stable Accessibility identifiers, launches it in the
+background, mutates the fixture through MCP, and asserts the frontmost app from
+before setup remains frontmost while the fixture value changes.
 
 TextEdit, Finder, Safari, Electron, and third-party apps remain compatibility
 smoke targets, not the deterministic source of truth.

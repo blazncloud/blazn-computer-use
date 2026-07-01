@@ -120,6 +120,43 @@ def run_text(args, timeout=5):
     return completed.stdout.strip()
 
 
+def frontmost_app():
+    script = 'tell application "System Events" to name of first process whose frontmost is true'
+    return subprocess.run(
+        ["osascript", "-e", script],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    ).stdout.strip()
+
+
+def wait_for_process(process_name, timeout=10):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        completed = subprocess.run(
+            ["pgrep", "-x", process_name],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            timeout=5,
+        )
+        if completed.returncode == 0:
+            return
+        time.sleep(0.2)
+    raise RuntimeError(f"{process_name} did not launch within {timeout}s")
+
+
+def require_frontmost(expected, phase):
+    observed = frontmost_app()
+    if observed != expected:
+        raise RuntimeError(
+            f"{phase} changed frontmost app: expected {expected!r}, observed {observed!r}"
+        )
+    return observed
+
+
 def git_dirty():
     completed = subprocess.run(
         ["git", "diff", "--quiet"],
@@ -152,8 +189,28 @@ def make_step(name, status, start, notes=None, error=None):
     if notes:
         step["notes"] = notes
     if error:
-        step["error"] = str(error)
+        step["error"] = format_error(error)
     return step
+
+
+def format_error(error):
+    if isinstance(error, subprocess.CalledProcessError):
+        details = [
+            f"command {error.cmd!r} exited {error.returncode}",
+        ]
+        if error.stdout:
+            details.append(f"stdout: {error.stdout[-2000:]}")
+        if error.stderr:
+            details.append(f"stderr: {error.stderr[-2000:]}")
+        return "\n".join(details)
+    if isinstance(error, subprocess.TimeoutExpired):
+        details = [f"command {error.cmd!r} timed out after {error.timeout}s"]
+        if error.stdout:
+            details.append(f"stdout: {error.stdout[-2000:]}")
+        if error.stderr:
+            details.append(f"stderr: {error.stderr[-2000:]}")
+        return "\n".join(details)
+    return str(error)
 
 
 def skipped_live_steps(reason):
@@ -169,7 +226,6 @@ def skipped_live_steps(reason):
 
 
 def run_live_smoke(bin_path, request_timeout):
-    # Put a DIFFERENT app in front so the whole demo runs against a background app.
     if not Path(bin_path).exists():
         raise FileNotFoundError(f"computer-use-mcp binary not found: {bin_path}")
 
@@ -177,16 +233,15 @@ def run_live_smoke(bin_path, request_timeout):
     server_info = None
 
     start = time.perf_counter()
-    subprocess.run(["open", "-a", "TextEdit"], check=True)
-    time.sleep(1.5)
-    subprocess.run(["osascript", "-e", 'tell application "Finder" to activate'], check=True)
-    time.sleep(1.0)
-    frontmost = subprocess.run(
-        ["osascript", "-e", 'tell application "System Events" to name of first process whose frontmost is true'],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    frontmost = frontmost_app()
+    if frontmost == "TextEdit":
+        raise RuntimeError(
+            "TextEdit is already frontmost; refusing to bring another app forward during setup. "
+            "Put any non-TextEdit app in front before running the live smoke."
+        )
+    subprocess.run(["open", "-g", "-a", "TextEdit"], cwd=REPO_ROOT, check=True, timeout=10)
+    wait_for_process("TextEdit")
+    require_frontmost(frontmost, "background TextEdit launch")
     steps.append(
         make_step("prepare_background_textedit", "passed", start, notes=f"frontmost={frontmost}")
     )
@@ -264,15 +319,7 @@ def run_live_smoke(bin_path, request_timeout):
 
         # 4. Verify focus was never stolen — the whole thing ran in the background.
         start = time.perf_counter()
-        frontmost_after = subprocess.run(
-            ["osascript", "-e", 'tell application "System Events" to name of first process whose frontmost is true'],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        ok_bg = frontmost == "Finder" and frontmost_after == "Finder"
-        if not ok_bg:
-            raise RuntimeError(f"frontmost changed: {frontmost} -> {frontmost_after}")
+        frontmost_after = require_frontmost(frontmost, "live TextEdit smoke")
         steps.append(
             make_step(
                 "stayed_in_background",
