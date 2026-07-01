@@ -12,6 +12,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_16.4.app || sudo xcode-select -s /Applications/Xcode.app
+      - name: Build (full compiler output)
+        # Preflight truncates build output in its JSON report; a bare build
+        # step keeps the real compiler/linker error visible in the CI log.
+        run: swift build
       - name: Preflight (no GUI/TCC)
         # GUI-dependent paths (AX, ScreenCaptureKit, overlay) need a logged-in
         # desktop session and TCC grants, so hosted CI stays on the pure,
