@@ -13,9 +13,10 @@ import Foundation
 import IOKit.pwr_mgt
 
 /// Recoverable pause for mutating tools while the screen is locked.
-/// Read-only perception stays available.
-func lockedScreenMessage(toolName: String, isLocked: Bool) -> String? {
-    guard isLocked, isMutatingTool(toolName) else { return nil }
+/// Read-only perception stays available. `isLocked` is an autoclosure so the
+/// window-server query runs only after the (cheap) mutating-tool check.
+func lockedScreenMessage(toolName: String, isLocked: @autoclosure () -> Bool) -> String? {
+    guard isMutatingTool(toolName), isLocked() else { return nil }
     return
         "The screen is locked, so mutating computer-use actions are paused. Ask the user "
         + "to unlock the Mac and retry. Read-only tools (get_app_state, find, read_text) "

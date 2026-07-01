@@ -251,9 +251,7 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
     fileprivate func beginGlide(toGlobalTopLeft point: CGPoint) {
         lastCommand = Date()
         showChip()
-        // Quartz global top-left → AppKit bottom-left, using the PRIMARY screen
-        // height so it's correct on any display in the unified coordinate plane.
-        targetPoint = CGPoint(x: point.x, y: primaryHeight - point.y)
+        targetPoint = appKitPoint(fromGlobalTopLeft: point)
         startPoint = currentPoint
         startTime = CACurrentMediaTime()
         let distance = hypot(targetPoint.x - startPoint.x, targetPoint.y - startPoint.y)
@@ -263,7 +261,7 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         fadeWork?.cancel()
         fadeWork = nil
         visible = true
-        setCursorOpacity(1, animated: false)
+        setOpacity(1, of: cursorLayers, animationDuration: nil)
 
         if displayLink == nil, let view = panels.first?.contentView {
             let link = view.displayLink(target: self, selector: #selector(tick))
@@ -309,22 +307,30 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.animating else { return }
             self.visible = false
-            self.setCursorOpacity(0, animated: true)
+            self.setOpacity(0, of: self.cursorLayers, animationDuration: 0.4)
             overlayDebug("idle fade")
         }
         fadeWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + idleFadeDelay, execute: work)
     }
 
-    private func setCursorOpacity(_ value: Float, animated: Bool) {
+    /// Set opacity on layers, animated over `animationDuration` seconds or
+    /// instantly when nil. The single fade helper for cursor and chip.
+    private func setOpacity(_ value: Float, of layers: [CALayer], animationDuration: TimeInterval?) {
         CATransaction.begin()
-        if animated {
-            CATransaction.setAnimationDuration(0.4)
+        if let animationDuration {
+            CATransaction.setAnimationDuration(animationDuration)
         } else {
             CATransaction.setDisableActions(true)
         }
-        for layer in cursorLayers { layer.opacity = value }
+        for layer in layers { layer.opacity = value }
         CATransaction.commit()
+    }
+
+    /// Quartz global top-left → AppKit bottom-left, using the PRIMARY screen
+    /// height so it's correct on any display in the unified coordinate plane.
+    private func appKitPoint(fromGlobalTopLeft point: CGPoint) -> CGPoint {
+        CGPoint(x: point.x, y: primaryHeight - point.y)
     }
 
     // MARK: click pulse
@@ -334,7 +340,7 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
     fileprivate func showPulse(atGlobalTopLeft point: CGPoint) {
         lastCommand = Date()
         showChip()
-        let global = CGPoint(x: point.x, y: primaryHeight - point.y)
+        let global = appKitPoint(fromGlobalTopLeft: point)
         for panel in panels {
             let local = CGPoint(x: global.x - panel.frame.origin.x, y: global.y - panel.frame.origin.y)
             guard panel.contentView?.bounds.contains(local) == true,
@@ -380,27 +386,16 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         guard chipEnabled, let chipLayer else { return }
         if !chipVisible {
             chipVisible = true
-            setOpacity(1, of: chipLayer, animated: true)
+            setOpacity(1, of: [chipLayer], animationDuration: 0.3)
         }
         chipFadeWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, let chip = self.chipLayer else { return }
             self.chipVisible = false
-            self.setOpacity(0, of: chip, animated: true)
+            self.setOpacity(0, of: [chip], animationDuration: 0.3)
         }
         chipFadeWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + idleFadeDelay, execute: work)
-    }
-
-    private func setOpacity(_ value: Float, of layer: CALayer, animated: Bool) {
-        CATransaction.begin()
-        if animated {
-            CATransaction.setAnimationDuration(0.3)
-        } else {
-            CATransaction.setDisableActions(true)
-        }
-        layer.opacity = value
-        CATransaction.commit()
     }
 
     /// Pill with a blue dot and "Agent working", top-right of the primary

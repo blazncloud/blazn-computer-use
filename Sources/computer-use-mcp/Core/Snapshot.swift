@@ -109,15 +109,16 @@ actor SnapshotStore {
         // Always consult disk, not just on first touch: other server
         // processes (each MCP client spawns its own) persist to the same
         // file, and two servers must never issue the same generation tag for
-        // the same pid.
-        let diskGeneration = loadFromDisk(pid).map(Self.parseGeneration) ?? 0
+        // the same pid. One decode serves both the counter and the diff base.
+        let disk = loadFromDisk(pid)
+        let diskGeneration = disk.map(Self.parseGeneration) ?? 0
         let next = max(counters[pid] ?? 0, diskGeneration) + 1
         counters[pid] = next
         let generation = "s\(next)"
         var tree = buildTree(generation)
         let fingerprint = treeFingerprint(tree.text)
 
-        let previous = cache[pid] ?? loadFromDisk(pid)
+        let previous = cache[pid] ?? disk
         if let previous,
             previous.treeFingerprint == fingerprint,
             previous.windowTitle == windowTitle,
@@ -219,6 +220,9 @@ struct TreeDiff {
 
     var entryCount: Int { changed.count + added.count + removed.count }
     var text: String { (changed + added + removed).joined(separator: "\n") }
+    /// Worth sending instead of the full tree: non-empty, and smaller than
+    /// half the outline (a rewrite-everything diff is not a diff).
+    var isCompact: Bool { entryCount > 0 && entryCount * 2 <= totalElements }
 }
 
 /// Carry element ids forward across a UI change and compute the diff.
@@ -240,22 +244,20 @@ func stabilizeTree(_ tree: BuiltTree, against previous: AppSnapshot) -> (tree: B
     func pathKey(_ path: [LocatorStep]) -> String {
         path.map { "\($0.role)#\($0.indexOfRole)" }.joined(separator: "/")
     }
-    func normalized(_ line: String) -> String {
-        line.replacing(/e\d+@s\d+/, with: "e@")
-    }
     func stripIndent(_ line: String) -> String {
         String(line.drop(while: { $0 == "\t" }))
     }
 
-    var previousByPath: [String: (element: SnapshotElement, line: String)] = [:]
+    // Matched entries are claimed (removed) as the new tree consumes them;
+    // the leftovers are the removed elements, ordered by their old position.
+    var previousByPath: [String: (element: SnapshotElement, line: String, index: Int)] = [:]
     for (index, element) in previous.elements.enumerated() {
-        previousByPath[pathKey(element.path)] = (element, previousLines[index])
+        previousByPath[pathKey(element.path)] = (element, previousLines[index], index)
     }
 
     var elements = tree.elements
     var changed: [String] = []
     var added: [String] = []
-    var matchedPaths = Set<String>()
 
     for index in elements.indices {
         let element = elements[index]
@@ -263,15 +265,16 @@ func stabilizeTree(_ tree: BuiltTree, against previous: AppSnapshot) -> (tree: B
         if let prior = previousByPath[key],
             prior.element.role == element.role, prior.element.label == element.label
         {
-            matchedPaths.insert(key)
-            if prior.element.id != element.id {
-                newLines[index] = newLines[index].replacingOccurrences(of: element.id, with: prior.element.id)
-                elements[index] = SnapshotElement(
-                    id: prior.element.id, role: element.role, label: element.label,
-                    path: element.path, frame: element.frame
-                )
-            }
-            if normalized(prior.line) != normalized(newLines[index]) {
+            previousByPath.removeValue(forKey: key)
+            // Carry the previous id so the agent's references stay valid. A
+            // fresh build always mints current-generation ids, so after this
+            // rewrite a plain line comparison means a content comparison.
+            newLines[index] = newLines[index].replacingOccurrences(of: element.id, with: prior.element.id)
+            elements[index] = SnapshotElement(
+                id: prior.element.id, role: element.role, label: element.label,
+                path: element.path, frame: element.frame
+            )
+            if prior.line != newLines[index] {
                 changed.append("~ " + stripIndent(newLines[index]))
             }
         } else {
@@ -279,10 +282,9 @@ func stabilizeTree(_ tree: BuiltTree, against previous: AppSnapshot) -> (tree: B
         }
     }
 
-    var removed: [String] = []
-    for element in previous.elements where !matchedPaths.contains(pathKey(element.path)) {
-        let label = element.label.map { " \"\($0)\"" } ?? ""
-        removed.append("- \(element.id) \(element.role)\(label) is gone")
+    let removed = previousByPath.values.sorted { $0.index < $1.index }.map { leftover in
+        let label = leftover.element.label.map { " \"\($0)\"" } ?? ""
+        return "- \(leftover.element.id) \(leftover.element.role)\(label) is gone"
     }
 
     let stabilized = BuiltTree(text: newLines.joined(separator: "\n"), elements: elements)

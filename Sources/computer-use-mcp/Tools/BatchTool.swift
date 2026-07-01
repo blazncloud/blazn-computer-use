@@ -53,42 +53,45 @@ func batchImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     }
 
     var summary: [String] = []
-    for (index, step) in steps.enumerated() {
-        var arguments = step.arguments
-        let isLast = index == steps.count - 1
-        if !isLast {
-            arguments["include_state"] = .bool(false)
-        } else if let includeScreenshot = args["include_screenshot"] {
-            arguments["include_screenshot"] = includeScreenshot
-        }
+    func stopped(atStep step: Int, tool: String, error: String) -> CallTool.Result {
+        .text(
+            "Batch stopped at step \(step) of \(steps.count) — earlier steps already ran:\n"
+                + (summary + ["✗ step \(step) \(tool): \(error)"]).joined(separator: "\n"),
+            isError: true
+        )
+    }
 
+    for (index, step) in steps.dropLast().enumerated() {
+        var arguments = step.arguments
+        arguments["include_state"] = .bool(false)
         let result = await dispatchTool(name: step.tool, arguments: arguments)
         let text = batchResultText(result)
         if result.isError == true {
-            summary.append("✗ step \(index + 1) \(step.tool): \(text)")
-            return .text(
-                "Batch stopped at step \(index + 1) of \(steps.count) — earlier steps already ran:\n"
-                    + summary.joined(separator: "\n"),
-                isError: true
-            )
-        }
-        if isLast {
-            var header = "Batch completed \(steps.count) step(s):\n"
-            header += summary.isEmpty ? "" : summary.joined(separator: "\n") + "\n"
-            header += "✓ step \(steps.count) \(step.tool) — final state below.\n\n"
-            var content = result.content
-            if case .text(let existing, let annotations, let meta)? = content.first {
-                content[0] = .text(text: header + existing, annotations: annotations, _meta: meta)
-            } else {
-                content.insert(.text(text: header, annotations: nil, _meta: nil), at: 0)
-            }
-            var final = CallTool.Result(content: content, isError: result.isError)
-            final._meta = result._meta
-            return final
+            return stopped(atStep: index + 1, tool: step.tool, error: text)
         }
         summary.append("✓ step \(index + 1) \(step.tool): \(firstLine(text))")
     }
-    return .text("Batch completed.")  // unreachable: the last step returns above
+
+    let last = steps[steps.count - 1]
+    var lastArguments = last.arguments
+    if let includeScreenshot = args["include_screenshot"] {
+        lastArguments["include_screenshot"] = includeScreenshot
+    }
+    let result = await dispatchTool(name: last.tool, arguments: lastArguments)
+    if result.isError == true {
+        return stopped(atStep: steps.count, tool: last.tool, error: batchResultText(result))
+    }
+
+    var header = "Batch completed \(steps.count) step(s):\n"
+    header += summary.isEmpty ? "" : summary.joined(separator: "\n") + "\n"
+    header += "✓ step \(steps.count) \(last.tool) — final state below.\n\n"
+    var content = result.content
+    if case .text(let existing, let annotations, let meta)? = content.first {
+        content[0] = .text(text: header + existing, annotations: annotations, _meta: meta)
+    } else {
+        content.insert(.text(text: header, annotations: nil, _meta: nil), at: 0)
+    }
+    return CallTool.Result(content: content, isError: result.isError, _meta: result._meta)
 }
 
 private func batchResultText(_ result: CallTool.Result) -> String {

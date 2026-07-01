@@ -59,12 +59,11 @@ func dispatchTool(name: String, arguments: [String: Value]) async -> CallTool.Re
 }
 
 /// The gates every tool call passes before its handler runs: screen-lock
-/// pause (mutating tools only — the check gates the window-server query),
-/// human-interference yield, and the browser URL policy. Returns the first
-/// refusal message, or nil when clear to act.
+/// pause (mutating tools only), human-interference yield, and the browser
+/// URL policy. Returns the first refusal message, or nil when clear to act.
 private func preflightRefusal(name: String, arguments: [String: Value]) async -> String? {
-    if isMutatingTool(name), screenIsLocked() {
-        return lockedScreenMessage(toolName: name, isLocked: true)
+    if let lockMessage = lockedScreenMessage(toolName: name, isLocked: screenIsLocked()) {
+        return lockMessage
     }
     if let yieldMessage = await InterferenceGuard.waitForUserPause(toolName: name, arguments: arguments) {
         return yieldMessage

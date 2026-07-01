@@ -164,14 +164,12 @@ func stateResult(
         // the opt-in — skip the settle-and-rebuild and say so in the hint.
         // A sparse tree that stayed sparse after an earlier forced enable is
         // just a small window: don't re-pay the settle on every call.
-        switch await AssistiveAccess.shared.enable(pid: app.pid, force: true) {
-        case .applied, .alreadyApplied where emptyWebArea:
+        let outcome = await AssistiveAccess.shared.enable(pid: app.pid, force: true)
+        if outcome == .applied || (outcome == .alreadyApplied && emptyWebArea) {
             try? await Task.sleep(for: .milliseconds(500))
             (snapshot, tree, unchanged, diff) = await captureSnapshot()
-        case .unsupported:
+        } else if outcome == .unsupported {
             webAXUnsupported = true
-        case .alreadyApplied, .skipped:
-            break
         }
     }
 
@@ -202,7 +200,7 @@ func stateResult(
         text +=
             "UI tree unchanged by this action: element ids from generation "
             + "\(snapshot.generation) remain valid, reuse them."
-    } else if detail != .full, let diff, diff.entryCount > 0, diff.entryCount * 2 <= diff.totalElements {
+    } else if detail != .full, let diff, diff.isCompact {
         text +=
             "Changed since the last state (~ changed, + added, - removed; "
             + "all other element ids remain valid):\n"

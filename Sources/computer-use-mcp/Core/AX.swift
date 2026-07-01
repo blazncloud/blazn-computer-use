@@ -42,7 +42,7 @@ func appIsGone(pid: pid_t) -> Bool {
 }
 
 /// What came of asking an app to render its web-content accessibility tree.
-enum WebAXEnableOutcome: Sendable {
+enum WebAXEnableOutcome: Sendable, Equatable {
     /// A flag was newly set — the renderer may need a beat to populate.
     case applied
     /// The flags were already force-set this run; re-asserted cheaply, but a

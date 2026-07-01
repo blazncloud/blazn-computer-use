@@ -506,9 +506,8 @@ let toolCatalog: [ToolSpec] = [
                     "type": .string("array"),
                     "description": .string(
                         "1-\(maxBatchActions) steps, each an object with \"tool\" set to one of: "
-                            + "click, type_text, press_key, scroll, drag, set_value, select_text, "
-                            + "perform_secondary_action, click_menu_item, manage_window, wait_for — "
-                            + "plus that tool's usual arguments."
+                            + batchableToolNames.sorted().joined(separator: ", ")
+                            + " — plus that tool's usual arguments."
                     ),
                     "items": .object(["type": .string("object")]),
                 ]),
