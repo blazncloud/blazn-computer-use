@@ -124,13 +124,20 @@ actor DaemonClient {
                         guard case .message(let response) = frame else {
                             break readLoop
                         }
-                        Task { await self?.fulfill(response) }
+                        // Bind a strong actor reference before the Task:
+                        // Swift 6.1 rejects the optional-chained closure
+                        // (`await self?.…` infers a non-Sendable `() -> ()?`).
+                        if let client = self {
+                            Task { await client.fulfill(response) }
+                        }
                     }
                 } catch {
                     break
                 }
             }
-            Task { await self?.connectionDropped(fd: connected) }
+            if let client = self {
+                Task { await client.connectionDropped(fd: connected) }
+            }
         }
     }
 
