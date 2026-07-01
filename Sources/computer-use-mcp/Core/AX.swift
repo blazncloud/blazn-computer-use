@@ -41,6 +41,17 @@ func appIsGone(pid: pid_t) -> Bool {
     return app.isTerminated
 }
 
+/// What came of asking an app to render its web-content accessibility tree.
+enum WebAXEnableOutcome: Sendable {
+    /// A flag was set successfully — the renderer may need a beat to populate.
+    case applied
+    /// The app rejected the opt-in outright (e.g. a CEF build without
+    /// accessibility wiring); its web UI cannot be exposed as elements.
+    case unsupported
+    /// Nothing to do: not a web-renderer app, or already enabled this run.
+    case skipped
+}
+
 /// Chromium and Electron apps render their web-content accessibility tree
 /// only while an assistive client is detected — otherwise the tree stops at
 /// the browser chrome and an empty AXWebArea (and support can lapse again
@@ -49,23 +60,57 @@ func appIsGone(pid: pid_t) -> Bool {
 /// and are left untouched.
 actor AssistiveAccess {
     static let shared = AssistiveAccess()
-    private var enabledPids: Set<pid_t> = []
+    private var attemptedPids: Set<pid_t> = []
+    private var unsupportedPids: Set<pid_t> = []
 
     /// Cheap once-per-pid enable for apps that advertise the attributes.
     /// `force` re-sets the flags regardless (used when a web area came back
-    /// empty, which means support lapsed or was never on).
-    func enable(pid: pid_t, force: Bool = false) {
-        guard force || !enabledPids.contains(pid) else { return }
-        enabledPids.insert(pid)
+    /// empty or a web-renderer app produced a sparse tree). Apps that reject
+    /// a forced opt-in are remembered so we stop asking.
+    @discardableResult
+    func enable(pid: pid_t, force: Bool = false) -> WebAXEnableOutcome {
+        if unsupportedPids.contains(pid) { return .unsupported }
+        guard force || !attemptedPids.contains(pid) else { return .skipped }
+        attemptedPids.insert(pid)
         let app = AXUIElementCreateApplication(pid)
         var names: CFArray?
         AXUIElementCopyAttributeNames(app, &names)
         let advertised = (names as? [String]) ?? []
+        var attempted = false
+        var succeeded = false
         for attribute in ["AXEnhancedUserInterface", "AXManualAccessibility"]
         where force || advertised.contains(attribute) {
-            AXUIElementSetAttributeValue(app, attribute as CFString, kCFBooleanTrue)
+            attempted = true
+            if AXUIElementSetAttributeValue(app, attribute as CFString, kCFBooleanTrue) == .success {
+                succeeded = true
+            }
         }
+        if succeeded { return .applied }
+        guard attempted else { return .skipped }
+        if force { unsupportedPids.insert(pid) }
+        return .unsupported
     }
+}
+
+/// Framework names that mark an app as an embedded-web renderer whose UI
+/// lives behind the Chromium accessibility opt-in. Used to decide whether a
+/// sparse tree is worth a forced enable attempt — native apps are left alone
+/// because AXEnhancedUserInterface is a real behavior switch for them.
+func frameworksIndicateWebRenderer(_ frameworkNames: [String]) -> Bool {
+    frameworkNames.contains { name in
+        let lowered = name.lowercased()
+        return lowered.contains("chromium embedded framework")
+            || lowered.contains("electron framework")
+    }
+}
+
+func appLooksLikeWebRenderer(pid: pid_t) -> Bool {
+    guard let bundleURL = NSRunningApplication(processIdentifier: pid)?.bundleURL else {
+        return false
+    }
+    let frameworks = bundleURL.appendingPathComponent("Contents/Frameworks").path
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: frameworks)) ?? []
+    return frameworksIndicateWebRenderer(names)
 }
 
 /// True when the tree contains an AXWebArea with no emitted content below it

@@ -26,6 +26,26 @@ func getAppStateImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     )
 }
 
+/// Below this element count a window tree is considered sparse: likely a
+/// custom-drawn UI or an embedded web view whose accessibility is off.
+let sparseTreeThreshold = 10
+
+/// Guidance appended to a sparse get_app_state tree. When the app provably
+/// rejected the web-accessibility opt-in, say so — the agent should go
+/// straight to OCR + coordinate clicks instead of re-fetching the tree.
+func sparseTreeHint(webAXUnsupported: Bool) -> String {
+    if webAXUnsupported {
+        return
+            "The accessibility tree is sparse and this app's embedded web view rejects the "
+            + "accessibility opt-in, so its UI cannot be exposed as elements. Call get_app_state "
+            + "with ocr:true to read on-screen text, then act by screenshot coordinates — both "
+            + "work in the background."
+    }
+    return
+        "The accessibility tree is sparse — this app may draw its own UI. "
+        + "Call get_app_state with ocr:true to read on-screen text with clickable coordinates."
+}
+
 /// A subtree root to build the element tree from, with its locator path from
 /// the window root so resolved paths stay anchored at the window.
 /// @unchecked: AXUIElement is an immutable thread-safe CF handle.
@@ -130,12 +150,24 @@ func stateResult(
     }
 
     var (snapshot, tree, unchanged) = await captureSnapshot()
-    if hasEmptyWebArea(tree.elements) {
+    var webAXUnsupported = false
+    let needsWebAX =
+        hasEmptyWebArea(tree.elements)
+        || (tree.elements.count < sparseTreeThreshold && appLooksLikeWebRenderer(pid: app.pid))
+    if needsWebAX {
         // Web accessibility was off or mid-build: force the flags on, give
-        // the renderer a beat to populate the tree, and rebuild once.
-        await AssistiveAccess.shared.enable(pid: app.pid, force: true)
-        try? await Task.sleep(for: .milliseconds(500))
-        (snapshot, tree, unchanged) = await captureSnapshot()
+        // the renderer a beat to populate the tree, and rebuild once. Some
+        // embedded-web apps (CEF builds without accessibility wiring) reject
+        // the opt-in — skip the settle-and-rebuild and say so in the hint.
+        switch await AssistiveAccess.shared.enable(pid: app.pid, force: true) {
+        case .applied:
+            try? await Task.sleep(for: .milliseconds(500))
+            (snapshot, tree, unchanged) = await captureSnapshot()
+        case .unsupported:
+            webAXUnsupported = true
+        case .skipped:
+            break
+        }
     }
 
     var text = ""
@@ -181,10 +213,8 @@ func stateResult(
         } else {
             text += "\n\nOCR unavailable: no screenshot was captured."
         }
-    } else if detail == .full && tree.elements.count < 10 {
-        text +=
-            "\n\nThe accessibility tree is sparse — this app may draw its own UI. "
-            + "Call get_app_state with ocr:true to read on-screen text with clickable coordinates."
+    } else if detail == .full && tree.elements.count < sparseTreeThreshold {
+        text += "\n\n" + sparseTreeHint(webAXUnsupported: webAXUnsupported)
     }
 
     var content: [Tool.Content] = [.text(text: text, annotations: nil, _meta: nil)]

@@ -44,3 +44,33 @@ private let web0 = LocatorStep(role: "AXWebArea", indexOfRole: 0)
         #expect(!hasEmptyWebArea(elements))
     }
 }
+
+@Suite struct WebRendererDetectionTests {
+    @Test func cefFrameworkIndicatesWebRenderer() {
+        #expect(frameworksIndicateWebRenderer(["Chromium Embedded Framework.framework", "Spotify Helper.app"]))
+    }
+
+    @Test func electronFrameworkIndicatesWebRenderer() {
+        #expect(frameworksIndicateWebRenderer(["Electron Framework.framework", "Squirrel.framework"]))
+    }
+
+    @Test func nativeFrameworksDoNot() {
+        #expect(!frameworksIndicateWebRenderer(["Sparkle.framework", "SwiftProtobuf.framework"]))
+        #expect(!frameworksIndicateWebRenderer([]))
+    }
+}
+
+@Suite struct SparseTreeHintTests {
+    @Test func unsupportedWebAXGetsDirectOCRGuidance() {
+        let hint = sparseTreeHint(webAXUnsupported: true)
+        #expect(hint.contains("rejects the accessibility opt-in"))
+        #expect(hint.contains("ocr:true"))
+        #expect(hint.contains("background"))
+    }
+
+    @Test func defaultHintSuggestsOCR() {
+        let hint = sparseTreeHint(webAXUnsupported: false)
+        #expect(hint.contains("ocr:true"))
+        #expect(!hint.contains("rejects"))
+    }
+}
