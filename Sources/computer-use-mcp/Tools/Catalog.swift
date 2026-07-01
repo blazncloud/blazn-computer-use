@@ -487,4 +487,35 @@ let toolCatalog: [ToolSpec] = [
         ),
         handler: { args in try await readText(args) }
     ),
+    ToolSpec(
+        name: "batch",
+        description: """
+            Run a short sequence of actions against one app in a single call — e.g. \
+            click a field, type into it, press Return. Each step is one of the normal \
+            action tools with its usual arguments (omit "app"; the batch's app applies \
+            to every step). Steps run in order with per-step safety checks; the batch \
+            stops at the first failure and reports which steps already ran. \
+            Intermediate steps skip state for speed — the final step returns fresh \
+            state as usual. Use only for sequences whose intermediate states you can \
+            predict; when the next step depends on what appears, act step by step.
+            """,
+        inputSchema: objectSchema(
+            [
+                "app": appParam,
+                "actions": .object([
+                    "type": .string("array"),
+                    "description": .string(
+                        "1-\(maxBatchActions) steps, each an object with \"tool\" set to one of: "
+                            + "click, type_text, press_key, scroll, drag, set_value, select_text, "
+                            + "perform_secondary_action, click_menu_item, manage_window, wait_for — "
+                            + "plus that tool's usual arguments."
+                    ),
+                    "items": .object(["type": .string("object")]),
+                ]),
+                "include_screenshot": includeScreenshotParam,
+            ],
+            required: ["app", "actions"]
+        ),
+        handler: { args in try await batch(args) }
+    ),
 ]

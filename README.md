@@ -42,7 +42,8 @@ in the background, without hijacking your cursor or stealing focus.**
 `ocr: true` for apps that draw their own UI) · `find` (search elements by text — the
 fast way to locate a control) · `list_apps` · `list_windows` · `read_text` · `wait_for`
 **Act** `click` · `type_text` · `press_key` · `scroll` · `drag` · `set_value` ·
-`select_text` · `perform_secondary_action` · `click_menu_item`
+`select_text` · `perform_secondary_action` · `click_menu_item` · `batch` (a short
+action sequence in one round-trip, stopping at the first failure)
 **System** `open_app` · `open_url` · `manage_window` · `read_clipboard` · `write_clipboard`
 
 Every interaction tool accepts **either** a stable element id **or** raw screenshot
@@ -50,9 +51,11 @@ coordinates.
 
 Action results return a reduced-resolution screenshot to keep the agent loop fast, and
 skip resending the element tree when the action changed nothing (existing ids stay
-valid). Pass `include_screenshot: false` for tree-only results, `include_state: false`
-for a bare confirmation (fastest), and call `get_app_state` whenever full-resolution
-pixels are needed.
+valid). When the UI did change, results carry a compact diff of what changed, appeared,
+or disappeared — elements that survive a change keep their ids, so everything the agent
+holds stays valid. Pass `include_screenshot: false` for tree-only results,
+`include_state: false` for a bare confirmation (fastest), and call `get_app_state`
+whenever full-resolution pixels are needed.
 
 For the precise production contract across observation, dispatch, coordinate
 spaces, foreground/background guarantees, TCC requirements, stale snapshots, and

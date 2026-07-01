@@ -82,3 +82,7 @@ func waitFor(_ args: [String: Value]) async throws -> CallTool.Result {
 func readText(_ args: [String: Value]) async throws -> CallTool.Result {
     try await readTextImpl(args)
 }
+
+func batch(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await batchImpl(args)
+}

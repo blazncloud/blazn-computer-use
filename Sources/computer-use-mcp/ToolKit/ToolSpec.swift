@@ -16,7 +16,7 @@ struct ToolSpec: Sendable {
 let mutatingToolNames: Set<String> = [
     "click", "type_text", "press_key", "scroll", "drag", "set_value",
     "select_text", "perform_secondary_action", "open_app", "open_url",
-    "manage_window", "click_menu_item", "write_clipboard",
+    "manage_window", "click_menu_item", "write_clipboard", "batch",
 ]
 
 /// Mutating tools scoped to a target app — the canonical set behind three
@@ -26,6 +26,7 @@ let mutatingToolNames: Set<String> = [
 let appScopedToolNames: Set<String> = [
     "click", "type_text", "press_key", "scroll", "drag", "set_value",
     "select_text", "perform_secondary_action", "click_menu_item", "manage_window",
+    "batch",
 ]
 
 func isMutatingTool(_ name: String) -> Bool {
