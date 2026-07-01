@@ -67,7 +67,7 @@ private enum DaemonPathComponent {
     static let secret = "daemon.secret"
 }
 
-struct DaemonRequest: Codable {
+struct DaemonRequest: Codable, Sendable {
     var id: Int
     /// "hello" (handshake), "shutdown", or a tool name.
     var method: String
@@ -80,7 +80,7 @@ struct DaemonRequest: Codable {
     var buildStamp: Double? = nil
 }
 
-struct DaemonResponse: Codable {
+struct DaemonResponse: Codable, Sendable {
     var id: Int
     var isError: Bool? = nil
     var content: [DaemonContent]? = nil
@@ -195,7 +195,7 @@ final class DaemonConnectionLimiter: @unchecked Sendable {
 
 /// Tool.Content is not Codable in a stable wire shape; mirror the two kinds
 /// this server produces.
-struct DaemonContent: Codable {
+struct DaemonContent: Codable, Sendable {
     var type: String  // "text" | "image"
     var text: String?
     var data: String?  // base64
