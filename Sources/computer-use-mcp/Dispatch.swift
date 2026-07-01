@@ -43,6 +43,11 @@ func dispatchTool(name: String, arguments: [String: Value]) async -> CallTool.Re
     }
     await RateLimiter.shared.acquire()
     let start = ContinuousClock.now
+    await SleepAssertion.shared.noteActivity()
+    if let lockMessage = lockedScreenMessage(toolName: name, isLocked: screenIsLocked()) {
+        logToolCall(name, isError: true, since: start)
+        return .text(lockMessage, isError: true)
+    }
     if let yieldMessage = await InterferenceGuard.waitForUserPause(toolName: name, arguments: arguments) {
         logToolCall(name, isError: true, since: start)
         return .text(yieldMessage, isError: true)

@@ -6,7 +6,9 @@ signed Swift binary that exposes macOS computer use as a standard
 CLI, or your own agent at it and the agent can **see and operate the apps on your Mac —
 in the background, without hijacking your cursor or stealing focus.**
 
-> **Status:** early development. macOS only. Local use while the Mac is unlocked.
+> **Status:** early development. macOS only. Local use while the Mac is unlocked
+> (the system is kept from idle-sleeping during active sessions; if the screen
+> locks, mutating tools pause with a recoverable error until the user unlocks).
 
 ## Why it's different
 
@@ -136,6 +138,7 @@ key in `~/.config/computer-use-mcp.json` (env wins):
 | `app_lease_seconds` | How long an app stays leased to a session after its last action (default 10). |
 | `no_interference_yield` | Disable yielding to real user input (yield is on by default). |
 | `interference_idle_seconds` | Hardware quiet time required before acting in the app the user is working in, or via the global cursor (default 1; 0 disables). |
+| `no_sleep_assertion` | Do not hold a prevent-idle-sleep assertion while tool calls are flowing. |
 | `log` / `COMPUTER_USE_MCP_LOG=1` | Per-tool-call stderr log lines (name, ok/error, duration). |
 | `max_actions_per_sec` | Optional global throttle on tool calls (off by default). |
 
