@@ -127,6 +127,7 @@ key in `~/.config/computer-use-mcp.json` (env wins):
 | --- | --- |
 | `cursor` / `COMPUTER_USE_MCP_CURSOR=0` | Hide the animated agent-cursor overlay (on by default; set 0 for headless/CI). |
 | `cursor_idle_fade` | Seconds of quiet before the agent cursor fades (default 12). |
+| `status_chip` / `COMPUTER_USE_MCP_STATUS_CHIP=0` | Hide the "Agent working" pill shown on the primary display during activity (on by default). |
 | `no_safety` / `COMPUTER_USE_MCP_NO_SAFETY=1` | Disable the safety policy entirely. |
 | `confirm_apps` | Apps (name or bundle id) where every action needs `confirm`. |
 | `destructive` | Extra destructive label substrings to gate. |

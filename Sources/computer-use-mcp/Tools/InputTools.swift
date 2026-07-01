@@ -106,6 +106,7 @@ func dragImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     )
     await AgentCursor.shared.glide(to: from)
     let tier = await deliverDrag(from: from, to: to, context: context)
+    await AgentCursor.shared.pulse(at: to)
     try? await Task.sleep(for: .milliseconds(80))
 
     return try await stateResult(

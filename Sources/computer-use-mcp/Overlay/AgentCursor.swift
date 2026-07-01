@@ -39,6 +39,14 @@ actor AgentCursor {
         _ = await send("ping\n", spawningIfNeeded: false)
     }
 
+    /// Ripple at a global top-left point after an action landed there, so the
+    /// user sees the click itself, not just the cursor arriving. Never spawns
+    /// the helper: a glide always precedes the actions that pulse.
+    func pulse(at point: CGPoint) async {
+        guard enabled else { return }
+        _ = await send("pulse \(Int(point.x)) \(Int(point.y))\n", spawningIfNeeded: false)
+    }
+
     private func send(_ command: String, spawningIfNeeded: Bool) async -> Bool {
         for attempt in 0..<2 {
             if writeFD < 0 {

@@ -62,6 +62,13 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
     private var cursorLayers: [CALayer] = []
     private var displayLink: CADisplayLink?
 
+    /// "Agent working" pill on the primary display, shown while commands are
+    /// flowing. Disable with status_chip / COMPUTER_USE_MCP_STATUS_CHIP=0.
+    private var chipLayer: CALayer?
+    private var chipVisible = false
+    private var chipFadeWork: DispatchWorkItem?
+    private let chipEnabled = Config.bool("status_chip") != false
+
     private var visible = false
     private var animating = false
     /// Pending idle fade-out, postponed by any glide or keep-alive ping. The
@@ -121,6 +128,13 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
             layer.opacity = visible ? 1 : 0
             host.layer?.addSublayer(layer)
 
+            if chipEnabled, screen.frame.origin == .zero {
+                let chip = makeChipLayer(screenSize: screen.frame.size, scale: screen.backingScaleFactor)
+                chip.opacity = chipVisible ? 1 : 0
+                host.layer?.addSublayer(chip)
+                chipLayer = chip
+            }
+
             panel.contentView = host
             panel.orderFrontRegardless()
             panels.append(panel)
@@ -136,6 +150,7 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         for panel in panels { panel.orderOut(nil) }
         panels.removeAll()
         cursorLayers.removeAll()
+        chipLayer = nil
         buildPanels()
     }
 
@@ -199,12 +214,19 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
             }
             return
         }
-        guard parts.first == "move", parts.count == 3,
-            let x = Double(parts[1]), let y = Double(parts[2])
-        else { return }
+        guard parts.count == 3, let x = Double(parts[1]), let y = Double(parts[2]) else { return }
         let point = CGPoint(x: x, y: y)
-        DispatchQueue.main.async {
-            (NSApp.delegate as? OverlayController)?.beginGlide(toGlobalTopLeft: point)
+        switch parts.first {
+        case "move":
+            DispatchQueue.main.async {
+                (NSApp.delegate as? OverlayController)?.beginGlide(toGlobalTopLeft: point)
+            }
+        case "pulse":
+            DispatchQueue.main.async {
+                (NSApp.delegate as? OverlayController)?.showPulse(atGlobalTopLeft: point)
+            }
+        default:
+            break
         }
     }
 
@@ -228,6 +250,7 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
 
     fileprivate func beginGlide(toGlobalTopLeft point: CGPoint) {
         lastCommand = Date()
+        showChip()
         // Quartz global top-left → AppKit bottom-left, using the PRIMARY screen
         // height so it's correct on any display in the unified coordinate plane.
         targetPoint = CGPoint(x: point.x, y: primaryHeight - point.y)
@@ -270,9 +293,11 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
     }
 
     /// Keep-alive ping from any server: postpone the idle fade (if a fade is
-    /// pending) and the idle self-exit.
+    /// pending) and the idle self-exit. Perception-only work never summons the
+    /// cursor, but it does show the status chip — the agent IS working.
     fileprivate func noteActivity() {
         lastCommand = Date()
+        showChip()
         guard visible, fadeWork != nil else { return }
         fadeWork?.cancel()
         scheduleIdleFade()
@@ -300,6 +325,115 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         }
         for layer in cursorLayers { layer.opacity = value }
         CATransaction.commit()
+    }
+
+    // MARK: click pulse
+
+    /// Expanding ring at the point an action just landed — the visual "the
+    /// click happened", distinct from the cursor arriving.
+    fileprivate func showPulse(atGlobalTopLeft point: CGPoint) {
+        lastCommand = Date()
+        showChip()
+        let global = CGPoint(x: point.x, y: primaryHeight - point.y)
+        for panel in panels {
+            let local = CGPoint(x: global.x - panel.frame.origin.x, y: global.y - panel.frame.origin.y)
+            guard panel.contentView?.bounds.contains(local) == true,
+                let host = panel.contentView?.layer
+            else { continue }
+
+            let radius: CGFloat = 13
+            let ring = CAShapeLayer()
+            ring.path = CGPath(
+                ellipseIn: CGRect(x: -radius, y: -radius, width: radius * 2, height: radius * 2),
+                transform: nil
+            )
+            ring.fillColor = nil
+            ring.strokeColor = NSColor.systemBlue.cgColor
+            ring.lineWidth = 3
+            ring.position = local
+            host.addSublayer(ring)
+
+            let scale = CABasicAnimation(keyPath: "transform.scale")
+            scale.fromValue = 0.35
+            scale.toValue = 1.8
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0.95
+            fade.toValue = 0.0
+            let group = CAAnimationGroup()
+            group.animations = [scale, fade]
+            group.duration = 0.45
+            group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            group.fillMode = .forwards
+            group.isRemovedOnCompletion = false
+            ring.add(group, forKey: "pulse")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+                ring.removeFromSuperlayer()
+            }
+        }
+    }
+
+    // MARK: status chip
+
+    /// Show the "Agent working" pill; it fades after the same quiet period as
+    /// the cursor. Every command (glide, pulse, keep-alive ping) refreshes it.
+    private func showChip() {
+        guard chipEnabled, let chipLayer else { return }
+        if !chipVisible {
+            chipVisible = true
+            setOpacity(1, of: chipLayer, animated: true)
+        }
+        chipFadeWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let chip = self.chipLayer else { return }
+            self.chipVisible = false
+            self.setOpacity(0, of: chip, animated: true)
+        }
+        chipFadeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + idleFadeDelay, execute: work)
+    }
+
+    private func setOpacity(_ value: Float, of layer: CALayer, animated: Bool) {
+        CATransaction.begin()
+        if animated {
+            CATransaction.setAnimationDuration(0.3)
+        } else {
+            CATransaction.setDisableActions(true)
+        }
+        layer.opacity = value
+        CATransaction.commit()
+    }
+
+    /// Pill with a blue dot and "Agent working", top-right of the primary
+    /// display just below the menu bar. Click-through like everything else.
+    private func makeChipLayer(screenSize: CGSize, scale: CGFloat) -> CALayer {
+        let size = CGSize(width: 138, height: 28)
+        let chip = CALayer()
+        chip.frame = CGRect(
+            x: screenSize.width - size.width - 16,
+            y: screenSize.height - size.height - 40,
+            width: size.width, height: size.height
+        )
+        chip.backgroundColor = NSColor.black.withAlphaComponent(0.72).cgColor
+        chip.cornerRadius = size.height / 2
+        chip.borderWidth = 1
+        chip.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
+
+        let dot = CALayer()
+        dot.frame = CGRect(x: 12, y: (size.height - 8) / 2, width: 8, height: 8)
+        dot.cornerRadius = 4
+        dot.backgroundColor = NSColor.systemBlue.cgColor
+        chip.addSublayer(dot)
+
+        let text = CATextLayer()
+        text.string = "Agent working"
+        text.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        text.fontSize = 12
+        text.foregroundColor = NSColor.white.cgColor
+        text.alignmentMode = .left
+        text.contentsScale = scale
+        text.frame = CGRect(x: 28, y: 6.5, width: size.width - 36, height: 16)
+        chip.addSublayer(text)
+        return chip
     }
 
     private func easeOutCubic(_ t: Double) -> Double {

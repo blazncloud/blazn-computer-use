@@ -35,6 +35,9 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         throw ToolError.invalidArguments("mouse_button \"\(buttonName)\" is not supported.")
     }
 
+    // The click landed: ripple the overlay at the point so the user sees it.
+    if let point = target.point { await AgentCursor.shared.pulse(at: point) }
+
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle, note: outcome.note,
         screenshot: screenshotDetail(args),
