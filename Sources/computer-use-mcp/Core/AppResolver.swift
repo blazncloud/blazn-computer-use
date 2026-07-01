@@ -44,9 +44,13 @@ private final class RunningApplicationsCache: @unchecked Sendable {
 
     private static func scan() -> [NSRunningApplication] {
         var pids = [pid_t](repeating: 0, count: 8192)
-        let bytes = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
-        guard bytes > 0 else { return NSWorkspace.shared.runningApplications }
-        let count = min(Int(bytes) / MemoryLayout<pid_t>.size, pids.count)
+        // Despite the header's byte-oriented wording, proc_listallpids returns
+        // the number of PIDs written (verified empirically: 786 returned for
+        // 785 processes). Dividing by the pid size here silently dropped 3/4
+        // of all processes and made login-time apps unresolvable.
+        let returned = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        guard returned > 0 else { return NSWorkspace.shared.runningApplications }
+        let count = min(Int(returned), pids.count)
         return pids.prefix(count).compactMap { pid in
             guard pid > 0, let app = NSRunningApplication(processIdentifier: pid),
                 app.activationPolicy != .prohibited

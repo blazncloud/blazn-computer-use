@@ -54,6 +54,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.identifier = NSUserInterfaceItemIdentifier("backgroundControlFixtureWindow")
         window.contentView = content
         window.isReleasedWhenClosed = false
+        // Join every Space: with "Displays have separate Spaces" the eval
+        // otherwise depends on which Space the user happens to be on —
+        // windows on inactive Spaces are under-reported by accessibility.
+        window.collectionBehavior = [.canJoinAllSpaces]
         window.orderFront(nil)
     }
 

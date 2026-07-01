@@ -146,12 +146,11 @@ private func postToTarget(down: CGEvent, up: CGEvent, at point: CGPoint, context
 private func bridgedWindowEvent(
     from cgEvent: CGEvent, point: CGPoint, windowNumber: CGWindowID, windowFrame: CGRect
 ) -> CGEvent? {
-    guard let screenHeight = NSScreen.screens.first?.frame.height else { return nil }
     let localX = point.x - windowFrame.origin.x
-    // Convert global top-left Y to window-local bottom-left Y.
-    let globalBottomLeftY = screenHeight - point.y
-    let windowBottomLeftY = screenHeight - (windowFrame.origin.y + windowFrame.height)
-    let localY = globalBottomLeftY - windowBottomLeftY
+    // Window-local bottom-left Y: the distance up from the window's bottom
+    // edge. The screen-height terms of the top-left→bottom-left flip cancel,
+    // so this holds on any display — offset and negative origins included.
+    let localY = windowFrame.maxY - point.y
 
     let nsType: NSEvent.EventType
     switch cgEvent.type {

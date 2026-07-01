@@ -122,7 +122,11 @@ func stateResult(
         // one the agent saw, so its ids and coordinates stay comparable.
         pixelsPerPoint = prior.pixelsPerPoint
     } else {
-        pixelsPerPoint = 1
+        // First contact without a capture (window on an inactive Space, or
+        // Screen Recording missing): use the window's display scale so boxes
+        // match a later real capture instead of being ~2x off on Retina.
+        pixelsPerPoint = displayScale(
+            atGlobalTopLeft: CGPoint(x: window.frame.midX, y: window.frame.midY))
     }
 
     // Chromium/Electron apps need an assistive client on record before they

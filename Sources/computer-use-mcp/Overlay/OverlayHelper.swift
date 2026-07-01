@@ -356,6 +356,7 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
             ring.fillColor = nil
             ring.strokeColor = NSColor.systemBlue.cgColor
             ring.lineWidth = 3
+            ring.contentsScale = panel.backingScaleFactor
             ring.position = local
             host.addSublayer(ring)
 
