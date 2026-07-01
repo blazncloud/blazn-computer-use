@@ -26,6 +26,47 @@ import Testing
         #expect(decoded.authenticated == true)
     }
 
+    @Test func handshakeAcceptsSameVersionAndCurrentBuild() {
+        #expect(
+            daemonHandshakeAccepts(
+                replyVersion: "0.2.0", replyAuthenticated: true, replyBuildStamp: 100,
+                localVersion: "0.2.0", localBuildStamp: 100
+            ))
+        #expect(
+            daemonHandshakeAccepts(
+                replyVersion: "0.2.0", replyAuthenticated: true, replyBuildStamp: 200,
+                localVersion: "0.2.0", localBuildStamp: 100
+            ))
+    }
+
+    @Test func handshakeRetiresOlderOrUnstampedDaemonBuilds() {
+        // Same semantic version but the daemon binary is older: hand over.
+        #expect(
+            !daemonHandshakeAccepts(
+                replyVersion: "0.2.0", replyAuthenticated: true, replyBuildStamp: 50,
+                localVersion: "0.2.0", localBuildStamp: 100
+            ))
+        // Pre-buildStamp daemons report nothing: retire once, then converge.
+        #expect(
+            !daemonHandshakeAccepts(
+                replyVersion: "0.2.0", replyAuthenticated: true, replyBuildStamp: nil,
+                localVersion: "0.2.0", localBuildStamp: 100
+            ))
+    }
+
+    @Test func handshakeRejectsVersionMismatchOrUnauthenticated() {
+        #expect(
+            !daemonHandshakeAccepts(
+                replyVersion: "0.1.0", replyAuthenticated: true, replyBuildStamp: 100,
+                localVersion: "0.2.0", localBuildStamp: 100
+            ))
+        #expect(
+            !daemonHandshakeAccepts(
+                replyVersion: "0.2.0", replyAuthenticated: nil, replyBuildStamp: 100,
+                localVersion: "0.2.0", localBuildStamp: 100
+            ))
+    }
+
     @Test func daemonResponsePreservesCallToolMetadata() throws {
         let result = CallTool.Result(
             content: [.text(text: "ok", annotations: nil, _meta: nil)],

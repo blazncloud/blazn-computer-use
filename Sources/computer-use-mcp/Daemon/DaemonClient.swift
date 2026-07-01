@@ -57,13 +57,21 @@ actor DaemonClient {
     /// shut down (so a fresh one can take over) and returns false.
     private func handshake() async throws -> Bool {
         let token = try daemonAuthToken()
-        let reply = try await send(DaemonRequest(id: allocateID(), method: "hello", version: version, authToken: token))
+        let reply = try await send(
+            DaemonRequest(
+                id: allocateID(), method: "hello", version: version, authToken: token,
+                buildStamp: executableBuildStamp
+            ))
         if reply.isError == true {
             let message = reply.content?.compactMap(\.text).joined(separator: "\n")
                 ?? "daemon authentication failed"
             throw ToolError.failed(message)
         }
-        if reply.version == version, reply.authenticated == true { return true }
+        if daemonHandshakeAccepts(
+            replyVersion: reply.version, replyAuthenticated: reply.authenticated,
+            replyBuildStamp: reply.buildStamp,
+            localVersion: version, localBuildStamp: executableBuildStamp
+        ) { return true }
         guard reply.version != nil else {
             throw ToolError.failed("daemon handshake did not return a version")
         }

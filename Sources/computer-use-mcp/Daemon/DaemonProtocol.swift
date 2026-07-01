@@ -76,6 +76,8 @@ struct DaemonRequest: Codable {
     var version: String? = nil
     /// Shared local bearer token proving the client read the per-user daemon secret.
     var authToken: String? = nil
+    /// Shim executable mtime, sent with "hello" (see executableBuildStamp).
+    var buildStamp: Double? = nil
 }
 
 struct DaemonResponse: Codable {
@@ -86,6 +88,23 @@ struct DaemonResponse: Codable {
     var version: String? = nil
     /// Present and true only after the daemon accepted the auth token.
     var authenticated: Bool? = nil
+    /// Daemon executable mtime (see executableBuildStamp).
+    var buildStamp: Double? = nil
+}
+
+/// Whether a shim should keep this daemon ("newest build wins"). A daemon
+/// running a different semantic version, or built before the shim's binary
+/// (including old daemons that report no build stamp), is asked to step down.
+func daemonHandshakeAccepts(
+    replyVersion: String?,
+    replyAuthenticated: Bool?,
+    replyBuildStamp: Double?,
+    localVersion: String,
+    localBuildStamp: Double
+) -> Bool {
+    replyVersion == localVersion
+        && replyAuthenticated == true
+        && (replyBuildStamp ?? 0) >= localBuildStamp
 }
 
 enum DaemonProtocolLimits {

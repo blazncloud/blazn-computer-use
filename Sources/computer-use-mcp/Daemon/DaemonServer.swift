@@ -242,7 +242,11 @@ private func handle(
             return unauthorized()
         }
         authorization.markAuthenticated()
-        respond(DaemonResponse(id: request.id, version: version, authenticated: true))
+        respond(
+            DaemonResponse(
+                id: request.id, version: version, authenticated: true,
+                buildStamp: executableBuildStamp
+            ))
         return .keepOpen
     case "shutdown":
         guard authorization.isAuthenticated,
