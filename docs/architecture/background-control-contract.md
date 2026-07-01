@@ -35,6 +35,10 @@ guidance instead of silently switching to a foreground path.
   the browser or document handler.
 - `manage_window raise` requires `allow_focus_change`. Other window actions may
   change visible state and still report telemetry so clients can recover.
+- `batch` and `run_skill` dispatch each step through the same funnel as the
+  underlying tool, so every step inherits that tool's background guarantees
+  and per-step gates; neither tool grants an escalation its steps could not
+  request individually.
 
 ## Result Telemetry
 
@@ -46,6 +50,7 @@ Mutating tools attach MCP result metadata under `computer-use-mcp/focus`:
   "focus_change_allowed": false,
   "cursor_movement_allowed": false,
   "delivery_tier": "tier1-ax-attribute",
+  "ui_changed": true,
   "frontmost_before": {
     "name": "Finder",
     "bundle_identifier": "com.apple.finder",
@@ -62,6 +67,40 @@ Mutating tools attach MCP result metadata under `computer-use-mcp/focus`:
 Generic MCP clients should treat `focus_changed:true` with
 `focus_change_allowed:false` as a regression signal.
 
+`ui_changed` reports whether the action visibly changed the target app's tree.
+Background event delivery (tiers 2-3) has no macOS success signal, so this is
+the honest substitute: when such a delivery produced no visible UI change, the
+result text also appends a dropped-event hint naming the explicit escalation
+to retry (`allow_global_cursor:true` plus `allow_focus_change:true`). AX-tier
+actions fail loudly and get no hint. `type_text` additionally reads the
+element's value back after insertion and warns when the typed text is absent
+(skipped for secure fields and huge documents).
+
+## Yielding To The Human
+
+Background-safe delivery is not enough when the user is actively working in
+the same app. App-scoped mutating tools wait briefly and then return a
+recoverable error when the target app is frontmost and real hardware input was
+seen within `interference_idle_seconds` (default 1 second), so the agent's
+synthetic events never interleave with the user's real ones inside the same
+app. Global-cursor and global-keyboard escalations yield on any recent user
+activity, regardless of which app is frontmost. Actions on apps the user is
+not using are never blocked.
+
+User activity is read from CGEventSource HID system state, which the server's
+own synthetic per-pid/per-window events do not update, so the agent cannot
+trip its own guard. Disable with `no_interference_yield` or
+`interference_idle_seconds:0`.
+
+## Screen Lock And Sleep
+
+The engine holds a prevent-idle-sleep assertion while tool calls are flowing
+and releases it after a quiet period, so long background tasks do not die to
+idle sleep; the display may still sleep because background delivery does not
+need it. Disable with `no_sleep_assertion`. When the screen is actually
+locked, mutating tools pause with a recoverable error while read-only
+perception stays available — unlocking is deliberately the user's decision.
+
 ## Deterministic Evaluation
 
 Use the repo-owned fixture app for deterministic background-control checks:
@@ -74,7 +113,10 @@ python3 scripts/live_background_eval.py --live
 The default command is CI-safe and skips live GUI work. `--live` builds a small
 AppKit fixture with stable Accessibility identifiers, launches it in the
 background, mutates the fixture through MCP, and asserts the frontmost app from
-before setup remains frontmost while the fixture value changes.
+before setup remains frontmost while the fixture value changes. The live eval
+extracts element ids once from the initial state and drives every subsequent
+action from them, so it also exercises the id-stability contract: ids must
+survive the UI changes the eval itself causes.
 
 TextEdit, Finder, Safari, Electron, and third-party apps remain compatibility
 smoke targets, not the deterministic source of truth.

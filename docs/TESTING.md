@@ -32,15 +32,21 @@ env CLANG_MODULE_CACHE_PATH=.build/module-cache swift test
 
 | Tier | Command or surface | Use for | Notes |
 | --- | --- | --- | --- |
-| Unit | `swift test` | Pure logic: keymaps, coordinates, tree shaping, safety policy | Must stay free of live GUI, TCC, clipboard, and input side effects. |
+| Unit | `swift test` | Pure logic: keymaps, coordinates, tree shaping, safety policy, plus the newer deterministic suites for interference-yield decisions, URL policy matching, snapshot diffs and element-id stability, skills validation/templating/locator resolution, and batch validation | Must stay free of live GUI, TCC, clipboard, and input side effects. |
 | Build | `swift build` | Compile/package sanity | Required before CLI smoke checks. |
 | CLI smoke | `version`, `help`, `health_report --json` | Command dispatch, binary startup, and non-mutating identity diagnostics | Safe for CI; default `health_report` reports missing permissions and skips capture probing instead of prompting. |
 | Release preflight | `python3 scripts/preflight.py` | Single JSON report for helper tests, build, unit, CLI smoke, health report, and dry-run eval gates | Safe for CI unless live flags are passed. |
 | App-bundle runtime | `python3 scripts/preflight.py --use-app-bundle` | Build the `.app` wrapper and run non-live CLI/dry-run checks through its executable | Local/self-hosted; useful for stable-identity preflight without live GUI mutation. |
 | Local MCP smoke | `serve` or `call ...` against a real app | Tool-contract or runtime changes | Requires explicit user approval because it can inspect or operate local apps. |
-| Deterministic background eval | `python3 scripts/live_background_eval.py --live` | Background mutation while the current frontmost app is preserved | Local/self-hosted only; builds and launches the fixture app in the background. |
+| Deterministic background eval | `python3 scripts/live_background_eval.py --live` | Background mutation while the current frontmost app is preserved | Local/self-hosted only; builds and launches the fixture app in the background. Extracts element ids once up front and drives every action from them, so it also proves id stability across UI changes. |
 | Real-app matrix | `python3 scripts/real_app_smoke.py --live` | Read-only Finder compatibility plus TextEdit background stdio behavior | Local/self-hosted only; opens real apps and depends on TCC grants. |
 | Live demo | `python3 scripts/e2e_demo.py --live` | End-to-end stdio, app state, background input | Local-only; launches TextEdit without activation and fails if frontmost focus changes. Do not run on hosted CI. |
+
+The server-side gates (interference yield, URL policy, screen-lock pause) and
+the post-action state contract (snapshot diffs, element-id survival, batch
+validation, skills validation/templating/locators) all have deterministic unit
+suites under `Tests/`; changes to those surfaces should extend the
+corresponding suite before reaching a live tier.
 
 ## CI Expectations
 
