@@ -60,7 +60,7 @@ func captureWindow(pid: pid_t, title: String?, frame: CGRect, detail: Screenshot
     }
 }
 
-/// SCShareableContent enumerates every on-screen window in the system through
+/// SCShareableContent enumerates every shareable window in the system through
 /// replayd — the most expensive part of a capture. Within a burst of actions
 /// the window list barely changes, so it is cached briefly; a request the
 /// cache cannot satisfy (new window, new dialog, new title) refetches.
@@ -81,16 +81,24 @@ private actor ShareableContentCache {
                 return WindowList(windows: cached)
             }
         }
-        // On-screen windows only: the target must be on-screen to capture a
-        // useful image, and this avoids enumerating off-screen windows.
-        let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+        // Off-screen windows included: with "Displays have separate Spaces" a
+        // window on an inactive Space is not "on screen", yet SCK can still
+        // capture it (docs/research/multi-display-audit.md, Finding 2). The
+        // wider list also contains minimized and zero-sized bookkeeping
+        // windows, which filter(pid:) screens out.
+        let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false)
         windows = content.windows
         fetchedAt = Date()
         return WindowList(windows: filter(pid: pid))
     }
 
     private func filter(pid: pid_t) -> [SCWindow] {
-        windows.filter { $0.owningApplication?.processID == pid && $0.windowLayer == 0 }
+        // Degenerate bounds mark bookkeeping windows (event taps, IME hosts)
+        // that off-screen enumeration surfaces; they capture as blank images.
+        windows.filter {
+            $0.owningApplication?.processID == pid && $0.windowLayer == 0
+                && $0.frame.width >= 1 && $0.frame.height >= 1
+        }
     }
 }
 
@@ -102,15 +110,15 @@ private func captureWindowUnbounded(
         throw ToolError.failed("No capturable window found for pid \(pid).")
     }
 
-    let window: SCWindow
-    if let title, let match = appWindows.first(where: { $0.title == title }) {
-        window = match
-    } else {
-        // Fall back to the window whose frame best matches the AX window frame.
-        window = appWindows.min { lhs, rhs in
-            distance(lhs.frame, frame) < distance(rhs.frame, frame)
-        }!
-    }
+    // Prefer title matches; off-screen enumeration can list several same-pid
+    // windows with the same title (other Spaces, minimized copies), so the AX
+    // window frame disambiguates. With no title match, fall back to the
+    // window whose frame best matches the AX window frame.
+    let titleMatches = title.map { title in appWindows.filter { $0.title == title } } ?? []
+    let candidates = titleMatches.isEmpty ? appWindows : titleMatches
+    let window = candidates.min { lhs, rhs in
+        distance(lhs.frame, frame) < distance(rhs.frame, frame)
+    }!
 
     let filter = SCContentFilter(desktopIndependentWindow: window)
 
