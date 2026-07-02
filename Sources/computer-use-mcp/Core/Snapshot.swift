@@ -304,7 +304,7 @@ func resolveElement(_ element: SnapshotElement, in window: AXUIElement) async th
             if matchesIdentity(resolved, of: element) {
                 return resolved
             }
-            let liveLabel = elementLabel(resolved) ?? "no label"
+            let liveLabel = snapshotLabel(resolved, role: axRole(resolved)) ?? "no label"
             lastFailure =
                 "the element at path \(describePath(element.path)) is now "
                 + "\(axRole(resolved)) \"\(liveLabel)\", not what \(element.id) referred to"
@@ -334,18 +334,26 @@ func requireAppAlive(_ app: ResolvedApp) throws {
     }
 }
 
-private func elementLabel(_ element: AXUIElement) -> String? {
-    axString(element, kAXTitleAttribute)
-        ?? axString(element, kAXDescriptionAttribute)
-        ?? axString(element, "AXPlaceholderValue")
+private func matchesIdentity(_ live: AXUIElement, of element: SnapshotElement) -> Bool {
+    let role = axRole(live)
+    return elementIdentityMatches(
+        liveRole: role, liveLabel: snapshotLabel(live, role: role),
+        expectedRole: element.role, expectedLabel: element.label
+    )
 }
 
-private func matchesIdentity(_ live: AXUIElement, of element: SnapshotElement) -> Bool {
-    guard axRole(live) == element.role else { return false }
-    // Only enforce label identity when the snapshot had one; unlabeled
-    // containers are identified by structure alone.
-    guard let expected = element.label, !expected.isEmpty else { return true }
-    return elementLabel(live) == expected
+/// Pure identity rule behind the stale-element re-check. Label identity is
+/// only enforced when the snapshot had one (unlabeled containers are
+/// identified by structure alone) and the role is not text entry — a text
+/// field's label tracks its contents, so a mismatch there is churn, not a
+/// different control.
+func elementIdentityMatches(
+    liveRole: String, liveLabel: String?, expectedRole: String, expectedLabel: String?
+) -> Bool {
+    guard liveRole == expectedRole else { return false }
+    guard let expected = expectedLabel, !expected.isEmpty else { return true }
+    if isTextEntryRole(expectedRole) { return true }
+    return liveLabel == expected
 }
 
 private func walkLocator(_ path: [LocatorStep], from root: AXUIElement) -> AXUIElement? {

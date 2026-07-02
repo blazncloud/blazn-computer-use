@@ -65,11 +65,7 @@ func buildTree(
         }
 
         let role = axRole(element)
-        let label = axString(element, kAXTitleAttribute)
-            ?? axString(element, kAXDescriptionAttribute)
-            ?? axString(element, "AXPlaceholderValue")
-            ?? informativeRoleDescription(
-                role: role, description: axString(element, kAXRoleDescriptionAttribute))
+        let label = snapshotLabel(element, role: role)
 
         // Wrappers (never the tree root) pass their outline slot straight to
         // their children; childless wrappers vanish entirely.
@@ -120,6 +116,18 @@ func buildTree(
         )
     }
     return BuiltTree(text: lines.joined(separator: "\n"), elements: elements)
+}
+
+/// Label as the snapshot stores it: title, description, placeholder, then an
+/// informative role description. The stale-element identity re-check
+/// (matchesIdentity in Snapshot.swift) must derive the live label through
+/// this same chain, or elements labeled by a late fallback can never match.
+func snapshotLabel(_ element: AXUIElement, role: String) -> String? {
+    axString(element, kAXTitleAttribute)
+        ?? axString(element, kAXDescriptionAttribute)
+        ?? axString(element, "AXPlaceholderValue")
+        ?? informativeRoleDescription(
+            role: role, description: axString(element, kAXRoleDescriptionAttribute))
 }
 
 /// Default role descriptions that don't echo their role name and never add

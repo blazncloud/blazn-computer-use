@@ -3,6 +3,35 @@ import Testing
 
 @testable import computer_use_mcp
 
+@Suite struct ElementIdentityTests {
+    @Test func roleAndLabelIdentityForOrdinaryControls() {
+        #expect(elementIdentityMatches(
+            liveRole: "AXButton", liveLabel: "Save", expectedRole: "AXButton", expectedLabel: "Save"))
+        #expect(!elementIdentityMatches(
+            liveRole: "AXButton", liveLabel: "Cancel", expectedRole: "AXButton", expectedLabel: "Save"))
+        #expect(!elementIdentityMatches(
+            liveRole: "AXCheckBox", liveLabel: "Save", expectedRole: "AXButton", expectedLabel: "Save"))
+        // Unlabeled snapshot elements are identified by structure alone.
+        #expect(elementIdentityMatches(
+            liveRole: "AXGroup", liveLabel: "anything", expectedRole: "AXGroup", expectedLabel: nil))
+    }
+
+    @Test func textEntryIdentityIgnoresChurningLabel() {
+        // The reproduced failure: the snapshot labeled the text area by its
+        // generic description, then the label vanished once it had content.
+        #expect(elementIdentityMatches(
+            liveRole: "AXTextArea", liveLabel: nil,
+            expectedRole: "AXTextArea", expectedLabel: "text entry area"))
+        #expect(elementIdentityMatches(
+            liveRole: "AXTextField", liveLabel: "Search",
+            expectedRole: "AXTextField", expectedLabel: "text entry area"))
+        // Role is still identity for text entries.
+        #expect(!elementIdentityMatches(
+            liveRole: "AXStaticText", liveLabel: nil,
+            expectedRole: "AXTextArea", expectedLabel: "text entry area"))
+    }
+}
+
 private let windowStep: [LocatorStep] = []
 private let fieldPath = [LocatorStep(role: "AXTextField", indexOfRole: 0)]
 private let buttonPath = [LocatorStep(role: "AXButton", indexOfRole: 0)]

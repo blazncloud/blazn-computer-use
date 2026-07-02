@@ -215,6 +215,15 @@ func axRole(_ element: AXUIElement) -> String {
     axString(element, kAXRoleAttribute) ?? "AXUnknown"
 }
 
+/// Roles whose accessibility label tracks the field's contents rather than a
+/// fixed name: macOS drops AXDescription once a field is filled, and the
+/// placeholder or value shows through the label fallbacks instead. Their
+/// label is state, not identity — locators and identity checks anchor these
+/// by role + structure.
+func isTextEntryRole(_ role: String) -> Bool {
+    ["AXTextField", "AXTextArea", "AXSecureTextField", "AXComboBox"].contains(role)
+}
+
 /// Best human-readable label for an element, used by the safety policy and
 /// result notes. Falls back through title, description, help, an associated
 /// title element, then value.
