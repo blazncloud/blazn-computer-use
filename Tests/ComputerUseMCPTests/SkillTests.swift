@@ -140,6 +140,51 @@ private func sampleSkill(name: String = "file-report", steps: [SkillStep]? = nil
         #expect(reason.contains("\"Share\""))
     }
 
+    // The text-element case: macOS drops AXDescription once a field has
+    // content, so a text-entry label recorded or frozen at save time churns
+    // by the next replay. Structure must still resolve these.
+    @Test func textEntryLocatorSurvivesLabelChurnViaPath() {
+        let snapshot = snapshot(elements: [
+            SnapshotElement(
+                id: "e0@s1", role: "AXTextArea", label: nil, path: fieldPath, frame: [0, 0, 1, 1])
+        ])
+        let locator = SkillLocator(role: "AXTextArea", label: "text entry area", path: fieldPath)
+        #expect(resolveSkillLocator(locator, in: snapshot) == .found(snapshot.elements[0], viaFallback: false))
+    }
+
+    @Test func textEntryLocatorSurvivesLabelChurnViaUniqueRole() {
+        let snapshot = snapshot(elements: [
+            SnapshotElement(id: "e0@s1", role: "AXButton", label: "Send", path: fieldPath, frame: [0, 0, 1, 1]),
+            SnapshotElement(
+                id: "e1@s1", role: "AXTextArea", label: "Draft body",
+                path: [LocatorStep(role: "AXTextArea", indexOfRole: 0)], frame: [0, 0, 1, 1]),
+        ])
+        // No saved path and the label now shows the field's content: the sole
+        // text area still resolves, flagged for path healing.
+        let locator = SkillLocator(role: "AXTextArea", label: "text entry area")
+        #expect(resolveSkillLocator(locator, in: snapshot) == .found(snapshot.elements[1], viaFallback: true))
+    }
+
+    @Test func textEntryLeniencyPrefersStrictLabelMatchAndKeepsAmbiguityLoud() {
+        let snapshot = snapshot(elements: [
+            SnapshotElement(id: "e0@s1", role: "AXTextField", label: "To:", path: fieldPath, frame: [0, 0, 1, 1]),
+            SnapshotElement(
+                id: "e1@s1", role: "AXTextField", label: "Subject:",
+                path: [LocatorStep(role: "AXTextField", indexOfRole: 1)], frame: [0, 0, 1, 1]),
+        ])
+        // A stable label that still matches keeps disambiguating two fields.
+        let labeled = SkillLocator(role: "AXTextField", label: "Subject:")
+        #expect(resolveSkillLocator(labeled, in: snapshot) == .found(snapshot.elements[1], viaFallback: true))
+        // A churned label over two fields is genuinely ambiguous — fail loud.
+        guard case .failed(let reason) = resolveSkillLocator(
+            SkillLocator(role: "AXTextField", label: "text entry area"), in: snapshot)
+        else {
+            Issue.record("expected ambiguity failure")
+            return
+        }
+        #expect(reason.contains("no element matching"))
+    }
+
     @Test func missingAndAmbiguousFailWithReasons() {
         let twoButtons = snapshot(elements: [
             SnapshotElement(id: "e0@s1", role: "AXButton", label: "Save", path: fieldPath, frame: [0, 0, 1, 1]),

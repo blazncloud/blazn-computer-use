@@ -146,7 +146,26 @@ extension SnapshotElement: Equatable {
 /// label verified), then a unique role+label match anywhere in the tree.
 /// Failures name the nearest candidates so a repairing agent can usually fix
 /// the step from the report alone.
+///
+/// Text-entry locators get one lenient retry with the label dropped: their
+/// label tracks the field's contents (macOS swaps description, placeholder,
+/// and value as the field fills), so a strict miss there is churn, not a
+/// different control. The retry still requires a path or unique-role match,
+/// so genuinely ambiguous cases keep failing loudly.
 func resolveSkillLocator(
+    _ locator: SkillLocator, in snapshot: AppSnapshot
+) -> SkillLocatorResolution {
+    let strict = resolveSkillLocatorStrictly(locator, in: snapshot)
+    guard case .failed = strict, locator.label != nil, isTextEntryRole(locator.role) else {
+        return strict
+    }
+    let lenient = resolveSkillLocatorStrictly(
+        SkillLocator(role: locator.role, label: nil, path: locator.path), in: snapshot)
+    if case .found = lenient { return lenient }
+    return strict
+}
+
+private func resolveSkillLocatorStrictly(
     _ locator: SkillLocator, in snapshot: AppSnapshot
 ) -> SkillLocatorResolution {
     if let path = locator.path,
