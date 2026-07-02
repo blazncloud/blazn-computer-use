@@ -55,6 +55,7 @@ func makeHealthReport(prompt: Bool, probeCaptureService: Bool) async -> HealthRe
         permissions: permissions,
         captureService: captureService,
         daemon: daemon,
+        telemetry: telemetryDiagnostics(),
         tccAttribution: tccAttributionNote(parent: process.parent),
         recommendedNextAction: action
     )
@@ -149,6 +150,9 @@ struct HealthReport: Codable {
     let permissions: PermissionDiagnostics
     let captureService: CaptureServiceDiagnostic
     let daemon: DaemonDiagnostics
+    /// Absent when no daemon has persisted a telemetry snapshot yet (or
+    /// telemetry is disabled with "no_telemetry").
+    let telemetry: TelemetryReport?
     let tccAttribution: String
     let recommendedNextAction: String
 
@@ -263,6 +267,76 @@ struct CaptureServiceDiagnostic: Codable {
         case .skipped:
             return "skipped"
         }
+    }
+}
+
+/// Telemetry section of the health report, derived from the snapshot the
+/// daemon persists (health_report runs in a separate process, so the
+/// daemon's in-memory counters are not directly visible here). The snapshot
+/// is written at most every 15 seconds, hence the age note.
+private func telemetryDiagnostics(now: Date = Date()) -> TelemetryReport? {
+    let path = telemetrySnapshotPath()
+    guard let snapshot = TelemetrySnapshot.read(atPath: path) else { return nil }
+    return TelemetryReport(snapshot: snapshot, path: path, now: now)
+}
+
+struct TelemetryReport: Codable {
+    let snapshotPath: String
+    let snapshotAgeSeconds: Double
+    let snapshotAgeNote: String
+    let uptimeSeconds: Double
+    let tools: [String: TelemetryToolReport]
+    let firstPerceiveToFirstActSeconds: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case snapshotPath = "snapshot_path"
+        case snapshotAgeSeconds = "snapshot_age_seconds"
+        case snapshotAgeNote = "snapshot_age_note"
+        case uptimeSeconds = "uptime_seconds"
+        case tools
+        case firstPerceiveToFirstActSeconds = "first_perceive_to_first_act_seconds"
+    }
+
+    init(snapshot: TelemetrySnapshot, path: String, now: Date) {
+        let age = max(0, now.timeIntervalSince(snapshot.writtenAt))
+        snapshotPath = path
+        snapshotAgeSeconds = age
+        snapshotAgeNote =
+            "Snapshot written \(Int(age))s ago; the daemon persists at most every 15 seconds."
+        uptimeSeconds = snapshot.uptimeSeconds
+        tools = snapshot.tools.mapValues(TelemetryToolReport.init)
+        firstPerceiveToFirstActSeconds = snapshot.firstPerceiveToFirstActSeconds
+    }
+
+    /// Manual encoding so first_perceive_to_first_act_seconds appears as an
+    /// explicit null before the funnel has been observed, instead of being
+    /// dropped from the JSON.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(snapshotPath, forKey: .snapshotPath)
+        try container.encode(snapshotAgeSeconds, forKey: .snapshotAgeSeconds)
+        try container.encode(snapshotAgeNote, forKey: .snapshotAgeNote)
+        try container.encode(uptimeSeconds, forKey: .uptimeSeconds)
+        try container.encode(tools, forKey: .tools)
+        try container.encode(firstPerceiveToFirstActSeconds, forKey: .firstPerceiveToFirstActSeconds)
+    }
+}
+
+struct TelemetryToolReport: Codable {
+    let calls: Int
+    let errors: Int
+    let meanMs: Double
+
+    enum CodingKeys: String, CodingKey {
+        case calls
+        case errors
+        case meanMs = "mean_ms"
+    }
+
+    init(counter: TelemetryCounter) {
+        calls = counter.calls
+        errors = counter.errors
+        meanMs = counter.meanMs ?? 0
     }
 }
 
