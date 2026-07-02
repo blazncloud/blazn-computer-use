@@ -52,6 +52,14 @@ func compileRecordedEvents(_ events: [RecordedEvent]) -> [SkillStep] {
     return steps
 }
 
+/// Locator label for a recorded click. Text-entry elements get none — their
+/// label is the field's own description/placeholder/content, which churns as
+/// the user types (and would bake user data into the skill); role + structure
+/// anchor them instead.
+func recordedClickLabel(role: String, label: String?) -> String? {
+    isTextEntryRole(role) ? nil : label
+}
+
 /// Modifier chords that make a keyDown a shortcut (press_key) rather than
 /// typed text. Shift alone is just capitalization, so it is not here.
 func keyComboIsShortcut(commandDown: Bool, controlDown: Bool, optionDown: Bool) -> Bool {
@@ -221,7 +229,7 @@ final class SkillRecorder: @unchecked Sendable {
         var label: String?
         if let element = accessibilityElement(at: point, pid: pid) {
             role = axRole(element)
-            label = clickableLabel(element)
+            label = recordedClickLabel(role: role, label: clickableLabel(element))
         }
         lock.lock()
         flushPendingTextLocked()

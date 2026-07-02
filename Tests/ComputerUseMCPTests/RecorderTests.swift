@@ -41,6 +41,14 @@ import Testing
         #expect(compileRecordedEvents([.text("")]).isEmpty)
     }
 
+    @Test func textEntryClicksAnchorByRoleWithoutLabel() {
+        // A text field's clickable label is its description/placeholder/
+        // content — all churn as the user types, so no label is recorded.
+        #expect(recordedClickLabel(role: "AXTextArea", label: "text entry area") == nil)
+        #expect(recordedClickLabel(role: "AXTextField", label: "hello world") == nil)
+        #expect(recordedClickLabel(role: "AXButton", label: "Save") == "Save")
+    }
+
     @Test func shortcutClassification() {
         #expect(keyComboIsShortcut(commandDown: true, controlDown: false, optionDown: false))
         #expect(keyComboIsShortcut(commandDown: false, controlDown: true, optionDown: false))
