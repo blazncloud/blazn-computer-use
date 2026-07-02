@@ -65,7 +65,21 @@ func openAppImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         if (try? targetWindow(for: app, title: nil)) != nil { break }
         try? await Task.sleep(for: .milliseconds(300))
     }
-    if let result = try? await stateResult(app: app, windowTitle: nil, note: "Launched \(app.name).") {
+
+    // activates=false only binds LaunchServices — modern macOS still grants a
+    // freshly launching regular app the activation it requests itself. When
+    // that happens on a background launch, hand focus straight back.
+    var note = "Launched \(app.name)."
+    if !activate, let before = focus.before, before.pid != pid,
+        FrontmostAppSnapshot.current()?.pid == pid,
+        let previous = NSRunningApplication(processIdentifier: before.pid)
+    {
+        previous.activate()
+        try? await Task.sleep(for: .milliseconds(150))
+        note += " It took focus while launching; focus was returned to \(before.name)."
+    }
+
+    if let result = try? await stateResult(app: app, windowTitle: nil, note: note) {
         return result.withFocusTelemetry(focus.finish(deliveryTier: InputTier.launchServices.rawValue))
     }
     return CallTool.Result.text(
