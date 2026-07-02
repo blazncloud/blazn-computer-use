@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Foundation
 import MCP
 
@@ -10,6 +11,25 @@ struct FrontmostAppSnapshot: Equatable {
     let pid: pid_t
 
     static func current() -> FrontmostAppSnapshot? {
+        // NSWorkspace.frontmostApplication is KVO-updated on a serviced run
+        // loop and freezes in the daemon (same failure as its
+        // runningApplications had): the interference guard then pins "the
+        // app the user is working in" to whatever was frontmost at daemon
+        // spawn. The window server is always current: the frontmost app is
+        // the owner of the frontmost normal-layer on-screen window.
+        let windows =
+            CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        for window in windows {
+            guard (window[kCGWindowLayer as String] as? Int) == 0,
+                let pid = window[kCGWindowOwnerPID as String] as? pid_t,
+                let app = NSRunningApplication(processIdentifier: pid)
+            else { continue }
+            return FrontmostAppSnapshot(
+                name: app.localizedName ?? "unknown",
+                bundleIdentifier: app.bundleIdentifier ?? "",
+                pid: pid
+            )
+        }
         guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
         return FrontmostAppSnapshot(
             name: app.localizedName ?? "unknown",
