@@ -49,7 +49,12 @@ def select_tool_binary(explicit_bin: str | None, use_app_bundle: bool) -> str:
 
 
 def run_step(
-    name: str, args: list[str], timeout: int, *, env: dict[str, str] | None = None
+    name: str,
+    args: list[str],
+    timeout: int,
+    *,
+    env: dict[str, str] | None = None,
+    tail_limit: int = 4000,
 ) -> dict[str, object]:
     start = time.perf_counter()
     try:
@@ -68,8 +73,8 @@ def run_step(
             "command": args,
             "latency_ms": round((time.perf_counter() - start) * 1000, 3),
             "returncode": completed.returncode,
-            "stdout_tail": tail_text(completed.stdout),
-            "stderr_tail": tail_text(completed.stderr),
+            "stdout_tail": tail_text(completed.stdout, tail_limit),
+            "stderr_tail": tail_text(completed.stderr, tail_limit),
         }
     except subprocess.TimeoutExpired as error:
         return {
@@ -78,8 +83,8 @@ def run_step(
             "command": args,
             "latency_ms": round((time.perf_counter() - start) * 1000, 3),
             "error": str(error),
-            "stdout_tail": tail_text(error.stdout),
-            "stderr_tail": tail_text(error.stderr),
+            "stdout_tail": tail_text(error.stdout, tail_limit),
+            "stderr_tail": tail_text(error.stderr, tail_limit),
         }
     except OSError as error:
         return {
@@ -137,7 +142,10 @@ def main() -> int:
         )
 
     for name, command, timeout, env in checks:
-        steps.append(run_step(name, command, timeout, env=env))
+        # Preflight is the only build in CI, so keep enough of the compiler
+        # output for a real error to stay visible in the truncated tail.
+        tail_limit = 8000 if name == "swift_build" else 4000
+        steps.append(run_step(name, command, timeout, env=env, tail_limit=tail_limit))
 
     report = {
         "passed": all(step["status"] == "passed" for step in steps),
