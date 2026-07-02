@@ -103,7 +103,40 @@ func saveSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let name = try args.requireString("name")
     let skill = try SkillStore.load(name)
-    let app = try resolveApp(skill.app)
+    // Launch the target app in the BACKGROUND when it is not running, instead
+    // of failing — a hard failure here taught agents to "fix" it with
+    // open_app activate:true and steal the user's focus. The launch keeps
+    // open_app's confirm gate: an unconfirmed run gets a recoverable error.
+    var app: ResolvedApp
+    do {
+        app = try resolveApp(skill.app)
+    } catch {
+        guard SafetyPolicy.confirmed(args) || !SafetyPolicy.isEnabled else {
+            throw SafetyError(
+                reason: "\"\(skill.app)\" is not running; run_skill will launch it in the "
+                    + "background (no focus change).")
+        }
+        let launch = await dispatchTool(
+            name: "open_app", arguments: ["app": .string(skill.app), "confirm": .bool(true)])
+        if launch.isError == true {
+            throw ToolError.failed(
+                "Skill \"\(name)\" could not launch \(skill.app): " + batchResultText(launch))
+        }
+        // The running-apps scan is cached ~1s, so a resolve right after launch
+        // can still miss the new process; retry briefly until it registers.
+        let deadline = Date().addingTimeInterval(5)
+        while true {
+            if let resolved = try? resolveApp(skill.app) {
+                app = resolved
+                break
+            }
+            guard Date() < deadline else {
+                throw ToolError.failed(
+                    "Skill \"\(name)\" launched \(skill.app) but it did not become controllable in time.")
+            }
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+    }
     try requireAccessibilityTrusted()
     try requireAppAlive(app)
 
