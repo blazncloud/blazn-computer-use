@@ -1,19 +1,27 @@
 // Target-window selection for an app: front window by default, or by title.
 
-import AppKit
 import ApplicationServices
+import CoreGraphics
 import Foundation
 
 /// Backing scale of the display containing a global top-left point — the
 /// fallback pixels-per-point when a window cannot be captured and no prior
 /// snapshot exists (defaulting to 1 on a Retina display would skew element
-/// boxes ~2x against a later real capture).
+/// boxes ~2x against a later real capture). CoreGraphics, not NSScreen:
+/// NSScreen.screens needs a serviced run loop to refresh and goes stale in
+/// the daemon after display changes; CG queries the window server directly,
+/// in the same global top-left coordinates as window frames.
 func displayScale(atGlobalTopLeft point: CGPoint) -> Double {
-    let primaryHeight =
-        (NSScreen.screens.first { $0.frame.origin == .zero } ?? NSScreen.screens.first)?.frame.height ?? 0
-    let appKitPoint = CGPoint(x: point.x, y: primaryHeight - point.y)
-    let screen = NSScreen.screens.first { $0.frame.contains(appKitPoint) } ?? NSScreen.screens.first
-    return screen.map { Double($0.backingScaleFactor) } ?? 1
+    var displayCount: UInt32 = 0
+    var displays = [CGDirectDisplayID](repeating: 0, count: 16)
+    guard CGGetActiveDisplayList(UInt32(displays.count), &displays, &displayCount) == .success,
+        displayCount > 0
+    else { return 1 }
+    let active = displays.prefix(Int(displayCount))
+    let display = active.first { CGDisplayBounds($0).contains(point) } ?? active[0]
+    let bounds = CGDisplayBounds(display)
+    guard bounds.width > 0, let mode = CGDisplayCopyDisplayMode(display) else { return 1 }
+    return Double(mode.pixelWidth) / bounds.width
 }
 
 /// @unchecked: AXUIElement is an immutable thread-safe CF handle.
