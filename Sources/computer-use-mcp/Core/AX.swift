@@ -221,7 +221,10 @@ func axRole(_ element: AXUIElement) -> String {
 /// label is state, not identity — locators and identity checks anchor these
 /// by role + structure.
 func isTextEntryRole(_ role: String) -> Bool {
-    ["AXTextField", "AXTextArea", "AXSecureTextField", "AXComboBox"].contains(role)
+    switch role {
+    case "AXTextField", "AXTextArea", "AXSecureTextField", "AXComboBox": return true
+    default: return false
+    }
 }
 
 /// Best human-readable label for an element, used by the safety policy and
