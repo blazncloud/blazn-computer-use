@@ -15,6 +15,13 @@ private let maxRawDepth = 60
 private let maxChildrenPerNode = 150
 private let maxValueLength = 300
 
+/// Element budget for a tree build, clamped to a sane range. Callers that
+/// need to know whether a built tree hit its budget (was truncated) must
+/// compare against this same clamp.
+func clampedTreeBudget(_ maxElements: Int) -> Int {
+    max(1, min(maxElements, 5000))
+}
+
 /// True for pure structural wrappers: unlabeled, value-less AXGroups whose
 /// only actions are universal noise (ShowMenu, ScrollToVisible). Web pages
 /// nest dozens of these around every piece of content — they are omitted from
@@ -34,7 +41,7 @@ func buildTree(
     window: AXUIElement, windowOrigin: CGPoint, pixelsPerPoint: Double, generation: String,
     pathPrefix: [LocatorStep] = [], maxElements: Int = defaultMaxTreeElements
 ) -> BuiltTree {
-    let maxNodes = max(1, min(maxElements, 5000))
+    let maxNodes = clampedTreeBudget(maxElements)
     var lines: [String] = []
     var elements: [SnapshotElement] = []
 
@@ -61,6 +68,8 @@ func buildTree(
         let label = axString(element, kAXTitleAttribute)
             ?? axString(element, kAXDescriptionAttribute)
             ?? axString(element, "AXPlaceholderValue")
+            ?? informativeRoleDescription(
+                role: role, description: axString(element, kAXRoleDescriptionAttribute))
 
         // Wrappers (never the tree root) pass their outline slot straight to
         // their children; childless wrappers vanish entirely.
@@ -113,6 +122,46 @@ func buildTree(
     return BuiltTree(text: lines.joined(separator: "\n"), elements: elements)
 }
 
+/// Default role descriptions that don't echo their role name and never add
+/// signal: window subrole flavors, WebKit's web-area description, and
+/// outline/table row flavors (System Settings would repeat "outline row" on
+/// every row). Compared after normalization (lowercased, alphanumerics only).
+private let genericRoleDescriptions: Set<String> = [
+    "standardwindow", "floatingwindow", "dialog", "systemdialog",
+    "htmlcontent", "outlinerow", "tablerow",
+]
+
+/// A role description worth using as a label-of-last-resort. Apps attach
+/// real context to otherwise-anonymous controls ("close button" on window
+/// chrome, "switch" on SwiftUI toggles, "banner" on landmark groups).
+/// Standard controls merely localize their role ("button" for AXButton,
+/// "text" for AXStaticText) — dropped, along with known generic defaults,
+/// so label-poor native trees don't fill up with restated roles.
+func informativeRoleDescription(role: String, description: String?) -> String? {
+    guard let description else { return nil }
+    func normalize(_ value: String) -> String {
+        value.lowercased().filter { $0.isLetter || $0.isNumber }
+    }
+    let normalizedDescription = normalize(description)
+    guard !normalizedDescription.isEmpty else { return nil }
+    guard !normalize(role).contains(normalizedDescription) else { return nil }
+    guard !genericRoleDescriptions.contains(normalizedDescription) else { return nil }
+    return description
+}
+
+/// AXIdentifier trimmed for display on an unlabeled element's outline line.
+/// Developer-assigned identifiers ("AddAccountButton", "sidebar.search")
+/// are real signal for telling icon-only controls apart; auto-generated ids
+/// are noise — skipped when more than half the characters are digits or
+/// hyphens (UUIDs, numeric ids). Long identifiers truncate to 40 chars.
+func displayableIdentifier(_ identifier: String?) -> String? {
+    guard let identifier, !identifier.isEmpty else { return nil }
+    let noise = identifier.filter { $0.isNumber || $0 == "-" }.count
+    guard noise * 2 <= identifier.count else { return nil }
+    guard identifier.count > 40 else { return identifier }
+    return String(identifier.prefix(40)) + "…"
+}
+
 private func describeLine(
     _ element: AXUIElement, id: String, role: String, label: String?, frame: [Double]?, depth: Int
 ) -> String {
@@ -120,6 +169,10 @@ private func describeLine(
 
     if let label, !label.isEmpty {
         parts.append("\"\(clean(label))\"")
+    } else if let identifier = displayableIdentifier(axString(element, "AXIdentifier")) {
+        // Display-only: the identifier never enters SnapshotElement.label —
+        // locator identity (and the skills built on it) must not change.
+        parts.append("id=\"\(clean(identifier))\"")
     }
     if let frame {
         parts.append("(\(Int(frame[0])),\(Int(frame[1])),\(Int(frame[2])),\(Int(frame[3])))")
