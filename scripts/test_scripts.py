@@ -13,6 +13,7 @@ import unittest
 
 import build_app_bundle
 import common
+import deploy_app_bundle
 import preflight
 
 
@@ -54,6 +55,48 @@ class ScriptHelperTests(unittest.TestCase):
         bundle = build_app_bundle.bundle_path("Computer Use MCP")
         self.assertEqual(bundle.parent, (build_app_bundle.ROOT / ".build" / "app-bundle").resolve())
         self.assertTrue(str(bundle).endswith("Computer Use MCP.app"))
+
+    def test_staleness_comparison_with_injected_mtimes(self) -> None:
+        self.assertTrue(deploy_app_bundle.is_stale(100.0, 200.0))
+        self.assertFalse(deploy_app_bundle.is_stale(200.0, 100.0))
+        self.assertFalse(deploy_app_bundle.is_stale(100.0, 100.0))
+        # Missing installed executable is always stale.
+        self.assertTrue(deploy_app_bundle.is_stale(None, 100.0))
+        self.assertTrue(deploy_app_bundle.is_stale(None, None))
+        # No source/build mtimes cannot prove staleness.
+        self.assertFalse(deploy_app_bundle.is_stale(100.0, None))
+
+    def test_install_dir_precedence_flag_env_default(self) -> None:
+        old = os.environ.get("COMPUTER_USE_MCP_INSTALL_DIR")
+        try:
+            os.environ["COMPUTER_USE_MCP_INSTALL_DIR"] = "/tmp/env-apps"
+            self.assertEqual(
+                deploy_app_bundle.resolve_install_dir("/tmp/flag-apps"),
+                deploy_app_bundle.Path("/tmp/flag-apps"),
+            )
+            self.assertEqual(
+                deploy_app_bundle.resolve_install_dir(None),
+                deploy_app_bundle.Path("/tmp/env-apps"),
+            )
+            os.environ.pop("COMPUTER_USE_MCP_INSTALL_DIR", None)
+            self.assertEqual(
+                deploy_app_bundle.resolve_install_dir(None),
+                deploy_app_bundle.DEFAULT_INSTALL_DIR,
+            )
+        finally:
+            if old is None:
+                os.environ.pop("COMPUTER_USE_MCP_INSTALL_DIR", None)
+            else:
+                os.environ["COMPUTER_USE_MCP_INSTALL_DIR"] = old
+
+    def test_installed_executable_path_shape(self) -> None:
+        path = deploy_app_bundle.installed_executable(deploy_app_bundle.Path("/tmp/apps"))
+        self.assertEqual(
+            path,
+            deploy_app_bundle.Path(
+                "/tmp/apps/Computer Use MCP.app/Contents/MacOS/computer-use-mcp"
+            ),
+        )
 
     def test_resolve_binary_uses_env_or_default(self) -> None:
         old = os.environ.get("COMPUTER_USE_MCP_BIN")

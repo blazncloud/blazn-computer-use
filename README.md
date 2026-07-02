@@ -191,6 +191,8 @@ swift test
 .build/debug/computer-use-mcp doctor                 # check permissions
 python3 scripts/preflight.py                         # CI-safe release preflight
 python3 scripts/build_app_bundle.py                  # local .app wrapper build
+python3 scripts/deploy_app_bundle.py                 # release build + bundle + install to ~/Applications + daemon handover
+python3 scripts/deploy_app_bundle.py --check         # exit 1 if the installed bundle is older than source/build
 python3 scripts/preflight.py --use-app-bundle        # non-live checks through the .app executable
 python3 scripts/e2e_demo.py                          # safe structured smoke artifact; no GUI mutation
 ```

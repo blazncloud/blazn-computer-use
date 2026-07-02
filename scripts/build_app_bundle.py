@@ -42,9 +42,11 @@ def bundle_path(app_name: str) -> Path:
     return bundle
 
 
-def build_bundle(app_name: str, bundle_id: str, sign: bool) -> dict[str, object]:
-    run(["swift", "build"], timeout=180)
-    source_bin = ROOT / ".build" / "debug" / "computer-use-mcp"
+def build_bundle(
+    app_name: str, bundle_id: str, sign: bool, configuration: str = "debug"
+) -> dict[str, object]:
+    run(["swift", "build", "-c", configuration], timeout=600)
+    source_bin = ROOT / ".build" / configuration / "computer-use-mcp"
     if not source_bin.exists():
         raise FileNotFoundError(source_bin)
 
@@ -99,6 +101,7 @@ def build_bundle(app_name: str, bundle_id: str, sign: bool) -> dict[str, object]
     return {
         "bundle": str(bundle),
         "bundle_id": bundle_id,
+        "configuration": configuration,
         "executable": str(executable),
         "sign_requested": sign,
         "signed": signed,
@@ -113,9 +116,17 @@ def main() -> int:
     parser.add_argument("--app-name", default=DEFAULT_APP_NAME)
     parser.add_argument("--bundle-id", default=DEFAULT_BUNDLE_ID)
     parser.add_argument("--no-sign", action="store_true", help="skip ad-hoc codesign")
+    parser.add_argument(
+        "--configuration",
+        choices=["debug", "release"],
+        default="debug",
+        help="swift build configuration to wrap (release for the installed runtime bundle)",
+    )
     args = parser.parse_args()
 
-    result = build_bundle(args.app_name, args.bundle_id, sign=not args.no_sign)
+    result = build_bundle(
+        args.app_name, args.bundle_id, sign=not args.no_sign, configuration=args.configuration
+    )
     print(json.dumps(result, indent=2))
     return 0 if args.no_sign or result["codesign_status"] == 0 else 1
 
