@@ -623,4 +623,32 @@ let toolCatalog: [ToolSpec] = [
         ),
         handler: { args in try await deleteSkill(args) }
     ),
+    ToolSpec(
+        name: "record_skill_start",
+        description: """
+            Teach mode: start recording the USER's own demonstration of a task in an app, \
+            instead of performing it yourself. A listen-only input monitor captures the \
+            user's real clicks (mapped to the element under each), typing, and shortcuts \
+            while the target app is frontmost; it pauses automatically during password \
+            entry. Ask the user to do the task, then call record_skill_stop to get the \
+            draft steps and refine them into save_skill. Needs the Input Monitoring \
+            permission (macOS prompts on first use).
+            """,
+        inputSchema: objectSchema(
+            ["app": appParam],
+            required: ["app"]
+        ),
+        handler: { args in try await recordSkillStart(args) }
+    ),
+    ToolSpec(
+        name: "record_skill_stop",
+        description: """
+            Stop teach-mode recording and return the captured actions as draft skill \
+            steps. Review them with the user (parameterize values that vary with \
+            {{params}}, drop stray clicks, add expect assertions), then persist with \
+            save_skill.
+            """,
+        inputSchema: objectSchema([:]),
+        handler: { args in try await recordSkillStop(args) }
+    ),
 ]

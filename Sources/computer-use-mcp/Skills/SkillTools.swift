@@ -301,3 +301,42 @@ func deleteSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     try SkillStore.delete(name)
     return .text("Deleted skill \"\(name)\".")
 }
+
+// MARK: - record_skill_start / record_skill_stop (teach mode)
+
+func recordSkillStartImpl(_ args: [String: Value]) async throws -> CallTool.Result {
+    let app = try resolveApp(args.requireString("app"))
+    try requireAccessibilityTrusted()
+    do {
+        try SkillRecorder.shared.start(app: app)
+    } catch let error as RecorderError {
+        throw ToolError.failed(error.description)
+    }
+    await AgentCursor.shared.setRecording(true)
+    return .text(
+        "Recording your actions in \(app.name). Demonstrate the task now — clicks, typing, "
+            + "and shortcuts are captured; recording pauses automatically during password entry. "
+            + "Call record_skill_stop when done to get the draft steps, then save_skill.")
+}
+
+func recordSkillStopImpl(_ args: [String: Value]) async throws -> CallTool.Result {
+    let result: (app: String, steps: [SkillStep])
+    do {
+        result = try SkillRecorder.shared.stop()
+    } catch let error as RecorderError {
+        throw ToolError.failed(error.description)
+    }
+    await AgentCursor.shared.setRecording(false)
+
+    guard !result.steps.isEmpty else {
+        return .text(
+            "Recording stopped — no actions were captured in \(result.app). Nothing to save.")
+    }
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    let stepsJSON = String(data: (try? encoder.encode(result.steps)) ?? Data(), encoding: .utf8) ?? "[]"
+    return .text(
+        "Recorded \(result.steps.count) step(s) in \(result.app). Review and refine these "
+            + "(add {{params}} for values that vary, drop stray clicks, add expect assertions), "
+            + "then persist with save_skill:\n" + stepsJSON)
+}

@@ -47,6 +47,14 @@ actor AgentCursor {
         _ = await send("pulse \(Int(point.x)) \(Int(point.y))\n", spawningIfNeeded: false)
     }
 
+    /// Switch the overlay's status pill to (or from) the recording state while
+    /// teach mode captures the user. Spawns the helper so the indicator is
+    /// visible for the whole recording, not just after the first glide.
+    func setRecording(_ on: Bool) async {
+        guard enabled else { return }
+        _ = await send("record \(on ? "on" : "off")\n", spawningIfNeeded: on)
+    }
+
     private func send(_ command: String, spawningIfNeeded: Bool) async -> Bool {
         for attempt in 0..<2 {
             if writeFD < 0 {

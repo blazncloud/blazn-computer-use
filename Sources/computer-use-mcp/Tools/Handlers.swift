@@ -106,3 +106,11 @@ func listSkills(_ args: [String: Value]) async throws -> CallTool.Result {
 func deleteSkill(_ args: [String: Value]) async throws -> CallTool.Result {
     try await deleteSkillImpl(args)
 }
+
+func recordSkillStart(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await recordSkillStartImpl(args)
+}
+
+func recordSkillStop(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await recordSkillStopImpl(args)
+}

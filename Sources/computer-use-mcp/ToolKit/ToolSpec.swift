@@ -18,6 +18,9 @@ let mutatingToolNames: Set<String> = [
     "select_text", "perform_secondary_action", "open_app", "open_url",
     "manage_window", "click_menu_item", "write_clipboard", "batch",
     "run_skill", "save_skill", "delete_skill",
+    // The recorder owns a single event tap on a daemon run-loop thread, so
+    // both ends must run in the daemon, not per-shim in-process.
+    "record_skill_start", "record_skill_stop",
 ]
 
 /// Mutating tools scoped to a target app — the canonical set behind three
