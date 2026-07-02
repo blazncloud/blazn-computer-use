@@ -62,9 +62,10 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
     private var cursorLayers: [CALayer] = []
     private var displayLink: CADisplayLink?
 
-    /// "Agent working" pill on the primary display, shown while commands are
-    /// flowing. Disable with status_chip / COMPUTER_USE_MCP_STATUS_CHIP=0.
-    private var chipLayer: CALayer?
+    /// "Agent working" pill on every display (one layer per panel), shown
+    /// while commands are flowing. Disable with status_chip /
+    /// COMPUTER_USE_MCP_STATUS_CHIP=0.
+    private var chipLayers: [CALayer] = []
     private var chipVisible = false
     private var chipFadeWork: DispatchWorkItem?
     private let chipEnabled = Config.bool("status_chip") != false
@@ -128,11 +129,11 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
             layer.opacity = visible ? 1 : 0
             host.layer?.addSublayer(layer)
 
-            if chipEnabled, screen.frame.origin == .zero {
+            if chipEnabled {
                 let chip = makeChipLayer(screenSize: screen.frame.size, scale: screen.backingScaleFactor)
                 chip.opacity = chipVisible ? 1 : 0
                 host.layer?.addSublayer(chip)
-                chipLayer = chip
+                chipLayers.append(chip)
             }
 
             panel.contentView = host
@@ -150,7 +151,7 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         for panel in panels { panel.orderOut(nil) }
         panels.removeAll()
         cursorLayers.removeAll()
-        chipLayer = nil
+        chipLayers.removeAll()
         buildPanels()
     }
 
@@ -384,23 +385,23 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
     /// Show the "Agent working" pill; it fades after the same quiet period as
     /// the cursor. Every command (glide, pulse, keep-alive ping) refreshes it.
     private func showChip() {
-        guard chipEnabled, let chipLayer else { return }
+        guard chipEnabled, !chipLayers.isEmpty else { return }
         if !chipVisible {
             chipVisible = true
-            setOpacity(1, of: [chipLayer], animationDuration: 0.3)
+            setOpacity(1, of: chipLayers, animationDuration: 0.3)
         }
         chipFadeWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, let chip = self.chipLayer else { return }
+            guard let self, !self.chipLayers.isEmpty else { return }
             self.chipVisible = false
-            self.setOpacity(0, of: [chip], animationDuration: 0.3)
+            self.setOpacity(0, of: self.chipLayers, animationDuration: 0.3)
         }
         chipFadeWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + idleFadeDelay, execute: work)
     }
 
-    /// Pill with a blue dot and "Agent working", top-right of the primary
-    /// display just below the menu bar. Click-through like everything else.
+    /// Pill with a blue dot and "Agent working", top-right of its display
+    /// just below the menu bar. Click-through like everything else.
     private func makeChipLayer(screenSize: CGSize, scale: CGFloat) -> CALayer {
         let size = CGSize(width: 138, height: 28)
         let chip = CALayer()
