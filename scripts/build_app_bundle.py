@@ -43,7 +43,12 @@ def bundle_path(app_name: str) -> Path:
 
 
 def build_bundle(
-    app_name: str, bundle_id: str, sign: bool, configuration: str = "debug"
+    app_name: str,
+    bundle_id: str,
+    sign: bool,
+    configuration: str = "debug",
+    identity: str = "-",
+    install_dir: Path | None = None,
 ) -> dict[str, object]:
     run(["swift", "build", "-c", configuration], timeout=600)
     source_bin = ROOT / ".build" / configuration / "computer-use-mcp"
@@ -86,13 +91,26 @@ def build_bundle(
     signing_error = None
     if sign:
         try:
-            run(["codesign", "--force", "--deep", "--sign", "-", str(bundle)], timeout=60)
+            # "-" is ad-hoc (CDHash identity: TCC grants break on rebuild).
+            # A real certificate gives a stable designated requirement, so
+            # Accessibility/Screen Recording grants survive rebuilds.
+            run(["codesign", "--force", "--deep", "--sign", identity, str(bundle)], timeout=60)
             signed = True
         except subprocess.CalledProcessError as error:
             signing_error = (error.stderr or error.stdout or str(error)).strip()
 
-    identity = subprocess.run(
-        ["codesign", "-dv", str(bundle)],
+    installed_bundle = None
+    if install_dir is not None:
+        install_dir.mkdir(parents=True, exist_ok=True)
+        destination = install_dir / bundle.name
+        if destination.exists():
+            shutil.rmtree(destination)
+        shutil.copytree(bundle, destination, symlinks=True)
+        installed_bundle = destination
+
+    check_target = installed_bundle or bundle
+    verify = subprocess.run(
+        ["codesign", "-dv", str(check_target)],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -100,14 +118,16 @@ def build_bundle(
     )
     return {
         "bundle": str(bundle),
+        "installed_bundle": str(installed_bundle) if installed_bundle else None,
         "bundle_id": bundle_id,
         "configuration": configuration,
-        "executable": str(executable),
+        "executable": str((installed_bundle or bundle) / "Contents" / "MacOS" / "computer-use-mcp"),
         "sign_requested": sign,
+        "sign_identity": identity if sign else None,
         "signed": signed,
         "signing_error": signing_error,
-        "codesign_status": identity.returncode,
-        "codesign_detail": (identity.stderr or identity.stdout).strip(),
+        "codesign_status": verify.returncode,
+        "codesign_detail": (verify.stderr or verify.stdout).strip(),
     }
 
 
@@ -115,17 +135,23 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--app-name", default=DEFAULT_APP_NAME)
     parser.add_argument("--bundle-id", default=DEFAULT_BUNDLE_ID)
-    parser.add_argument("--no-sign", action="store_true", help="skip ad-hoc codesign")
+    parser.add_argument("--no-sign", action="store_true", help="skip codesign entirely")
     parser.add_argument(
-        "--configuration",
-        choices=["debug", "release"],
-        default="debug",
-        help="swift build configuration to wrap (release for the installed runtime bundle)",
-    )
+        "--configuration", choices=["debug", "release"], default="debug",
+        help="swift build configuration to wrap (release for the runtime bundle)")
+    parser.add_argument(
+        "--identity", default="-",
+        help='codesign identity; "-" is ad-hoc (TCC grants break on rebuild), '
+        "pass a certificate name for a stable identity")
+    parser.add_argument(
+        "--install", metavar="DIR", default=None,
+        help="also copy the bundle to DIR (a stable path outside .build)")
     args = parser.parse_args()
 
     result = build_bundle(
-        args.app_name, args.bundle_id, sign=not args.no_sign, configuration=args.configuration
+        args.app_name, args.bundle_id, sign=not args.no_sign,
+        configuration=args.configuration, identity=args.identity,
+        install_dir=Path(args.install).expanduser() if args.install else None,
     )
     print(json.dumps(result, indent=2))
     return 0 if args.no_sign or result["codesign_status"] == 0 else 1
