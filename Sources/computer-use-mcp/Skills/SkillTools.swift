@@ -123,22 +123,34 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
             "Skill \"\(name)\" needs params: \(missing.joined(separator: ", ")). All params: \(described).")
     }
 
+    let startAtStep = args.integer("start_at_step") ?? 1
+    guard startAtStep >= 1, startAtStep <= skill.steps.count else {
+        throw ToolError.invalidArguments(
+            "start_at_step must be between 1 and \(skill.steps.count) for \"\(name)\".")
+    }
+
     // Locators resolve against the latest snapshot; make sure one exists.
     try await refreshSkillSnapshot(app: app)
 
-    var summary: [String] = []
+    var summary: [String] =
+        startAtStep > 1 ? ["(steps 1-\(startAtStep - 1) skipped via start_at_step)"] : []
     func failure(step: Int, tool: String, reason: String) -> CallTool.Result {
         var text = "Skill \"\(name)\" stopped at step \(step) of \(skill.steps.count) (\(tool)): \(reason)\n"
         text += summary.isEmpty
             ? "No earlier steps ran.\n" : "Steps already run:\n" + summary.joined(separator: "\n") + "\n"
         text +=
-            "To repair: call get_app_state on \(skill.app), fix this step, and re-save the whole "
-            + "skill with save_skill overwrite:true. The skill is otherwise unchanged."
+            "To repair: call get_skill \"\(name)\" for the saved definition and get_app_state on "
+            + "\(skill.app) for current state; fix this step, re-save with save_skill "
+            + "overwrite:true, then rerun with start_at_step: \(step) to continue without "
+            + "redoing the earlier steps."
         return .text(text, isError: true)
     }
 
+    var steps = skill.steps
+    var healedSteps: [Int] = []
+    var extracts: [String] = []
     var lastResult: CallTool.Result?
-    for (index, step) in skill.steps.enumerated() {
+    for (index, step) in steps.enumerated() where index + 1 >= startAtStep {
         var arguments = step.arguments.mapValues { substituteParams($0, params: provided) }
         let leftover = arguments.values.flatMap(unresolvedPlaceholders)
         guard leftover.isEmpty else {
@@ -154,8 +166,14 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
                 return failure(step: index + 1, tool: step.tool, reason: "no app state available for locator resolution")
             }
             switch resolveSkillLocator(locator, in: snapshot) {
-            case .found(let element):
+            case .found(let element, let viaFallback):
                 arguments["element_id"] = .string(element.id)
+                if viaFallback {
+                    // The element moved; remember its new address so future
+                    // runs hit the fast, precise path again.
+                    steps[index].locator?.path = element.path
+                    healedSteps.append(index + 1)
+                }
             case .failed(let why):
                 return failure(step: index + 1, tool: step.tool, reason: why)
             }
@@ -164,6 +182,9 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         let result = await dispatchTool(name: step.tool, arguments: arguments)
         if result.isError == true {
             return failure(step: index + 1, tool: step.tool, reason: batchResultText(result))
+        }
+        if step.tool == "read_text" {
+            extracts.append("— step \(index + 1):\n" + batchResultText(result))
         }
         lastResult = result
 
@@ -189,8 +210,27 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         summary.append("✓ step \(index + 1) \(step.tool)")
     }
 
-    var header = "Skill \"\(name)\" completed \(skill.steps.count) step(s):\n"
-    header += summary.joined(separator: "\n") + "\n\nFinal state below.\n\n"
+    // Persist healed locator paths (best-effort) so the skill tracks the
+    // app's evolution without a repair round.
+    if !healedSteps.isEmpty {
+        try? SkillStore.save(
+            Skill(
+                name: skill.name, description: skill.description, app: skill.app,
+                params: skill.params, steps: steps, updatedAt: Date()
+            ))
+    }
+
+    var header = "Skill \"\(name)\" completed \(skill.steps.count - startAtStep + 1) step(s):\n"
+    header += summary.joined(separator: "\n") + "\n"
+    if !healedSteps.isEmpty {
+        header +=
+            "Self-healed the locator path of step(s) \(healedSteps.map(String.init).joined(separator: ", ")) "
+            + "(element moved; new address saved).\n"
+    }
+    if !extracts.isEmpty {
+        header += "\nExtracted:\n" + extracts.joined(separator: "\n") + "\n"
+    }
+    header += "\nFinal state below.\n\n"
     guard let lastResult else { return .text(header) }
     var content = lastResult.content
     if case .text(let existing, let annotations, let meta)? = content.first {
@@ -227,7 +267,18 @@ private func refreshSkillSnapshot(app: ResolvedApp) async throws {
     }
 }
 
-// MARK: - list_skills / delete_skill
+// MARK: - get_skill / list_skills / delete_skill
+
+func getSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
+    let name = try args.requireString("name")
+    let skill = try SkillStore.load(name)
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    encoder.dateEncodingStrategy = .iso8601
+    let json = String(data: try encoder.encode(skill), encoding: .utf8) ?? "{}"
+    return .text(
+        "Skill \"\(name)\" as saved (edit steps and re-save with save_skill overwrite:true):\n" + json)
+}
 
 func listSkillsImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let skills = SkillStore.list()

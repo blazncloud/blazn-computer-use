@@ -95,6 +95,10 @@ func runSkill(_ args: [String: Value]) async throws -> CallTool.Result {
     try await runSkillImpl(args)
 }
 
+func getSkill(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await getSkillImpl(args)
+}
+
 func listSkills(_ args: [String: Value]) async throws -> CallTool.Result {
     try await listSkillsImpl(args)
 }

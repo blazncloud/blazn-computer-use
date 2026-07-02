@@ -54,8 +54,9 @@ struct Skill: Codable, Equatable {
 let maxSkillSteps = 25
 
 /// Step tools a skill may contain: the batchable set (app-scoped actions +
-/// wait_for; never batch or run_skill themselves).
-var skillStepToolNames: Set<String> { batchableToolNames }
+/// wait_for; never batch or run_skill themselves), plus read_text — an
+/// extract step whose output is returned in the run_skill result.
+var skillStepToolNames: Set<String> { batchableToolNames.union(["read_text"]) }
 
 enum SkillValidationError: Error, CustomStringConvertible {
     case invalid(String)
@@ -129,7 +130,9 @@ func unresolvedPlaceholders(_ value: Value) -> [String] {
 // MARK: - locator resolution
 
 enum SkillLocatorResolution: Equatable {
-    case found(SnapshotElement)
+    /// viaFallback: the saved path missed and the element was recovered by
+    /// the unique role+label search — the caller should heal the saved path.
+    case found(SnapshotElement, viaFallback: Bool)
     case failed(String)
 }
 
@@ -141,6 +144,8 @@ extension SnapshotElement: Equatable {
 
 /// Resolve a locator against the latest snapshot. Exact path first (role and
 /// label verified), then a unique role+label match anywhere in the tree.
+/// Failures name the nearest candidates so a repairing agent can usually fix
+/// the step from the report alone.
 func resolveSkillLocator(
     _ locator: SkillLocator, in snapshot: AppSnapshot
 ) -> SkillLocatorResolution {
@@ -149,7 +154,7 @@ func resolveSkillLocator(
         element.role == locator.role,
         locator.label == nil || element.label == locator.label
     {
-        return .found(element)
+        return .found(element, viaFallback: false)
     }
     let candidates = snapshot.elements.filter { element in
         element.role == locator.role && (locator.label == nil || element.label == locator.label)
@@ -157,9 +162,22 @@ func resolveSkillLocator(
     let described = "\(locator.role)\(locator.label.map { " \"\($0)\"" } ?? "")"
     switch candidates.count {
     case 1:
-        return .found(candidates[0])
+        return .found(candidates[0], viaFallback: true)
     case 0:
-        return .failed("no element matching \(described) is in the current tree")
+        var reason = "no element matching \(described) is in the current tree"
+        let sameRoleLabels = snapshot.elements
+            .filter { $0.role == locator.role }
+            .compactMap(\.label).filter { !$0.isEmpty }
+        if !sameRoleLabels.isEmpty {
+            let nearest = Array(Set(sameRoleLabels)).sorted().prefix(4)
+            reason += ". Current \(locator.role)s: \(nearest.map { "\"\($0)\"" }.joined(separator: ", "))"
+        } else if let label = locator.label {
+            let sameLabel = snapshot.elements.filter { $0.label == label }.map(\.role)
+            if !sameLabel.isEmpty {
+                reason += ". \"\(label)\" now exists as: \(Array(Set(sameLabel)).sorted().joined(separator: ", "))"
+            }
+        }
+        return .failed(reason)
     default:
         return .failed(
             "\(candidates.count) elements match \(described) and the saved path matches none of them "

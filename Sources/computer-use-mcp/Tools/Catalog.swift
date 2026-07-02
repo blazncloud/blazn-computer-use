@@ -527,7 +527,11 @@ let toolCatalog: [ToolSpec] = [
             Save a repeatable task as a named skill after performing it once. Steps are \
             the normal action tools; element_id anchors are frozen into durable locators \
             (role + label + tree path) that re-resolve on every run, so the skill \
-            survives app restarts. Use {{param_name}} placeholders in any string \
+            survives app restarts. Prefer restart-durable primitives when teaching: \
+            keyboard shortcuts (press_key) and menu commands (click_menu_item) over \
+            positional clicks, set_value over click-then-type, and give steps an \
+            "expect" so replay verifies each effect. A read_text step extracts data \
+            into the replay result. Use {{param_name}} placeholders in any string \
             argument and declare them in params. Replay with run_skill.
             """,
         inputSchema: objectSchema(
@@ -565,10 +569,12 @@ let toolCatalog: [ToolSpec] = [
         description: """
             Replay a saved skill deterministically: each step re-resolves its locator \
             against the live tree, runs through the normal per-step safety checks, and \
-            verifies its expectation. No reasoning happens between steps, so replay is \
-            fast; if the UI changed and a step cannot resolve or its expectation fails, \
-            the run stops with a report of exactly which step broke — fix that step and \
-            re-save the skill. Returns final app state.
+            verifies its expectation. Elements that moved are found by role+label and \
+            their saved address self-heals. No reasoning happens between steps, so \
+            replay is fast; if a step cannot resolve or its expectation fails, the run \
+            stops with a report of exactly which step broke — fix that step, re-save, \
+            and rerun with start_at_step to continue. Returns final app state plus any \
+            read_text extracts.
             """,
         inputSchema: objectSchema(
             [
@@ -578,10 +584,26 @@ let toolCatalog: [ToolSpec] = [
                     "description": .string(
                         "Values for the skill's declared params, e.g. {\"week\": \"2026-W27\"}."),
                 ]),
+                "start_at_step": integerParam(
+                    "Resume from this 1-based step, skipping earlier ones — for continuing "
+                        + "after a repaired failure without redoing completed side effects."),
             ],
             required: ["name"]
         ),
         handler: { args in try await runSkill(args) }
+    ),
+    ToolSpec(
+        name: "get_skill",
+        description: """
+            Show a saved skill's full JSON definition — the starting point for \
+            repairing a failed step: edit the step and re-save with save_skill \
+            overwrite:true.
+            """,
+        inputSchema: objectSchema(
+            ["name": stringParam("Name of the saved skill (see list_skills).")],
+            required: ["name"]
+        ),
+        handler: { args in try await getSkill(args) }
     ),
     ToolSpec(
         name: "list_skills",

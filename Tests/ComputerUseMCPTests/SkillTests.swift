@@ -40,11 +40,14 @@ private func sampleSkill(name: String = "file-report", steps: [SkillStep]? = nil
         }
     }
 
-    @Test func stepToolSetAllowsActionsAndWaitFor() {
+    @Test func stepToolSetAllowsActionsWaitForAndExtracts() {
         #expect(skillStepToolNames.contains("click"))
         #expect(skillStepToolNames.contains("wait_for"))
+        #expect(skillStepToolNames.contains("read_text"))
         #expect(!skillStepToolNames.contains("run_skill"))
         #expect(!skillStepToolNames.contains("batch"))
+        // read_text is a skill extract step but stays out of batch.
+        #expect(!batchableToolNames.contains("read_text"))
     }
 
     @Test func skillToolsAreClassifiedForGating() {
@@ -104,18 +107,37 @@ private func sampleSkill(name: String = "file-report", steps: [SkillStep]? = nil
                 path: [LocatorStep(role: "AXTextField", indexOfRole: 1)], frame: [0, 0, 1, 1]),
         ])
         let locator = SkillLocator(role: "AXTextField", label: nil, path: fieldPath)
-        #expect(resolveSkillLocator(locator, in: snapshot) == .found(snapshot.elements[0]))
+        #expect(resolveSkillLocator(locator, in: snapshot) == .found(snapshot.elements[0], viaFallback: false))
     }
 
-    @Test func uniqueRoleLabelFallbackSurvivesLayoutShift() {
+    @Test func uniqueRoleLabelFallbackSurvivesLayoutShiftAndSignalsHealing() {
         let movedPath = [LocatorStep(role: "AXGroup", indexOfRole: 0), LocatorStep(role: "AXButton", indexOfRole: 2)]
         let snapshot = snapshot(elements: [
             SnapshotElement(id: "e0@s1", role: "AXButton", label: "Save", path: movedPath, frame: [0, 0, 1, 1])
         ])
-        // Saved path no longer exists; the unique Save button still resolves.
+        // Saved path no longer exists; the unique Save button still resolves,
+        // and viaFallback tells the executor to heal the saved path.
         let locator = SkillLocator(
             role: "AXButton", label: "Save", path: [LocatorStep(role: "AXButton", indexOfRole: 0)])
-        #expect(resolveSkillLocator(locator, in: snapshot) == .found(snapshot.elements[0]))
+        #expect(resolveSkillLocator(locator, in: snapshot) == .found(snapshot.elements[0], viaFallback: true))
+    }
+
+    @Test func missingElementFailureNamesNearestCandidates() {
+        let snapshot = snapshot(elements: [
+            SnapshotElement(id: "e0@s1", role: "AXButton", label: "Export", path: fieldPath, frame: [0, 0, 1, 1]),
+            SnapshotElement(
+                id: "e1@s1", role: "AXButton", label: "Share",
+                path: [LocatorStep(role: "AXButton", indexOfRole: 1)], frame: [0, 0, 1, 1]),
+        ])
+        guard case .failed(let reason) = resolveSkillLocator(
+            SkillLocator(role: "AXButton", label: "Export…"), in: snapshot)
+        else {
+            Issue.record("expected failure")
+            return
+        }
+        #expect(reason.contains("no element matching"))
+        #expect(reason.contains("\"Export\""))
+        #expect(reason.contains("\"Share\""))
     }
 
     @Test func missingAndAmbiguousFailWithReasons() {
