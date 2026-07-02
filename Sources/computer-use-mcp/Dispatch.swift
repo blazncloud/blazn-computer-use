@@ -55,6 +55,7 @@ func dispatchTool(name: String, arguments: [String: Value]) async -> CallTool.Re
         result = .text("\(error)", isError: true)
     }
     logToolCall(name, isError: result.isError == true, since: start)
+    await Telemetry.shared.record(tool: name, isError: result.isError == true, since: start)
     return result
 }
 
