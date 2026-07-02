@@ -15,6 +15,13 @@ private let maxRawDepth = 60
 private let maxChildrenPerNode = 150
 private let maxValueLength = 300
 
+/// Element budget for a tree build, clamped to a sane range. Callers that
+/// need to know whether a built tree hit its budget (was truncated) must
+/// compare against this same clamp.
+func clampedTreeBudget(_ maxElements: Int) -> Int {
+    max(1, min(maxElements, 5000))
+}
+
 /// True for pure structural wrappers: unlabeled, value-less AXGroups whose
 /// only actions are universal noise (ShowMenu, ScrollToVisible). Web pages
 /// nest dozens of these around every piece of content — they are omitted from
@@ -34,7 +41,7 @@ func buildTree(
     window: AXUIElement, windowOrigin: CGPoint, pixelsPerPoint: Double, generation: String,
     pathPrefix: [LocatorStep] = [], maxElements: Int = defaultMaxTreeElements
 ) -> BuiltTree {
-    let maxNodes = max(1, min(maxElements, 5000))
+    let maxNodes = clampedTreeBudget(maxElements)
     var lines: [String] = []
     var elements: [SnapshotElement] = []
 

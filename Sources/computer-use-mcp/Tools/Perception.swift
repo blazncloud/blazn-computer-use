@@ -47,6 +47,56 @@ func sparseTreeHint(webAXUnsupported: Bool) -> String {
         + "Call get_app_state with ocr:true to read on-screen text with clickable coordinates."
 }
 
+/// Fraction of the window a childless element must cover to be flagged as an
+/// opaque canvas. 0.6 keeps toolbars, sidebars, and split panes (well under
+/// half the window) out while catching the content surface of rich-shell
+/// apps — terminal grids, meeting video, editor canvases — which dominates
+/// the window.
+let opaqueCanvasCoverageThreshold = 0.6
+
+/// Detects the rich-shell/opaque-canvas window shape: enough chrome elements
+/// to dodge the sparse-tree hint, but one huge childless element where the
+/// actual content is custom-drawn (Zoom meeting view, terminal grids, canvas
+/// editors). Elements are emitted in DFS order, so an element has emitted
+/// children iff the next element's path extends its own (the hasEmptyWebArea
+/// trick). Trees with an AXWebArea are excluded — invisible web content has
+/// its own opt-in-and-rebuild path — and so is the window root, whose
+/// childlessness is the sparse-tree case. Frames are clipped to the window
+/// so oversized frames cannot inflate coverage. Returns a hint naming the
+/// largest qualifying element, or nil.
+func opaqueCanvasHint(elements: [SnapshotElement], windowSize: [Double]?) -> String? {
+    guard let windowSize, windowSize.count == 2 else { return nil }
+    let windowArea = windowSize[0] * windowSize[1]
+    guard windowArea > 0 else { return nil }
+    guard !elements.contains(where: { $0.role == "AXWebArea" }) else { return nil }
+
+    var best: SnapshotElement?
+    var bestCoverage = 0.0
+    for (index, element) in elements.enumerated() where !element.path.isEmpty {
+        let next = index + 1 < elements.count ? elements[index + 1] : nil
+        let hasChildren =
+            next.map {
+                $0.path.count > element.path.count
+                    && Array($0.path.prefix(element.path.count)) == element.path
+            } ?? false
+        if hasChildren { continue }
+        let visibleWidth =
+            min(element.frame[0] + element.frame[2], windowSize[0]) - max(element.frame[0], 0)
+        let visibleHeight =
+            min(element.frame[1] + element.frame[3], windowSize[1]) - max(element.frame[1], 0)
+        let coverage = max(0, visibleWidth) * max(0, visibleHeight) / windowArea
+        if coverage >= opaqueCanvasCoverageThreshold && coverage > bestCoverage {
+            best = element
+            bestCoverage = coverage
+        }
+    }
+
+    guard let best else { return nil }
+    return
+        "Element \(best.id) (\(best.role)) covers most of the window but exposes no children "
+        + "— likely a custom-drawn canvas. Call get_app_state with ocr:true to read it."
+}
+
 /// A subtree root to build the element tree from, with its locator path from
 /// the window root so resolved paths stay anchored at the window.
 /// @unchecked: AXUIElement is an immutable thread-safe CF handle.
@@ -236,6 +286,14 @@ func stateResult(
         }
     } else if detail == .full && tree.elements.count < sparseTreeThreshold {
         text += "\n\n" + sparseTreeHint(webAXUnsupported: webAXUnsupported)
+    } else if detail == .full, scope == nil,
+        tree.elements.count < clampedTreeBudget(maxElements),
+        let canvasHint = opaqueCanvasHint(elements: tree.elements, windowSize: snapshot.windowSize)
+    {
+        // Full-window trees only: a truncated tree can make a container look
+        // childless, and a scoped subtree's coverage says nothing about the
+        // window.
+        text += "\n\n" + canvasHint
     }
 
     var enrichedTelemetry = focusTelemetry
