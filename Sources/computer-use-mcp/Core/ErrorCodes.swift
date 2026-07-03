@@ -96,12 +96,11 @@ func toolErrorCode(for error: Error) -> ToolErrorCode? {
 /// messages pass through unchanged. Always isError.
 func codedErrorResult(_ message: String, code: ToolErrorCode?) -> CallTool.Result {
     guard let code else { return .text(message, isError: true) }
-    var result = CallTool.Result.text("[\(code.rawValue)] \(message)", isError: true)
-    result._meta = Metadata(additionalFields: [
-        "computer-use-mcp/error": .object([
-            "code": .string(code.rawValue),
-            "recovery": .string(code.recovery),
-        ])
-    ])
-    return result
+    return CallTool.Result.text("[\(code.rawValue)] \(message)", isError: true)
+        .mergingMetaField(
+            "computer-use-mcp/error",
+            .object([
+                "code": .string(code.rawValue),
+                "recovery": .string(code.recovery),
+            ]))
 }

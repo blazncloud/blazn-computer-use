@@ -582,10 +582,6 @@ func verifierToggleState(_ element: AXUIElement) -> Bool? {
 extension CallTool.Result {
     func withActionOutcome(_ outcome: ActionOutcome?) -> CallTool.Result {
         guard let outcome else { return self }
-        var result = self
-        var fields = result._meta?.fields ?? [:]
-        fields["computer-use-mcp/outcome"] = outcome.value
-        result._meta = Metadata(additionalFields: fields)
-        return result
+        return mergingMetaField("computer-use-mcp/outcome", outcome.value)
     }
 }

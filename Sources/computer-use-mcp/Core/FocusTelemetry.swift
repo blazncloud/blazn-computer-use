@@ -170,15 +170,22 @@ func requireFocusChangeAllowed(_ args: [String: Value], reason: String) throws {
 }
 
 extension CallTool.Result {
-    func withFocusTelemetry(_ telemetry: FocusTelemetry?) -> CallTool.Result {
-        guard let telemetry else { return self }
+    /// Attach one `computer-use-mcp/*` _meta field, preserving any already set
+    /// by another emission path (focus/delivery/outcome share one _meta block).
+    func mergingMetaField(_ key: String, _ value: Value) -> CallTool.Result {
         var result = self
         var fields = result._meta?.fields ?? [:]
-        fields[focusTelemetryMetaKey] = telemetry.focusValue
-        if let delivery = telemetry.deliveryValue {
-            fields[deliveryTelemetryMetaKey] = delivery
-        }
+        fields[key] = value
         result._meta = Metadata(additionalFields: fields)
+        return result
+    }
+
+    func withFocusTelemetry(_ telemetry: FocusTelemetry?) -> CallTool.Result {
+        guard let telemetry else { return self }
+        var result = mergingMetaField(focusTelemetryMetaKey, telemetry.focusValue)
+        if let delivery = telemetry.deliveryValue {
+            result = result.mergingMetaField(deliveryTelemetryMetaKey, delivery)
+        }
         return result
     }
 }
