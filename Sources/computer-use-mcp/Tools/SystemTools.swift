@@ -503,10 +503,34 @@ func writeClipboardImpl(_ args: [String: Value]) async throws -> CallTool.Result
     try SafetyPolicy.checkClipboardWrite(confirmed: SafetyPolicy.confirmed(args))
     let focus = FocusChangeTracker.start()
     let pasteboard = NSPasteboard.general
+
+    // clearContents() wipes the user's clipboard before the new value lands; a
+    // rejected write would then strand them with an empty clipboard. Capture
+    // the prior text and, via a defer guard, restore it on any early exit that
+    // did not commit the new value.
+    let previous = pasteboard.string(forType: .string)
+    var committed = false
+    defer {
+        if let restore = clipboardRestoreValue(committed: committed, previous: previous) {
+            pasteboard.clearContents()
+            pasteboard.setString(restore, forType: .string)
+        }
+    }
+
     pasteboard.clearContents()
-    pasteboard.setString(text, forType: .string)
+    guard pasteboard.setString(text, forType: .string) else {
+        throw ToolError.failed("The clipboard rejected the write; restored the previous contents.")
+    }
+    committed = true
     return CallTool.Result.text("Replaced the clipboard with \(text.count) characters. Paste with press_key cmd+v.")
         .withFocusTelemetry(focus.finish(deliveryTier: InputTier.pasteboard.rawValue))
+}
+
+/// The clipboard text to restore after a write attempt: nil once the new value
+/// has committed (leave it in place), otherwise the prior contents so a failed
+/// write never strands the user with an empty clipboard. Pure, unit-tested.
+func clipboardRestoreValue(committed: Bool, previous: String?) -> String? {
+    committed ? nil : previous
 }
 
 // MARK: - wait_for
