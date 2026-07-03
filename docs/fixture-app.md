@@ -27,7 +27,42 @@ Then drive it through the real server, e.g.:
 .build/debug/computer-use-mcp call get_app_state '{"app":"ComputerUseFixture"}'
 ```
 
-The process registers as a regular app named **ComputerUseFixture**.
+The process registers as an app named **ComputerUseFixture**.
+
+## Launch mode: background by default
+
+The fixture launches **in the background** so its window never pops over
+whoever is frontmost while a worker runs live tests. The AppDelegate sets
+`NSApplication.setActivationPolicy(.accessory)` in `applicationWillFinishLaunching`
+(before SwiftUI shows the window), then `orderBack` + `resignKey` + `deactivate`
+the window so it is on-screen but never key/front and the app is not activated.
+The server drives it in the background by design, so the window stays visible,
+orderable, AX-readable, SCK-capturable, and hit-testable — verified below.
+
+Set **`COMPUTER_USE_FIXTURE_FOREGROUND=1`** to restore a normal foreground app
+(`.activationPolicy(.regular)` + `activate(ignoringOtherApps: true)` +
+`makeKeyAndOrderFront`). Use this for occlusion-proof scenarios where a worker
+deliberately arranges windows and needs the fixture actually frontmost.
+
+The window is pinned to a consistent modest position (top-left of the main
+screen's visible area, inset 80pt) rather than SwiftUI's centered splash, so its
+frame is deterministic across launches.
+
+```bash
+.build/debug/ComputerUseFixture                          # background (default)
+COMPUTER_USE_FIXTURE_FOREGROUND=1 .build/debug/ComputerUseFixture   # foreground
+```
+
+Verified (launched while Finder was frontmost):
+
+| Check | Background default | Foreground opt-out |
+|---|---|---|
+| `System Events … background only` | **true** (`.accessory`) | **false** (`.regular`) |
+| Process is frontmost | false | — (restores regular activation) |
+| Frontmost app changed at launch | **no** (stayed Finder) | app is `.regular`/activatable |
+| Window exists (`list_windows`) | yes | yes |
+| All controls perceivable (`get_app_state`) | yes | yes |
+| Background honest-button click | **lands** (counter 0→1, `ax-press`), frontmost unchanged | — |
 
 ## Control → scenario map
 
