@@ -83,9 +83,42 @@ Keep this file in sync with the README when capabilities change.
   build, to the app-bundle identity.
 - macOS only; runs while the Mac is unlocked.
 
+## Target registries and per-registry notes
+
+These are the three registries to target. **Do not submit any of them without the
+maintainer's explicit approval** — this file is draft copy only.
+
+### 1. `modelcontextprotocol/servers` (official community list)
+
+- Submission is a PR to the GitHub repo adding an entry to the community-servers
+  README list (alphabetical), not a form.
+- Format is a one-line bullet: name (linked to this repo) + the short one-liner
+  above. Keep it to a single sentence.
+- Draft bullet:
+  > **[computer-use-mcp](https://github.com/minghinmatthewlam/computer-use-mcp)** —
+  > Background-safe macOS computer use: drive occluded apps over MCP without
+  > stealing your cursor or focus.
+
+### 2. PulseMCP (pulsemcp.com)
+
+- Directory listing; submit via their "add a server" flow. Uses the name,
+  repo/homepage URL, the short description, and category tags.
+- Use the **short description** and the **categories/tags** from this doc.
+- Highlight the macOS-only requirement and the Accessibility/Screen Recording
+  permission note so users aren't surprised.
+
+### 3. mcp.so
+
+- Directory listing; submit via their add-server flow. Uses name, repo URL,
+  description, and tags; often auto-pulls the README, so keep the README's first
+  paragraph and tool list accurate.
+- Reuse the **long description** and the **tools surface** from this doc.
+
 ## Pre-submission checklist
 
+- [ ] Maintainer has explicitly approved submitting to each registry.
 - [ ] First GitHub release is published (or the listing links to source install).
 - [ ] Version and URLs updated to the released tag.
 - [ ] README and this draft agree on the tool surface and capabilities.
 - [ ] License, homepage, and contact fields verified.
+- [ ] macOS-only + TCC permission requirements are stated in each listing.

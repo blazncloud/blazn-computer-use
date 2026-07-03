@@ -49,6 +49,31 @@ without hijacking your cursor or stealing focus.**
   </tr>
 </table>
 
+<!--
+  SECOND MEDIA PLACEHOLDER — teach-mode record → replay, assets/teach-replay.gif.
+  Same rule: do NOT record yet; a later pass records both against the release
+  build (capture via ScreenCaptureKit through the real server — a plain
+  `screencapture` shell-out cannot see the agent-cursor overlay).
+  This clip should show, in one take:
+    1. record_skill_start, then the user (or agent) demonstrates a short task.
+    2. record_skill_stop → the task is saved as a named skill.
+    3. run_skill replays it at engine speed, re-resolving each element locator,
+       with the agent cursor gliding through the replayed steps.
+  The point: teach once, replay deterministically with no model in the loop.
+-->
+
+<table align="center" width="100%">
+  <tr>
+    <td align="center" height="240">
+      <h3>🎓 Teach → replay — coming soon</h3>
+      <p><em>Placeholder for <code>assets/teach-replay.gif</code></em></p>
+      <p>Record a task once (<code>record_skill_start</code> → demonstrate →
+      <code>record_skill_stop</code>), then <code>run_skill</code> replays it at
+      engine speed — re-resolving each element locator, no model in the loop.</p>
+    </td>
+  </tr>
+</table>
+
 ---
 
 ## Table of contents
