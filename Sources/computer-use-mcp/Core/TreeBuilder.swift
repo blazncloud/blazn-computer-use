@@ -15,6 +15,12 @@ private let maxRawDepth = 60
 private let maxChildrenPerNode = 150
 private let maxValueLength = 300
 
+/// Per-element AX messaging timeout (seconds), set on every node before we
+/// query it. One hung element then fails its own AX calls after this bound
+/// instead of stalling the whole traversal against the coarser process-wide
+/// timeout (Core/AX.swift). Tunable via COMPUTER_USE_MCP_AX_ELEMENT_TIMEOUT.
+let perElementAXTimeout: Float = Config.double("ax_element_timeout").map(Float.init) ?? 0.25
+
 /// Element budget for a tree build, clamped to a sane range. Callers that
 /// need to know whether a built tree hit its budget (was truncated) must
 /// compare against this same clamp.
@@ -63,6 +69,7 @@ func buildTree(
             depthTruncated = true
             return
         }
+        AXUIElementSetMessagingTimeout(element, perElementAXTimeout)
 
         let role = axRole(element)
         let label = snapshotLabel(element, role: role)
