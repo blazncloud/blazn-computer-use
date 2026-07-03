@@ -5,13 +5,20 @@ All notable changes to `computer-use-mcp` are recorded here. The format follows
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches
 1.0.
 
-> **Note:** `v0.3.0` is the only git-tagged release so far. The `v0.1.0` and
+> **Note:** `v0.3.0` and later are git-tagged releases. The `v0.1.0` and
 > `v0.2.0` sections below are reconstructed from milestone commits to give an
 > honest history of how the project reached its current shape.
 
 ## [Unreleased]
 
-Verifier-first reliability and large-tree perception, landed this cycle on `main`.
+Nothing yet.
+
+## [0.4.0] — 2026-07-03
+
+Verifier-first reliability and large-tree perception. Certified by a live
+four-suite battery against the release bundle
+([docs/release/battery-report-2026-07-03.md](docs/release/battery-report-2026-07-03.md));
+tests grew 184 → 337.
 
 ### Added
 
@@ -35,6 +42,29 @@ Verifier-first reliability and large-tree perception, landed this cycle on `main
   content label, so text-field skills survive content changes and app restarts.
 - **`run_skill` cold-launch**: launches a closed target app in the background
   before replaying.
+- **Multi-strategy AX action chains.** When a plain press can't land, clicks walk
+  a verified chain (press → confirm → open → pick → selection relay → child /
+  ancestor press); the winning rung is reported as `chain_rung` in `_meta`.
+- **Structured error codes.** Failures carry a `[CODE]` prefix and a
+  `computer-use-mcp/error` `_meta` block with a machine-readable `code`
+  (`ELEMENT_NOT_FOUND`, `APP_NOT_FOUND`, `OFFSCREEN_TARGET`, …) and a one-line
+  `recovery` hint.
+- **Background-reliable scrolling.** Scroll containers are ranked instead of
+  taking the first ancestor, and delivery tries the container's own AX
+  mechanisms first — setting the scroll bar's value (the one that actually moves
+  an NSScrollView in the background), page actions, reveal-descendant — before
+  synthetic wheel events.
+- **Window-motion verification.** `manage_window` pre-validates geometry
+  (offscreen targets are rejected before any write), settle-polls animated
+  frames, applies one corrective re-write, and reports the honest applied frame
+  when the app clamps.
+- **Visible-range `read_text`** (`visible_only`) and web-area rich text rendered
+  to markdown via WebKit text markers.
+- **Deep-collection `find` and skill replay**: server-side search and locator
+  re-resolution reach rows far past the windowed viewport.
+- **`ComputerUseFixture`** truth-suite app (honest/liar/disabled buttons, toggle,
+  keystroke echo, 500-row table, web pane) — launches in the background by
+  default and backs the release battery. See `docs/fixture-app.md`.
 
 ### Changed
 
@@ -43,11 +73,24 @@ Verifier-first reliability and large-tree perception, landed this cycle on `main
 - `type_text` falls back to synthetic Unicode key events when an AX value is
   unsettable.
 - `click_menu_item` opens lazily-populated submenus before reading them.
+- Outcome verification is always on (the `COMPUTER_USE_MCP_VERIFY` flag was
+  removed after an A/B measured ~3% median latency overhead).
+- Agent-cursor overlay z-order: the cursor shows whenever the target window is
+  visible (split view, second display, unfocused) and clips only when the
+  frontmost app's window genuinely overlaps the target.
+  `COMPUTER_USE_MCP_CURSOR_TOPMOST=1` forces always-on-top.
+- `write_clipboard` restores prior clipboard contents when a write fails, and
+  `drag` guarantees button release (aborting back to the origin on failure).
 
 ### Fixed
 
 - Stale-identity false negatives on text-entry elements (their AX labels churn
   with content); locators now retry on structure alone for text-entry roles.
+- Continuation leak that could hang daemon-less (`COMPUTER_USE_MCP_NO_DAEMON=1`)
+  calls when a wedged `replayd` never answered a capture handshake; timeouts now
+  bound un-cancellable work.
+- Agent cursor invisible over visible-but-unfocused targets on fullscreen /
+  cross-Space setups (regression from the first z-order fix).
 
 ## [0.3.0] — 2026-07 (tagged)
 
@@ -133,6 +176,7 @@ First working end-to-end computer-use MCP server.
   gates enforced independent of the calling agent.
 - Config file + env-var configuration, per-call logging, optional rate limit.
 
-[Unreleased]: https://github.com/minghinmatthewlam/computer-use-mcp/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/minghinmatthewlam/computer-use-mcp/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/minghinmatthewlam/computer-use-mcp/releases/tag/v0.4.0
 [0.3.0]: https://github.com/minghinmatthewlam/computer-use-mcp/releases/tag/v0.3.0
 </content>
