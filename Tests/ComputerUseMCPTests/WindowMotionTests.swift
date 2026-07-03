@@ -17,7 +17,7 @@ import Testing
     }
 
     @Test func nonFiniteTargetIsInvalid() {
-        let target = CGRect(x: .nan, y: 0, width: 800, height: 600)
+        let target = CGRect(x: CGFloat.nan, y: 0, width: 800, height: 600)
         #expect(WindowMotion.validate(target: target, displays: [mainDisplay]) == .invalidTargetFrame(
             "The target window frame is not a finite rectangle."))
     }
@@ -126,7 +126,7 @@ import Testing
 
     @Test func settleWaitsOutAnimationThenReachesTarget() async {
         let target = CGRect(x: 0, y: 0, width: 800, height: 600)
-        var frames = [
+        let frames = [
             CGRect(x: 0, y: 0, width: 400, height: 600),
             CGRect(x: 0, y: 0, width: 650, height: 600),
             target, target,
@@ -139,7 +139,6 @@ import Testing
                 return frames[Swift.min(index, frames.count - 1)]
             },
             correct: { Issue.record("should not correct") }, sleep: noSleep)
-        _ = frames
         #expect(outcome.reachedTarget)
         #expect(outcome.stabilized)
         #expect(!outcome.corrected)
