@@ -145,21 +145,37 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         currentValue: axString(target.element, kAXValueAttribute), newValue: value, app: app, confirmed: confirmed
     )
 
+    // Read (before): capture the target's fields before dispatch.
+    let before = ActionVerifier.captureBefore(target.element, family: .setValue)
+    let windowTitle = target.snapshot.windowTitle
+    func verifier(
+        intent: ActionIntent, tier: InputTier, dispatched: Bool, resolved: ActionOutcome? = nil
+    ) -> ActionVerifier {
+        ActionVerifier(
+            family: .setValue, intent: intent, deliveryTier: tier.rawValue, dispatchSucceeded: dispatched,
+            hasTargetElement: true, snapshotElement: target.snapshotElement, before: before,
+            beforeWindowTitle: windowTitle, resolved: resolved)
+    }
+
     // Checkboxes and radio buttons: treat as semantic toggle.
     if target.snapshotElement.role == "AXCheckBox" || target.snapshotElement.role == "AXRadioButton" {
         guard let desired = Bool(value.lowercased()) ?? (value == "1" ? true : value == "0" ? false : nil)
         else {
             throw ToolError.invalidArguments("For \(target.snapshotElement.role), value must be true or false.")
         }
-        let current = axString(target.element, kAXValueAttribute) == "1"
+        // Already-satisfied is a success, not a wasted press: skip dispatch when
+        // the control is already in the requested state (the reducer classifies
+        // it success from the before-state).
+        let current = before.beforeSelected ?? false
         if current != desired {
             try performAXAction(kAXPressAction as String, on: target)
         }
         return try await stateResult(
-            app: app, windowTitle: target.snapshot.windowTitle,
+            app: app, windowTitle: windowTitle,
             note: "Set \(describeTarget(target)) to \(desired).",
             screenshot: screenshotDetail(args),
-            focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAction.rawValue)
+            focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAction.rawValue),
+            verifier: verifier(intent: .toggle(desired), tier: .accessibilityAction, dispatched: current != desired)
         )
     }
 
@@ -168,19 +184,48 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         AXUIElementIsAttributeSettable(target.element, kAXValueAttribute as CFString, &settable) == .success,
         settable.boolValue
     else {
-        throw ToolError.failed(
-            "\(describeTarget(target)) does not accept a direct value. Use click/type_text, "
-                + "or check the element's actions in get_app_state."
+        // No settable value: retrying won't help — classify unsupported rather
+        // than throw (isError stays false, the agent learns to switch tools).
+        return try await stateResult(
+            app: app, windowTitle: windowTitle,
+            note: "\(describeTarget(target)) does not accept a direct value; nothing was set.",
+            screenshot: screenshotDetail(args),
+            focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAttribute.rawValue),
+            verifier: verifier(
+                intent: .setText(value), tier: .accessibilityAttribute, dispatched: false,
+                resolved: .unsupported(
+                    .unsupported,
+                    "\(describeTarget(target)) does not accept a direct value. Use click/type_text, "
+                        + "or check the element's actions in get_app_state."))
         )
     }
 
-    // Numeric elements (sliders, steppers) want numbers, not strings.
-    let newValue: CFTypeRef
+    // Numeric elements (sliders, steppers) want numbers, not strings. A
+    // non-numeric string into a numeric field is a coercion failure — do not
+    // send it (today's code silently would).
     let currentValue = axAttribute(target.element, kAXValueAttribute)
-    if let currentValue, CFGetTypeID(currentValue) == CFNumberGetTypeID(), let number = Double(value) {
+    let isNumeric = currentValue.map { CFGetTypeID($0) == CFNumberGetTypeID() } ?? false
+    let newValue: CFTypeRef
+    let intent: ActionIntent
+    if isNumeric {
+        guard let number = Double(value) else {
+            return try await stateResult(
+                app: app, windowTitle: windowTitle,
+                note: "\(describeTarget(target)) takes a number; \"\(value)\" is not numeric and was not applied.",
+                screenshot: screenshotDetail(args),
+                focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAttribute.rawValue),
+                verifier: verifier(
+                    intent: .setText(value), tier: .accessibilityAttribute, dispatched: false,
+                    resolved: .unsupported(
+                        .coercion,
+                        "\(describeTarget(target)) takes a number; \"\(value)\" is not numeric."))
+            )
+        }
         newValue = NSNumber(value: number)
+        intent = .setNumber(number)
     } else {
         newValue = value as CFString
+        intent = .setText(value)
     }
 
     guard AXUIElementSetAttributeValue(target.element, kAXValueAttribute as CFString, newValue) == .success
@@ -188,10 +233,11 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         throw ToolError.failed("Setting the value of \(describeTarget(target)) failed.")
     }
     return try await stateResult(
-        app: app, windowTitle: target.snapshot.windowTitle,
+        app: app, windowTitle: windowTitle,
         note: "Set the value of \(describeTarget(target)). Verify it below.",
         screenshot: screenshotDetail(args),
-        focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAttribute.rawValue)
+        focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAttribute.rawValue),
+        verifier: verifier(intent: intent, tier: .accessibilityAttribute, dispatched: true)
     )
 }
 
