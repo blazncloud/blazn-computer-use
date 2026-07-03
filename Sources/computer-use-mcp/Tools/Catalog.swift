@@ -87,6 +87,12 @@ let toolCatalog: [ToolSpec] = [
                 "max_elements": integerParam(
                     "Maximum elements in the returned tree (default 500, cap 5000). Raise for large windows."
                 ),
+                "skeleton": boolParam(
+                    "Default false. Set true for a shallow overview of a large or unfamiliar window: "
+                        + "deep containers are collapsed to a single line with children_count and stay "
+                        + "drill targets — pass one such container's id as scope_element_id to expand it. "
+                        + "Cuts tokens on big trees; ignored when scope_element_id is set."
+                ),
                 "ocr": boolParam(
                     "Default false. Set true to also OCR the screenshot and return recognized text "
                         + "with pixel boxes — the fallback for apps whose accessibility tree is "

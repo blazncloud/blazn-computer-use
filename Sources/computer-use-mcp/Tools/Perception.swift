@@ -23,7 +23,10 @@ func getAppStateImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         app: app, windowTitle: args.string("window_title"),
         screenshot: appStateScreenshotDetail(args),
         scope: scope, maxElements: args.integer("max_elements") ?? defaultMaxTreeElements,
-        ocr: args.bool("ocr") == true
+        ocr: args.bool("ocr") == true,
+        // Skeleton and scoped drill-down are complementary: skeleton gives the
+        // shallow overview, scope_element_id expands one container from it.
+        skeleton: scope == nil && args.bool("skeleton") == true
     )
 }
 
@@ -130,6 +133,7 @@ func stateResult(
     scope: TreeScope? = nil,
     maxElements: Int = defaultMaxTreeElements,
     ocr: Bool = false,
+    skeleton: Bool = false,
     focusTelemetry: FocusTelemetry? = nil,
     verifier: ActionVerifier? = nil
 ) async throws -> CallTool.Result {
@@ -214,7 +218,8 @@ func stateResult(
                 pixelsPerPoint: pixelsPerPoint,
                 generation: generation,
                 pathPrefix: scope?.pathPrefix ?? [],
-                maxElements: maxElements
+                maxElements: maxElements,
+                skeleton: skeleton
             )
         }
     }
