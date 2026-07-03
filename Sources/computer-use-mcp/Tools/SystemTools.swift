@@ -203,6 +203,9 @@ func manageWindowImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         }
     }
 
+    // Read (before): the window's frame, for the move/resize outcome verifier.
+    let beforeFrame: CGRect? = (action == "resize" || action == "move") ? axFrame(window.element) : nil
+
     let note: String
     switch action {
     case "raise":
@@ -249,12 +252,33 @@ func manageWindowImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     }
 
     try? await Task.sleep(for: .milliseconds(120))
-    // Minimize/close can leave no queryable window; degrade to the note.
-    if let result = try? await stateResult(app: app, windowTitle: nil, note: note) {
-        return result.withFocusTelemetry(focus.finish(deliveryTier: InputTier.windowManagement.rawValue))
+
+    // Read (after): re-read the settled frame and classify move/resize against
+    // the request — a frame clamped by the app is a success with the requested
+    // vs actual recorded; a frame that did not move at all is effect_not_verified.
+    // (Deeper settle-poll + correction is window-verify task #6; this consumes a
+    // single post-settle read.)
+    var windowOutcome: ActionOutcome?
+    if let beforeFrame, outcomeVerificationEnabled(), let afterFrame = axFrame(window.element) {
+        windowOutcome = ActionVerifier.windowOutcome(
+            action: action,
+            requestedWidth: args.number("width"), requestedHeight: args.number("height"),
+            requestedX: args.number("x"), requestedY: args.number("y"),
+            before: beforeFrame, after: afterFrame)
     }
-    return CallTool.Result.text(note)
+    // Surface a clamp or a non-move in the human text (success-with-clamp has no
+    // humanSentence, but the requested-vs-actual divergence is worth stating).
+    let finalNote = windowOutcome.flatMap { $0.failureDomain != nil ? "\($0.summary)\n\n\(note)" : nil } ?? note
+
+    // Minimize/close can leave no queryable window; degrade to the note.
+    if let result = try? await stateResult(app: app, windowTitle: nil, note: finalNote) {
+        return result
+            .withFocusTelemetry(focus.finish(deliveryTier: InputTier.windowManagement.rawValue))
+            .withActionOutcome(windowOutcome)
+    }
+    return CallTool.Result.text(finalNote)
         .withFocusTelemetry(focus.finish(deliveryTier: InputTier.windowManagement.rawValue))
+        .withActionOutcome(windowOutcome)
 }
 
 // MARK: - click_menu_item
@@ -294,17 +318,30 @@ func clickMenuItemImpl(_ args: [String: Value]) async throws -> CallTool.Result 
     let label = axString(current, kAXTitleAttribute) ?? segments.last!
     try SafetyPolicy.checkClick(label: label, app: app, confirmed: confirmed)
     if axBool(current, kAXEnabledAttribute) == false {
-        throw ToolError.failed("Menu item \"\(path)\" is disabled right now.")
+        // A disabled item cannot fire — classify unsupported rather than throw.
+        let verifier = ActionVerifier(
+            family: .menu, intent: .openMenu, deliveryTier: InputTier.accessibilityAction.rawValue,
+            dispatchSucceeded: false, hasTargetElement: false, snapshotElement: nil,
+            resolved: .unsupported(.unsupported, "Menu item \"\(path)\" is disabled right now."))
+        return try await stateResult(
+            app: app, windowTitle: nil, note: "Menu item \"\(path)\" is disabled; nothing was selected.",
+            screenshot: screenshotDetail(args),
+            focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAction.rawValue),
+            verifier: verifier)
     }
     let error = AXUIElementPerformAction(current, kAXPressAction as CFString)
     guard error == .success else {
         throw ToolError.failed("Pressing menu item \"\(path)\" failed (\(axErrorDescription(error))).")
     }
     try? await Task.sleep(for: .milliseconds(120))
+    let verifier = ActionVerifier(
+        family: .menu, intent: .openMenu, deliveryTier: InputTier.accessibilityAction.rawValue,
+        dispatchSucceeded: true, hasTargetElement: false, snapshotElement: nil)
     return try await stateResult(
         app: app, windowTitle: nil, note: "Selected menu \(segments.joined(separator: " > ")).",
         screenshot: screenshotDetail(args),
-        focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAction.rawValue)
+        focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAction.rawValue),
+        verifier: verifier
     )
 }
 

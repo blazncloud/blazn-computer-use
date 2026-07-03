@@ -367,10 +367,18 @@ func performSecondaryActionImpl(_ args: [String: Value]) async throws -> CallToo
         try SafetyPolicy.checkClick(label: clickableLabel(target.element), app: app, confirmed: confirmed)
     }
     try performAXAction(action, on: target)
+    // Secondary actions are usually menu-shaped: success when the tree changes
+    // (a context menu appeared), verifier_ambiguous when nothing observable
+    // followed — menu state is frequently unreadable via accessibility.
+    let verifier = ActionVerifier(
+        family: .menu, intent: .openMenu, deliveryTier: InputTier.accessibilityAction.rawValue,
+        dispatchSucceeded: true, hasTargetElement: false, snapshotElement: nil,
+        beforeWindowTitle: target.snapshot.windowTitle)
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle,
         note: "Performed \(action) on \(describeTarget(target)).",
         screenshot: screenshotDetail(args),
-        focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAction.rawValue)
+        focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAction.rawValue),
+        verifier: verifier
     )
 }
