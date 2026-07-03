@@ -203,39 +203,83 @@ func manageWindowImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         }
     }
 
-    // Read (before): the window's frame, for the move/resize outcome verifier.
-    let beforeFrame: CGRect? = (action == "resize" || action == "move") ? axFrame(window.element) : nil
-
+    // Each action builds a human note and — when verification is on — an outcome
+    // that reports what actually happened, read back from the window rather than
+    // trusted from the AX write (which silently clamps or no-ops in many apps).
+    let verify = outcomeVerificationEnabled()
     let note: String
+    var outcome: ActionOutcome?
+
     switch action {
     case "raise":
+        let beforeMain = verify ? axBool(window.element, kAXMainAttribute) : nil
         let error = AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
         guard error == .success else {
             throw ToolError.failed("Could not raise \(described) (\(axErrorDescription(error))).")
         }
         note = "Raised \(described)."
+        if verify {
+            let after = await WindowMotion.settleBool(
+                desired: true, read: { axBool(window.element, kAXMainAttribute) })
+            outcome = WindowMotion.raiseOutcome(described: described, before: beforeMain, after: after)
+        }
     case "minimize", "unminimize":
-        try setAttribute(kAXMinimizedAttribute, (action == "minimize" ? kCFBooleanTrue : kCFBooleanFalse) as CFTypeRef)
-        note = "\(action == "minimize" ? "Minimized" : "Restored") \(described)."
+        let desired = action == "minimize"
+        outcome = try await verifyBooleanWindowState(
+            window: window.element, attribute: kAXMinimizedAttribute, desired: desired, described: described,
+            achieved: desired ? "minimized" : "restored", already: desired ? "already minimized" : "not minimized",
+            verify: verify)
+        note = "\(desired ? "Minimized" : "Restored") \(described)."
     case "fullscreen", "exit_fullscreen":
-        try setAttribute("AXFullScreen", (action == "fullscreen" ? kCFBooleanTrue : kCFBooleanFalse) as CFTypeRef)
-        note = "\(action == "fullscreen" ? "Entered" : "Left") full screen for \(described)."
+        let desired = action == "fullscreen"
+        outcome = try await verifyBooleanWindowState(
+            window: window.element, attribute: "AXFullScreen", desired: desired, described: described,
+            achieved: desired ? "in full screen" : "out of full screen",
+            already: desired ? "already in full screen" : "not in full screen",
+            verify: verify)
+        note = "\(desired ? "Entered" : "Left") full screen for \(described)."
     case "move":
         guard let x = args.number("x"), let y = args.number("y") else {
             throw ToolError.invalidArguments("move requires x and y (global screen points, top-left origin).")
         }
         try ArgumentBounds.checkWindowPosition(x: x, y: y)
+        guard let before = axFrame(window.element) else {
+            throw ToolError.failed("Could not read the current frame of \(described).")
+        }
+        let target = CGRect(x: x, y: y, width: before.width, height: before.height)
+        try preflightWindowTarget(target, described: described)
         var point = CGPoint(x: x, y: y)
-        try setAttribute(kAXPositionAttribute, AXValueCreate(.cgPoint, &point)!)
+        let positionValue = AXValueCreate(.cgPoint, &point)!
+        try setAttribute(kAXPositionAttribute, positionValue)
         note = "Moved \(described) to (\(Int(x)),\(Int(y))) pt."
+        if verify {
+            outcome = await settledFrameOutcome(
+                action: action, window: window.element, dimension: .position,
+                target: target, before: before, described: described,
+                requestedX: x, requestedY: y, requestedWidth: nil, requestedHeight: nil,
+                attribute: kAXPositionAttribute, value: positionValue)
+        }
     case "resize":
         guard let width = args.number("width"), let height = args.number("height") else {
             throw ToolError.invalidArguments("resize requires width and height (points).")
         }
         try ArgumentBounds.checkWindowSize(width: width, height: height)
+        guard let before = axFrame(window.element) else {
+            throw ToolError.failed("Could not read the current frame of \(described).")
+        }
+        let target = CGRect(origin: before.origin, size: CGSize(width: width, height: height))
+        try preflightWindowTarget(target, described: described)
         var size = CGSize(width: width, height: height)
-        try setAttribute(kAXSizeAttribute, AXValueCreate(.cgSize, &size)!)
+        let sizeValue = AXValueCreate(.cgSize, &size)!
+        try setAttribute(kAXSizeAttribute, sizeValue)
         note = "Resized \(described) to \(Int(width))x\(Int(height)) pt."
+        if verify {
+            outcome = await settledFrameOutcome(
+                action: action, window: window.element, dimension: .size,
+                target: target, before: before, described: described,
+                requestedX: nil, requestedY: nil, requestedWidth: width, requestedHeight: height,
+                attribute: kAXSizeAttribute, value: sizeValue)
+        }
     case "close":
         guard let button = axElement(window.element, kAXCloseButtonAttribute) else {
             throw ToolError.failed("\(described) has no close button.")
@@ -245,40 +289,98 @@ func manageWindowImpl(_ args: [String: Value]) async throws -> CallTool.Result {
             throw ToolError.failed("Could not close \(described) (\(axErrorDescription(error))).")
         }
         note = "Closed \(described). The app may show a save dialog — check list_windows."
+        if verify {
+            let gone = await WindowMotion.settleBool(
+                desired: false, read: { windowStillPresent(window.element, in: app) }) == false
+            outcome = WindowMotion.closeOutcome(
+                described: described, gone: gone,
+                sheetAppeared: !gone && windowHasSheet(window.element))
+        }
     default:
         throw ToolError.invalidArguments(
             "Unknown action \"\(action)\". Use raise, minimize, unminimize, move, resize, fullscreen, exit_fullscreen, or close."
         )
     }
 
-    try? await Task.sleep(for: .milliseconds(120))
-
-    // Read (after): re-read the settled frame and classify move/resize against
-    // the request — a frame clamped by the app is a success with the requested
-    // vs actual recorded; a frame that did not move at all is effect_not_verified.
-    // (Deeper settle-poll + correction is window-verify task #6; this consumes a
-    // single post-settle read.)
-    var windowOutcome: ActionOutcome?
-    if let beforeFrame, outcomeVerificationEnabled(), let afterFrame = axFrame(window.element) {
-        windowOutcome = ActionVerifier.windowOutcome(
-            action: action,
-            requestedWidth: args.number("width"), requestedHeight: args.number("height"),
-            requestedX: args.number("x"), requestedY: args.number("y"),
-            before: beforeFrame, after: afterFrame)
-    }
-    // Surface a clamp or a non-move in the human text (success-with-clamp has no
-    // humanSentence, but the requested-vs-actual divergence is worth stating).
-    let finalNote = windowOutcome.flatMap { $0.failureDomain != nil ? "\($0.summary)\n\n\(note)" : nil } ?? note
+    // Surface a clamp or a non-effect in the human text (success-with-clamp has
+    // no humanSentence, but the requested-vs-actual divergence is worth stating).
+    let finalNote = outcome.flatMap { $0.failureDomain != nil ? "\($0.summary)\n\n\(note)" : nil } ?? note
 
     // Minimize/close can leave no queryable window; degrade to the note.
     if let result = try? await stateResult(app: app, windowTitle: nil, note: finalNote) {
         return result
             .withFocusTelemetry(focus.finish(deliveryTier: InputTier.windowManagement.rawValue))
-            .withActionOutcome(windowOutcome)
+            .withActionOutcome(outcome)
     }
     return CallTool.Result.text(finalNote)
         .withFocusTelemetry(focus.finish(deliveryTier: InputTier.windowManagement.rawValue))
-        .withActionOutcome(windowOutcome)
+        .withActionOutcome(outcome)
+}
+
+/// Pre-validate a window target frame is finite and on-screen before writing it
+/// — an offscreen or degenerate move is rejected as a recoverable error rather
+/// than stranding the window where it cannot be grabbed.
+private func preflightWindowTarget(_ target: CGRect, described: String) throws {
+    switch WindowMotion.validate(target: target, displays: WindowMotion.activeDisplayBounds()) {
+    case .none:
+        return
+    case .invalidTargetFrame(let message), .offscreenTargetFrame(let message):
+        throw ToolError.invalidArguments(message)
+    }
+}
+
+/// Settle-poll the window frame after a move/resize (it may still be animating,
+/// and the app may clamp it), issue one corrective re-write if it landed off the
+/// requested dimension, then classify the settled frame against the request.
+private func settledFrameOutcome(
+    action: String, window: AXUIElement, dimension: WindowMotion.Dimension,
+    target: CGRect, before: CGRect, described: String,
+    requestedX: Double?, requestedY: Double?, requestedWidth: Double?, requestedHeight: Double?,
+    attribute: String, value: CFTypeRef
+) async -> ActionOutcome {
+    let settle = await WindowMotion.settle(
+        target: target, dimension: dimension,
+        read: { axFrame(window) },
+        correct: { _ = AXUIElementSetAttributeValue(window, attribute as CFString, value) })
+    guard let after = settle.frame else {
+        return .ambiguous(.verification, "Could not read \(described)'s frame after the \(action).")
+    }
+    return ActionVerifier.windowOutcome(
+        action: action,
+        requestedWidth: requestedWidth, requestedHeight: requestedHeight,
+        requestedX: requestedX, requestedY: requestedY,
+        before: before, after: after)
+}
+
+/// Toggle a boolean window state (minimize/fullscreen), skipping the write when
+/// it is already satisfied, then read the state back to confirm the flip.
+private func verifyBooleanWindowState(
+    window: AXUIElement, attribute: String, desired: Bool, described: String,
+    achieved: String, already: String, verify: Bool
+) async throws -> ActionOutcome? {
+    let before = verify ? axBool(window, attribute) : nil
+    // Already in the requested state: a correct no-op, skip the write.
+    if verify, before == desired {
+        return WindowMotion.booleanStateOutcome(
+            described: described, achieved: achieved, already: already,
+            desired: desired, before: before, after: before)
+    }
+    let error = AXUIElementSetAttributeValue(
+        window, attribute as CFString, (desired ? kCFBooleanTrue : kCFBooleanFalse) as CFTypeRef)
+    guard error == .success else {
+        throw ToolError.failed("Could not update \(described) (\(axErrorDescription(error))).")
+    }
+    guard verify else { return nil }
+    let after = await WindowMotion.settleBool(desired: desired, read: { axBool(window, attribute) })
+    return WindowMotion.booleanStateOutcome(
+        described: described, achieved: achieved, already: already,
+        desired: desired, before: before, after: after)
+}
+
+/// Whether the window element is still among the app's live windows (used to
+/// confirm a close actually removed it).
+private func windowStillPresent(_ element: AXUIElement, in app: ResolvedApp) -> Bool {
+    axElements(app.axApplication, kAXWindowsAttribute).contains { CFEqual($0, element) }
 }
 
 // MARK: - click_menu_item
