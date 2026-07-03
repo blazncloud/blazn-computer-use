@@ -432,10 +432,16 @@ extension ActionVerifier {
         let isResize = action == "resize"
         let requested: (Double, Double)? =
             isResize
-            ? (requestedWidth.map { ($0, requestedHeight ?? Double(after.height)) }).map { ($0.0, $0.1) }
-            : (requestedX.map { ($0, requestedY ?? Double(after.origin.y)) }).map { ($0.0, $0.1) }
-        let beforeValue = isResize ? (Double(before.width), Double(before.height)) : (Double(before.origin.x), Double(before.origin.y))
-        let afterValue = isResize ? (Double(after.width), Double(after.height)) : (Double(after.origin.x), Double(after.origin.y))
+            ? requestedWidth.map { ($0, requestedHeight ?? Double(after.height)) }
+            : requestedX.map { ($0, requestedY ?? Double(after.origin.y)) }
+        let beforeValue =
+            isResize
+            ? (Double(before.width), Double(before.height))
+            : (Double(before.origin.x), Double(before.origin.y))
+        let afterValue =
+            isResize
+            ? (Double(after.width), Double(after.height))
+            : (Double(after.origin.x), Double(after.origin.y))
 
         v.windowFrameChanged =
             abs(beforeValue.0 - afterValue.0) > tolerance || abs(beforeValue.1 - afterValue.1) > tolerance
