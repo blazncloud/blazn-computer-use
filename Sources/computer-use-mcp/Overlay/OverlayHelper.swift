@@ -394,16 +394,17 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
     /// Order the cursor panel directly above the target window so anything
     /// occluding the target also occludes the cursor — but ONLY in the trust
     /// case that motivates it: a *different* app is frontmost AND its front
-    /// window is on the *same display* as the target, so the cursor could
-    /// otherwise appear to float over the app that is covering the target.
+    /// window actually *overlaps* the target, so the cursor could otherwise
+    /// appear to float over the app that is covering the target.
     ///
     /// In every other case — topmost escape hatch, the target itself frontmost,
-    /// or the focused app on another display / a fullscreen Space elsewhere —
-    /// the cursor stays at the idle level above all windows. Dropping a panel to
-    /// `.normal` loses to fullscreen and cross-Space compositing, which made the
-    /// glyph vanish while the target was plainly visible (the #18 regression);
-    /// "prefer visible" is the safe default, and clipping is opt-in to the one
-    /// scenario that needs it (proven by the occlusion self-test).
+    /// or the focused app merely side-by-side / on another display / a
+    /// fullscreen Space elsewhere (no overlap) — the cursor stays at the idle
+    /// level above all windows. Dropping a panel to `.normal` loses to
+    /// fullscreen and cross-Space compositing, which made the glyph vanish while
+    /// the target was plainly visible (the #18 regression); "prefer visible" is
+    /// the safe default, and clipping is scoped to genuine occlusion (proven by
+    /// the occlusion self-test).
     private func applyTargetWindow(_ id: CGWindowID?) {
         guard let id, let info = windowInfo(for: id) else {
             resetTargetWindow()
@@ -413,12 +414,14 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         currentTarget = id
 
         let center = appKitPoint(fromGlobalTopLeft: CGPoint(x: info.bounds.midX, y: info.bounds.midY))
-        let targetFrame = NSScreen.screens.first { $0.frame.contains(center) }?.frame
         let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let isBackground = info.ownerPID != 0 && frontPID != nil && frontPID != info.ownerPID
+        // Genuine occlusion only: the frontmost app's front window must overlap
+        // the target's frame (both in Quartz global coordinates). Side-by-side
+        // or cross-display focus does not overlap, so the cursor stays visible.
         let shouldClip =
-            !topmostMode && isBackground && targetFrame != nil
-            && frontmostAppScreenFrame(pid: frontPID) == targetFrame
+            !topmostMode && isBackground
+            && frontmostAppFrontWindowBounds(pid: frontPID).map { $0.intersects(info.bounds) } == true
 
         // Only the cursor panels move; the chip panels stay pinned on top.
         for panel in cursorPanels {
@@ -440,10 +443,10 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Frame of the display showing the frontmost app's front window, or nil if
-    /// it has no on-screen window — used to decide whether that app can actually
-    /// be occluding the target (same display) or is off on another one.
-    private func frontmostAppScreenFrame(pid: pid_t?) -> CGRect? {
+    /// Bounds (Quartz global top-left) of the frontmost app's front on-screen
+    /// window, or nil if it has none — used to decide whether that app is
+    /// actually covering the target or merely beside/behind it on another Space.
+    private func frontmostAppFrontWindowBounds(pid: pid_t?) -> CGRect? {
         guard let pid,
             let list = CGWindowListCopyWindowInfo(
                 [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
@@ -455,8 +458,7 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
             else { continue }
             var bounds = CGRect.zero
             guard CGRectMakeWithDictionaryRepresentation(boundsDict as! CFDictionary, &bounds) else { return nil }
-            let center = appKitPoint(fromGlobalTopLeft: CGPoint(x: bounds.midX, y: bounds.midY))
-            return NSScreen.screens.first { $0.frame.contains(center) }?.frame
+            return bounds
         }
         return nil
     }
