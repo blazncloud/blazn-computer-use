@@ -58,13 +58,18 @@ private func prepareOverlayFifo() {
 
 @MainActor
 private final class OverlayController: NSObject, NSApplicationDelegate {
-    private var panels: [NSPanel] = []
+    /// The cursor glyph and click pulses live on their own panel per display so
+    /// they can be dropped below a target's occluders (see applyTargetWindow)
+    /// without dragging the always-on-top status chip down with them.
+    private var cursorPanels: [NSPanel] = []
     private var cursorLayers: [CALayer] = []
     private var displayLink: CADisplayLink?
 
-    /// "Agent working" pill on every display (one layer per panel), shown
-    /// while commands are flowing. Disable with status_chip /
-    /// COMPUTER_USE_MCP_STATUS_CHIP=0.
+    /// "Agent working" pill on every display, on a separate panel pinned at the
+    /// idle level so it stays visible above app windows even while the cursor
+    /// panel is lowered to shadow a background target. Disable with status_chip
+    /// / COMPUTER_USE_MCP_STATUS_CHIP=0.
+    private var chipPanels: [NSPanel] = []
     private var chipLayers: [CALayer] = []
     private var chipVisible = false
     private var chipFadeWork: DispatchWorkItem?
@@ -91,6 +96,19 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
     /// stay smooth instead of teleporting.
     private var duration: CFTimeInterval = 0.22
 
+    /// The window the cursor is currently z-ordered above (nil = floating above
+    /// everything at `panelIdleLevel`). Tracked so a panel is only re-ordered
+    /// when the target actually changes.
+    private var currentTarget: CGWindowID?
+    /// App name shown in the status chip when the target is not frontmost;
+    /// nil renders the default "Agent working".
+    private var backgroundTarget: String?
+    /// Idle level: above every normal window so an untargeted cursor is always
+    /// visible. When a target is set, its panel drops to `.normal` and is
+    /// ordered just above the target, so anything occluding the target also
+    /// occludes the cursor.
+    private let panelIdleLevel: NSWindow.Level = .screenSaver
+
     func start() {
         guard let primary = NSScreen.screens.first else { exit(0) }
         currentPoint = CGPoint(x: primary.frame.midX, y: primary.frame.midY)
@@ -105,42 +123,49 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
 
     // MARK: panels
 
+    /// A borderless, click-through, all-Spaces panel sized to a screen — the
+    /// shared shell for both the cursor and chip panels.
+    private func makeClickThroughPanel(screen: NSScreen) -> NSPanel {
+        let panel = NSPanel(
+            contentRect: screen.frame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered, defer: false
+        )
+        panel.level = panelIdleLevel
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.ignoresMouseEvents = true  // click-through: real input passes through
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        let host = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
+        host.wantsLayer = true
+        panel.contentView = host
+        return panel
+    }
+
     private func buildPanels() {
         for screen in NSScreen.screens {
-            let panel = NSPanel(
-                contentRect: screen.frame,
-                styleMask: [.borderless, .nonactivatingPanel],
-                backing: .buffered, defer: false
-            )
-            panel.level = .screenSaver
-            panel.isOpaque = false
-            panel.backgroundColor = .clear
-            panel.hasShadow = false
-            panel.ignoresMouseEvents = true  // click-through: real input passes through
-            panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
-
-            let host = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
-            host.wantsLayer = true
-
+            let cursorPanel = makeClickThroughPanel(screen: screen)
             let layer = CALayer()
             layer.contents = cursorGlyph()
             layer.contentsScale = screen.backingScaleFactor
             layer.bounds = CGRect(x: 0, y: 0, width: 32, height: 32)
             layer.anchorPoint = CGPoint(x: 0.0625, y: 0.9375)  // arrow tip at (2,30)
             layer.opacity = visible ? 1 : 0
-            host.layer?.addSublayer(layer)
+            cursorPanel.contentView?.layer?.addSublayer(layer)
+            cursorPanel.orderFrontRegardless()
+            cursorPanels.append(cursorPanel)
+            cursorLayers.append(layer)
 
             if chipEnabled {
+                let chipPanel = makeClickThroughPanel(screen: screen)
                 let chip = makeChipLayer(screenSize: screen.frame.size, scale: screen.backingScaleFactor)
                 chip.opacity = chipVisible ? 1 : 0
-                host.layer?.addSublayer(chip)
+                chipPanel.contentView?.layer?.addSublayer(chip)
+                chipPanel.orderFrontRegardless()
+                chipPanels.append(chipPanel)
                 chipLayers.append(chip)
             }
-
-            panel.contentView = host
-            panel.orderFrontRegardless()
-            panels.append(panel)
-            cursorLayers.append(layer)
         }
         syncLayers()
     }
@@ -149,19 +174,26 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         displayLink?.invalidate()
         displayLink = nil
         animating = false
-        for panel in panels { panel.orderOut(nil) }
-        panels.removeAll()
+        for panel in cursorPanels + chipPanels { panel.orderOut(nil) }
+        cursorPanels.removeAll()
+        chipPanels.removeAll()
         cursorLayers.removeAll()
         chipLayers.removeAll()
         buildPanels()
+        // Panels were rebuilt at the idle level; restore the target z-order.
+        if let currentTarget {
+            self.currentTarget = nil
+            applyTargetWindow(currentTarget)
+        }
+        refreshChipText()
     }
 
-    /// Mirror the global cursor position into every panel's local space; each
-    /// panel clips to its own screen, so the glyph shows where it belongs.
+    /// Mirror the global cursor position into every cursor panel's local space;
+    /// each panel clips to its own screen, so the glyph shows where it belongs.
     private func syncLayers() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for (index, panel) in panels.enumerated() {
+        for (index, panel) in cursorPanels.enumerated() {
             cursorLayers[index].position = CGPoint(
                 x: currentPoint.x - panel.frame.origin.x,
                 y: currentPoint.y - panel.frame.origin.y
@@ -209,6 +241,7 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
     }
 
     private nonisolated static func handle(command line: String) {
+        overlayDebug("recv: \(line)")
         let parts = line.split(separator: " ")
         if parts.first == "ping" {
             DispatchQueue.main.async {
@@ -223,16 +256,22 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
             }
             return
         }
-        guard parts.count == 3, let x = Double(parts[1]), let y = Double(parts[2]) else { return }
+        // "move <x> <y> [<win>]" / "pulse <x> <y> [<win>]". The optional 4th
+        // token is the target window's CGWindowID; the cursor is z-ordered just
+        // above it (0 or absent → no target, cursor floats above everything).
+        guard parts.count == 3 || parts.count == 4,
+            let x = Double(parts[1]), let y = Double(parts[2])
+        else { return }
         let point = CGPoint(x: x, y: y)
+        let target: CGWindowID? = parts.count == 4 ? CGWindowID(parts[3]).flatMap { $0 == 0 ? nil : $0 } : nil
         switch parts.first {
         case "move":
             DispatchQueue.main.async {
-                (NSApp.delegate as? OverlayController)?.beginGlide(toGlobalTopLeft: point)
+                (NSApp.delegate as? OverlayController)?.beginGlide(toGlobalTopLeft: point, targetWindow: target)
             }
         case "pulse":
             DispatchQueue.main.async {
-                (NSApp.delegate as? OverlayController)?.showPulse(atGlobalTopLeft: point)
+                (NSApp.delegate as? OverlayController)?.showPulse(atGlobalTopLeft: point, targetWindow: target)
             }
         default:
             break
@@ -257,8 +296,9 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
 
     // MARK: animation
 
-    fileprivate func beginGlide(toGlobalTopLeft point: CGPoint) {
+    fileprivate func beginGlide(toGlobalTopLeft point: CGPoint, targetWindow: CGWindowID?) {
         lastCommand = Date()
+        applyTargetWindow(targetWindow)
         showChip()
         targetPoint = appKitPoint(fromGlobalTopLeft: point)
         startPoint = currentPoint
@@ -272,7 +312,7 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         visible = true
         setOpacity(1, of: cursorLayers, animationDuration: nil)
 
-        if displayLink == nil, let view = panels.first?.contentView {
+        if displayLink == nil, let view = cursorPanels.first?.contentView {
             let link = view.displayLink(target: self, selector: #selector(tick))
             link.add(to: .main, forMode: .common)
             displayLink = link
@@ -317,6 +357,9 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
             guard let self, !self.animating else { return }
             self.visible = false
             self.setOpacity(0, of: self.cursorLayers, animationDuration: 0.4)
+            // No target to shadow while the cursor is hidden: return the panels
+            // to the idle level so the next glide starts from a known state.
+            self.resetTargetWindow()
             overlayDebug("idle fade")
         }
         fadeWork = work
@@ -342,15 +385,85 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         CGPoint(x: point.x, y: primaryHeight - point.y)
     }
 
+    // MARK: target window z-order
+
+    /// Order the cursor panel directly above the target window in the global
+    /// z-stack, so anything occluding the target also occludes the cursor — the
+    /// glyph can only appear where the target app is actually visible. Panels on
+    /// other displays (the target lives on exactly one, "Displays have separate
+    /// Spaces") stay at the idle level. A nil/closed/unknown target restores the
+    /// idle level everywhere: the cursor floats above all windows, as before.
+    private func applyTargetWindow(_ id: CGWindowID?) {
+        guard let id, let info = windowInfo(for: id) else {
+            resetTargetWindow()
+            return
+        }
+        let sameTarget = id == currentTarget
+        currentTarget = id
+
+        // Only the cursor panels move; the chip panels stay pinned on top.
+        let center = appKitPoint(fromGlobalTopLeft: CGPoint(x: info.bounds.midX, y: info.bounds.midY))
+        for panel in cursorPanels {
+            if panel.frame.contains(center) {
+                panel.level = .normal
+                // Cross-process ordering: `relativeTo` takes the other window's
+                // CGWindowID even when it belongs to a different app.
+                panel.order(.above, relativeTo: Int(id))
+            } else if panel.level != panelIdleLevel {
+                panel.level = panelIdleLevel
+                panel.orderFrontRegardless()
+            }
+        }
+
+        let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let isBackground = info.ownerPID != 0 && frontPID != nil && frontPID != info.ownerPID
+        let newBackgroundTarget = isBackground ? info.ownerName : nil
+        if newBackgroundTarget != backgroundTarget || !sameTarget {
+            backgroundTarget = newBackgroundTarget
+            refreshChipText()
+        }
+    }
+
+    /// Return every cursor panel to the idle level above all windows and drop
+    /// the target-affinity (idle fade, session end, target window gone).
+    private func resetTargetWindow() {
+        guard currentTarget != nil || backgroundTarget != nil else { return }
+        currentTarget = nil
+        backgroundTarget = nil
+        for panel in cursorPanels where panel.level != panelIdleLevel {
+            panel.level = panelIdleLevel
+            panel.orderFrontRegardless()
+        }
+        refreshChipText()
+    }
+
+    /// Bounds (global top-left), owner pid, and owner name for a CGWindowID, or
+    /// nil if the window no longer exists — the caller then falls back to the
+    /// idle level rather than pinning to a dead window.
+    private func windowInfo(for id: CGWindowID) -> (bounds: CGRect, ownerPID: pid_t, ownerName: String)? {
+        guard let list = CGWindowListCopyWindowInfo([.optionIncludingWindow], id) as? [[String: Any]],
+            let dict = list.first,
+            let boundsDict = dict[kCGWindowBounds as String]
+        else { return nil }
+        var bounds = CGRect.zero
+        guard CGRectMakeWithDictionaryRepresentation(boundsDict as! CFDictionary, &bounds) else { return nil }
+        let ownerPID = (dict[kCGWindowOwnerPID as String] as? pid_t) ?? 0
+        let ownerName = (dict[kCGWindowOwnerName as String] as? String) ?? ""
+        return (bounds, ownerPID, ownerName)
+    }
+
     // MARK: click pulse
 
     /// Expanding ring at the point an action just landed — the visual "the
     /// click happened", distinct from the cursor arriving.
-    fileprivate func showPulse(atGlobalTopLeft point: CGPoint) {
+    fileprivate func showPulse(atGlobalTopLeft point: CGPoint, targetWindow: CGWindowID?) {
         lastCommand = Date()
+        applyTargetWindow(targetWindow)
         showChip()
+        // Pulses ride the cursor panels, so they clip against the target's
+        // occluders exactly as the glyph does.
         let global = appKitPoint(fromGlobalTopLeft: point)
-        for panel in panels {
+        for panel in cursorPanels {
             let local = CGPoint(x: global.x - panel.frame.origin.x, y: global.y - panel.frame.origin.y)
             guard panel.contentView?.bounds.contains(local) == true,
                 let host = panel.contentView?.layer
@@ -416,9 +529,8 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         for chip in chipLayers {
             (chip.sublayers?.first as? CALayer)?.backgroundColor =
                 (on ? NSColor.systemRed : NSColor.systemBlue).cgColor
-            (chip.sublayers?.compactMap { $0 as? CATextLayer }.first)?.string =
-                on ? "Recording" : "Agent working"
         }
+        refreshChipText()
         if on {
             lastCommand = Date()
             chipFadeWork?.cancel()
@@ -430,37 +542,67 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Pill with a blue dot and "Agent working", top-right of its display
-    /// just below the menu bar. Click-through like everything else.
+    /// The pill's text: names a background target when the target app isn't
+    /// frontmost, so the user can see the agent is working elsewhere.
+    private var chipText: String {
+        if recording { return "Recording" }
+        if let backgroundTarget { return "Working in \(backgroundTarget) (background)" }
+        return "Agent working"
+    }
+
+    /// Re-lay out every chip for the current `chipText` (the pill grows to fit
+    /// the longer "Working in … (background)" copy and stays right-anchored).
+    private func refreshChipText() {
+        guard chipEnabled else { return }
+        let text = chipText
+        for (index, chip) in chipLayers.enumerated() where index < chipPanels.count {
+            layoutChip(chip, text: text, screenWidth: chipPanels[index].frame.width)
+        }
+    }
+
+    /// Pill with a colored dot and status text, top-right of its display just
+    /// below the menu bar. Click-through like everything else.
     private func makeChipLayer(screenSize: CGSize, scale: CGFloat) -> CALayer {
-        let size = CGSize(width: 138, height: 28)
+        let height: CGFloat = 28
         let chip = CALayer()
-        chip.frame = CGRect(
-            x: screenSize.width - size.width - 16,
-            y: screenSize.height - size.height - 40,
-            width: size.width, height: size.height
-        )
+        chip.frame = CGRect(x: 0, y: screenSize.height - height - 40, width: 0, height: height)
         chip.backgroundColor = NSColor.black.withAlphaComponent(0.72).cgColor
-        chip.cornerRadius = size.height / 2
+        chip.cornerRadius = height / 2
         chip.borderWidth = 1
         chip.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
 
         let dot = CALayer()
-        dot.frame = CGRect(x: 12, y: (size.height - 8) / 2, width: 8, height: 8)
+        dot.frame = CGRect(x: 12, y: (height - 8) / 2, width: 8, height: 8)
         dot.cornerRadius = 4
         dot.backgroundColor = NSColor.systemBlue.cgColor
         chip.addSublayer(dot)
 
         let text = CATextLayer()
-        text.string = "Agent working"
         text.font = NSFont.systemFont(ofSize: 12, weight: .medium)
         text.fontSize = 12
         text.foregroundColor = NSColor.white.cgColor
         text.alignmentMode = .left
         text.contentsScale = scale
-        text.frame = CGRect(x: 28, y: 6.5, width: size.width - 36, height: 16)
         chip.addSublayer(text)
+
+        layoutChip(chip, text: chipText, screenWidth: screenSize.width)
         return chip
+    }
+
+    /// Size the pill to its text and pin it 16pt from the right screen edge.
+    private func layoutChip(_ chip: CALayer, text: String, screenWidth: CGFloat) {
+        let font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        let textWidth = ceil((text as NSString).size(withAttributes: [.font: font]).width)
+        let height: CGFloat = 28
+        let width = 28 + textWidth + 14  // dot inset + text + trailing pad
+        chip.frame = CGRect(
+            x: screenWidth - width - 16, y: chip.frame.origin.y,
+            width: width, height: height
+        )
+        if let textLayer = chip.sublayers?.compactMap({ $0 as? CATextLayer }).first {
+            textLayer.string = text
+            textLayer.frame = CGRect(x: 28, y: 6.5, width: textWidth + 2, height: 16)
+        }
     }
 
     private func easeOutCubic(_ t: Double) -> Double {

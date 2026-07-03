@@ -9,6 +9,7 @@
 // The overlay is purely cosmetic; it never moves the real cursor, and a
 // dead/failed helper never blocks or fails the action.
 
+import CoreGraphics
 import Foundation
 
 actor AgentCursor {
@@ -24,10 +25,12 @@ actor AgentCursor {
     private let glideDuration = Duration.milliseconds(160)
 
     /// Glide the overlay cursor to a global top-left point, then return so the
-    /// caller can deliver the actual action. No-op when disabled.
-    func glide(to point: CGPoint) async {
+    /// caller can deliver the actual action. No-op when disabled. `targetWindow`
+    /// (the CGWindowID the action targets) z-orders the cursor just above that
+    /// window, so occluders of the target also occlude the cursor.
+    func glide(to point: CGPoint, targetWindow: CGWindowID? = nil) async {
         guard enabled else { return }
-        guard await send("move \(Int(point.x)) \(Int(point.y))\n", spawningIfNeeded: true) else { return }
+        guard await send("move \(Int(point.x)) \(Int(point.y)) \(targetWindow ?? 0)\n", spawningIfNeeded: true) else { return }
         try? await Task.sleep(for: glideDuration)
     }
 
@@ -42,9 +45,9 @@ actor AgentCursor {
     /// Ripple at a global top-left point after an action landed there, so the
     /// user sees the click itself, not just the cursor arriving. Never spawns
     /// the helper: a glide always precedes the actions that pulse.
-    func pulse(at point: CGPoint) async {
+    func pulse(at point: CGPoint, targetWindow: CGWindowID? = nil) async {
         guard enabled else { return }
-        _ = await send("pulse \(Int(point.x)) \(Int(point.y))\n", spawningIfNeeded: false)
+        _ = await send("pulse \(Int(point.x)) \(Int(point.y)) \(targetWindow ?? 0)\n", spawningIfNeeded: false)
     }
 
     /// Switch the overlay's status pill to (or from) the recording state while
