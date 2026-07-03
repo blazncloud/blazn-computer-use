@@ -48,7 +48,7 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let outcome: InputActionOutcome
     switch buttonName {
     case "left":
-        outcome = try await leftClick(target, clickCount: clickCount)
+        outcome = try await leftClick(target, clickCount: clickCount, intent: intent, before: before)
     case "right":
         outcome = try rightClick(target)
     case "middle":
@@ -75,7 +75,9 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle, note: outcome.note,
         screenshot: screenshotDetail(args),
-        focusTelemetry: focus.finish(deliveryTier: outcome.deliveryTier.rawValue, fallbackReasons: outcome.fallbackReasons),
+        focusTelemetry: focus.finish(
+            deliveryTier: outcome.deliveryTier.rawValue, fallbackReasons: outcome.fallbackReasons,
+            landedRung: outcome.landedRung),
         verifier: verifier
     )
 }
@@ -108,21 +110,69 @@ private struct InputActionOutcome {
     let note: String
     let deliveryTier: InputTier
     let fallbackReasons: [FallbackReason]
+    /// The AX chain rung whose verified effect landed the click (tier 1 only).
+    let landedRung: String?
 
-    init(note: String, deliveryTier: InputTier, fallbackReasons: [FallbackReason] = []) {
+    init(
+        note: String, deliveryTier: InputTier, fallbackReasons: [FallbackReason] = [], landedRung: String? = nil
+    ) {
         self.note = note
         self.deliveryTier = deliveryTier
         self.fallbackReasons = fallbackReasons
+        self.landedRung = landedRung
     }
 }
 
-private func leftClick(_ target: PointTarget, clickCount: Int) async throws -> InputActionOutcome {
+private func leftClick(
+    _ target: PointTarget, clickCount: Int, intent: ActionIntent, before: ActionVerification
+) async throws -> InputActionOutcome {
     // Animate the (cosmetic) agent cursor to the target before acting.
     if let point = target.point {
         await AgentCursor.shared.glide(to: point, targetWindow: target.deliveryContext.windowNumber)
     }
 
-    // Tier 1: accessibility press, when the element advertises it.
+    // Tier 1: the multi-strategy AX chain, for a single click on a resolved
+    // element. Each rung is verified by read-act-read; the first whose effect
+    // is observed wins. A rung that fires without a confirming change falls
+    // through. (Double-clicks keep the legacy single-rung press below — verified
+    // once by the outcome contract, not per-press.)
+    if let element = target.element, clickCount == 1 {
+        let window = axElement(element, kAXWindowAttribute)
+        let beforeSignature = window.map(chainWindowSignature)
+        let result = await runClickChain(
+            target: element, window: window, intent: intent, before: before,
+            beforeWindowSignature: beforeSignature,
+            settle: { try? await Task.sleep(for: .milliseconds(80)) })
+        if let landed = result.landedRungID {
+            return InputActionOutcome(
+                note: "Pressed \(target.description) via accessibility chain [\(landed)].",
+                deliveryTier: .accessibilityAction,
+                fallbackReasons: firedUnverifiedReasons(result),
+                landedRung: landed)
+        }
+
+        // The whole AX chain was exhausted without an observed effect. Fall
+        // through to synthetic injection (unchanged ladder) when a point exists,
+        // carrying the tried rungs so the agent sees the AX strategies failed.
+        // The outcome verifier makes the final call (effect_not_verified here).
+        let firedReasons = firedUnverifiedReasons(result)
+        if target.point != nil {
+            let delivery = try deliverClick(
+                at: try target.requirePoint(), button: .left, clickCount: 1, context: target.deliveryContext)
+            return InputActionOutcome(
+                note: "Clicked \(target.description) [\(delivery.tier.rawValue)].",
+                deliveryTier: delivery.tier,
+                fallbackReasons: firedReasons + [.axActionUnsupported] + delivery.fallbackReasons)
+        }
+        // No point to inject at: the AX action was performed (if any rung fired),
+        // just not confirmed — report it as a best-effort AX delivery rather than
+        // failing; the verifier will classify it.
+        return InputActionOutcome(
+            note: "Performed an accessibility action on \(target.description); effect unconfirmed.",
+            deliveryTier: .accessibilityAction, fallbackReasons: firedReasons)
+    }
+
+    // Legacy tier 1: a single AXPress (self-or-ancestor), for double-clicks.
     if let element = target.element,
         let pressable = selfOrAncestor(of: element, supporting: kAXPressAction as String)
     {

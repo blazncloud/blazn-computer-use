@@ -62,6 +62,9 @@ struct FocusTelemetry: Equatable {
     /// Factual dirty bit — an unchanged tree after a background-event delivery
     /// is the one observable hint that the app may have dropped the event.
     var uiChanged: Bool? = nil
+    /// Which multi-strategy AX chain rung landed (its verified effect was
+    /// observed), when tier 1 was a chain. nil for non-chain deliveries.
+    var landedRung: String? = nil
 
     var focusChanged: Bool {
         before != after
@@ -98,6 +101,9 @@ struct FocusTelemetry: Equatable {
         if !fallbackReasons.isEmpty {
             fields["fallback_reasons"] = .array(fallbackReasons.map { .string($0) })
         }
+        if let landedRung {
+            fields["chain_rung"] = .string(landedRung)
+        }
         if let uiChanged {
             fields["ui_changed"] = .bool(uiChanged)
         }
@@ -118,14 +124,17 @@ struct FocusChangeTracker {
         )
     }
 
-    func finish(deliveryTier: String? = nil, fallbackReasons: [FallbackReason] = []) -> FocusTelemetry {
+    func finish(
+        deliveryTier: String? = nil, fallbackReasons: [FallbackReason] = [], landedRung: String? = nil
+    ) -> FocusTelemetry {
         FocusTelemetry(
             before: before,
             after: FrontmostAppSnapshot.current(),
             deliveryTier: deliveryTier,
             focusChangeAllowed: focusChangeAllowed,
             cursorMovementAllowed: cursorMovementAllowed,
-            fallbackReasons: fallbackReasons.map(\.rawValue)
+            fallbackReasons: fallbackReasons.map(\.rawValue),
+            landedRung: landedRung
         )
     }
 }
