@@ -19,8 +19,11 @@ without hijacking your cursor or stealing focus.**
 > until you unlock).
 
 <!--
-  HERO MEDIA — assets/demo.gif goes here.
-  Do NOT record this yet: final Wave-2/3 features are still landing; a later pass
+  HERO MEDIA PLACEHOLDER.
+  When ready, drop the demo recording at assets/demo.gif and replace the table
+  block below with:
+      <p align="center"><img src="assets/demo.gif" alt="..." width="820"></p>
+  Do NOT record it yet: final Wave-2/3 features are still landing; a later pass
   records it against the release build.
   The GIF should show, in one continuous take:
     1. The user typing in a foreground app (e.g. a notes window).
@@ -33,13 +36,18 @@ without hijacking your cursor or stealing focus.**
   at once, no focus fight.
 -->
 
-<p align="center">
-  <img src="assets/demo.gif" alt="Agent driving an occluded background app with a visible agent cursor while the user keeps typing in another app" width="820">
-  <br>
-  <em>Placeholder — demo GIF pending. The agent drives an occluded background app
-  (visible agent cursor + "Agent working" chip) while the user keeps typing in a
-  different app, with no focus or cursor fight.</em>
-</p>
+<table align="center" width="100%">
+  <tr>
+    <td align="center" height="280">
+      <h3>🎬 Demo — coming soon</h3>
+      <p><em>Placeholder for <code>assets/demo.gif</code></em></p>
+      <p>The agent drives an <strong>occluded background app</strong> — visible
+      agent cursor gliding to each target, "Agent working" chip on screen — while
+      the user keeps typing in a <strong>different</strong> app. No focus fight,
+      no cursor hijack.</p>
+    </td>
+  </tr>
+</table>
 
 ---
 
