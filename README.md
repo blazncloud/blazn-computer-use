@@ -449,7 +449,6 @@ key in `~/.config/computer-use-mcp.json` (env wins):
 | `url_deny` | URL substrings where browser actions are blocked outright (`confirm` does not override). |
 | `url_confirm` | Extra URL substrings where browser actions need `confirm` (defaults cover payment pages). |
 | `ax_timeout` | Per-call accessibility timeout in seconds (default 2). |
-| `verify` / `COMPUTER_USE_MCP_VERIFY=0` | Disable the read-act-read outcome verifier (on by default; see [What's new](#whats-new-this-cycle)). |
 | `no_daemon` / `COMPUTER_USE_MCP_NO_DAEMON=1` | Run the engine in-process instead of through the shared daemon. |
 | `no_app_lease` | Disable per-app session arbitration. |
 | `app_lease_seconds` | How long an app stays leased to a session after its last action (default 10). |

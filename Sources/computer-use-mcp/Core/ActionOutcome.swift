@@ -12,15 +12,6 @@ import ApplicationServices
 import Foundation
 import MCP
 
-// MARK: - Runtime flag (decision C — A/B the latency overhead; deleted later)
-
-/// Whether mutating tools attach an outcome verification block. On by default;
-/// COMPUTER_USE_MCP_VERIFY=0 disables it purely to measure the reread overhead.
-/// Trivially removable: delete this function and its call sites.
-func outcomeVerificationEnabled() -> Bool {
-    Config.bool("verify") ?? true
-}
-
 // MARK: - Classification and failure domain
 
 /// The verifier's verdict on whether an action's intended effect occurred.

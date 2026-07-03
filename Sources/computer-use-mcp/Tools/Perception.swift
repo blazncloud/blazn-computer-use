@@ -150,7 +150,7 @@ func stateResult(
         // No recapture on the fast path: honor the skip honestly rather than
         // paying for a reread — a pre-resolved verdict still rides along, but
         // an unresolved one becomes verifier_ambiguous, never a false success.
-        if let verifier, outcomeVerificationEnabled() {
+        if let verifier {
             result = result.withActionOutcome(verifier.skippedStateOutcome())
         }
         return result
@@ -315,7 +315,7 @@ func stateResult(
     // Re-read the acted-on element and reduce to an outcome. The reread never
     // throws — a failure degrades the classification, never the tool call.
     var actionOutcome: ActionOutcome?
-    if let verifier, outcomeVerificationEnabled() {
+    if let verifier {
         actionOutcome = await verifier.finalize(
             windowElement: window.element, treeChanged: !unchanged, afterWindowTitle: window.title)
     }

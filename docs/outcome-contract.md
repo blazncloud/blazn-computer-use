@@ -23,8 +23,9 @@ As-built notes (where the code deviates from this design):
 - `batch` aggregation (§8) is not yet implemented: each sub-action verifies
   individually through dispatch, but the batch result carries only the final
   step's outcome block.
-- A `verify` runtime flag (`COMPUTER_USE_MCP_VERIFY`, default on) gates the
-  verifier for A/B latency measurement; measured overhead is ~3% on a click.
+- The verifier is always on. It shipped behind a temporary `COMPUTER_USE_MCP_VERIFY`
+  flag to A/B the latency overhead (~3% median on a click); the flag has since been
+  removed and the reread runs unconditionally.
 
 ---
 
