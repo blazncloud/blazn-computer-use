@@ -46,13 +46,19 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let focus = FocusChangeTracker.start()
     let target = try await resolvePointTarget(args, app: app)
 
+    // Route the wheel to the real scroll container, not whatever leaf the point
+    // landed on: walk the AX ancestor chain and rank candidates for
+    // scrollability. The container's own viewport (not a ~20px row) then also
+    // sizes a semantic direction+pages scroll correctly.
+    let ranked = target.element.map { rankedScrollContainers(from: $0) } ?? []
+
     var deltaX = args.integer("delta_x") ?? 0
     var deltaY = args.integer("delta_y") ?? 0
-    // Semantic alternative to raw deltas: a direction and a page count, sized
-    // from the scrolled element itself.
     if let direction = args.string("direction") {
         let pages = try ArgumentBounds.checkScrollPages(args.number("pages") ?? 1)
-        let frame = target.element.flatMap(axFrame)
+        // Size from the top-ranked container's viewport; fall back to the hit
+        // element, then a default page height.
+        let frame = (ranked.first ?? target.element).flatMap(axFrame)
         switch direction {
         case "down": deltaY = Int(Double(frame?.height ?? 400) * pages)
         case "up": deltaY = -Int(Double(frame?.height ?? 400) * pages)
@@ -67,15 +73,39 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     }
     try ArgumentBounds.checkScrollDelta(deltaX: deltaX, deltaY: deltaY)
 
-    // Read (before): is the container already pinned at the boundary in the
-    // scroll direction? Then "no movement" is expected, not a dropped event.
-    var before = ActionVerification()
-    before.scrollAtExtent = scrollExtentBefore(container: target.element, deltaX: deltaX, deltaY: deltaY)
+    // Pick the container to drive and a point over its visible centre; fall back
+    // to the raw hit point when nothing on the chain ranks as scrollable.
+    let container = chooseScrollContainer(ranked, deltaX: deltaX, deltaY: deltaY)
+    var fallbackReasons: [FallbackReason] = []
+    let point: CGPoint
+    if let container, let frame = axFrame(container) {
+        let region = target.deliveryContext.windowFrame.map { frame.intersection($0) } ?? frame
+        let usable = (region.isNull || region.isEmpty) ? frame : region
+        point = CGPoint(x: usable.midX, y: usable.midY)
+    } else {
+        if container == nil { fallbackReasons.append(.noScrollContainerFound) }
+        point = try target.requirePoint()
+    }
 
-    let point = try target.requirePoint()
+    // Evidence read off the chosen container's own scroll bars: whether it is
+    // already pinned in the scroll direction (so "no movement" is expected), and
+    // a before/after position signature that confirms the content actually moved.
+    var before = ActionVerification()
+    before.scrollAtExtent = container.flatMap { scrollAtExtent(container: $0, deltaX: deltaX, deltaY: deltaY) }
+    if let container {
+        before.notes.append(
+            "Routed the scroll to a \(axRole(container)) container "
+                + "(\(ranked.count) scrollable candidate\(ranked.count == 1 ? "" : "s") on the ancestor chain).")
+    }
+    let beforeOffset = container.flatMap(scrollOffsetSignature)
+
     await AgentCursor.shared.glide(to: point, targetWindow: target.deliveryContext.windowNumber)
     let tier = deliverScroll(at: point, deltaX: deltaX, deltaY: deltaY, context: target.deliveryContext)
     try? await Task.sleep(for: .milliseconds(80))
+
+    if let container, let beforeOffset, let afterOffset = scrollOffsetSignature(container) {
+        before.scrollPositionChanged = beforeOffset != afterOffset
+    }
 
     let verifier = ActionVerifier(
         family: .scroll, intent: .scrollContent, deliveryTier: tier.rawValue,
@@ -85,30 +115,9 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         app: app, windowTitle: target.snapshot.windowTitle,
         note: "Scrolled (\(deltaX),\(deltaY)) at \(target.description).",
         screenshot: screenshotDetail(args),
-        focusTelemetry: focus.finish(deliveryTier: tier.rawValue),
+        focusTelemetry: focus.finish(deliveryTier: tier.rawValue, fallbackReasons: fallbackReasons),
         verifier: verifier
     )
-}
-
-/// Best-effort: is the scroll container already at the boundary in the requested
-/// direction? Reads the container's own scroll bar (0…1). nil when the bar is
-/// unreadable — the reducer then leans on the whole-window change bit. A fuller
-/// container-ranking extent check is scroll task #7's job.
-private func scrollExtentBefore(container: AXUIElement?, deltaX: Int, deltaY: Int) -> Bool? {
-    guard let container else { return nil }
-    func barValue(_ attribute: String) -> Double? {
-        guard let bar = axElement(container, attribute),
-            let value = (axAttribute(bar, kAXValueAttribute) as? NSNumber)?.doubleValue
-        else { return nil }
-        return value
-    }
-    if deltaY != 0, let value = barValue("AXVerticalScrollBar") {
-        return deltaY > 0 ? value >= 0.999 : value <= 0.001
-    }
-    if deltaX != 0, let value = barValue("AXHorizontalScrollBar") {
-        return deltaX > 0 ? value >= 0.999 : value <= 0.001
-    }
-    return nil
 }
 
 func dragImpl(_ args: [String: Value]) async throws -> CallTool.Result {

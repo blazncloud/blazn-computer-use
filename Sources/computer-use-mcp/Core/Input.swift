@@ -67,6 +67,9 @@ enum FallbackReason: String, Equatable, Sendable {
     /// The caller opted into the guarded global-cursor path (Tier 4),
     /// bypassing the background-safe tiers.
     case globalCursorRequested = "global-cursor-requested"
+    /// scroll only: no scrollable container was found on the target's AX
+    /// ancestor chain, so the wheel was posted at the raw hit point.
+    case noScrollContainerFound = "no-scroll-container-found"
 }
 
 /// The tier a delivery actually used plus, in tier order, why each
