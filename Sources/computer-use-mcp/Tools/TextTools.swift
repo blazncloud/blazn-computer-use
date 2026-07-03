@@ -33,7 +33,7 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     }
 
     try SafetyPolicy.checkTyping(into: element, app: app, confirmed: confirmed)
-    try insertText(text, into: element, described: described)
+    let tier = try insertText(text, into: element, app: app, described: described)
     let warning = readBackWarning(typed: text, element: element)
     let snapshot = await SnapshotStore.shared.load(forPid: app.pid)
     return try await stateResult(
@@ -41,7 +41,7 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         note: "Typed \(text.count) characters into \(described). "
             + (warning ?? "Verify the new value below."),
         screenshot: screenshotDetail(args),
-        focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAttribute.rawValue)
+        focusTelemetry: focus.finish(deliveryTier: tier.rawValue)
     )
 }
 
@@ -71,9 +71,10 @@ func typedTextWarning(typed: String, currentValue: String?) -> String? {
 }
 
 /// Insert text at the element's current selection (collapsed selection =
-/// caret). Prefers the canonical kAXSelectedText replacement; falls back to
-/// splicing the full value.
-private func insertText(_ text: String, into element: AXUIElement, described: String) throws {
+/// caret). Prefers the canonical kAXSelectedText replacement, then splicing the
+/// full value; if the element accepts neither (custom/web fields), falls back
+/// to background-safe synthetic Unicode key events. Returns the tier used.
+private func insertText(_ text: String, into element: AXUIElement, app: ResolvedApp, described: String) throws -> InputTier {
     var settable = DarwinBoolean(false)
 
     // Preferred: replace the current selection.
@@ -81,18 +82,22 @@ private func insertText(_ text: String, into element: AXUIElement, described: St
         settable.boolValue,
         AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) == .success
     {
-        return
+        return .accessibilityAttribute
     }
 
-    // Fallback: splice into the full value at the selected range.
+    // Next: splice into the full value at the selected range.
     guard
         AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success,
         settable.boolValue
     else {
-        throw ToolError.failed(
-            "\(described) is not editable via accessibility. Target an editable field "
-                + "(AXTextField/AXTextArea), or click it first and retry."
-        )
+        // The element exposes no settable AX value. Focus it (best effort) so
+        // synthetic keys land here, then type through Unicode key events posted
+        // to the pid — same background-safe, pid-targeted discipline as the
+        // click ladder, never a global post. The secure-field gate already ran
+        // in typeTextImpl, so this path stays behind that confirmation.
+        AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        let context = DeliveryContext(pid: app.pid, windowNumber: nil, windowFrame: nil, allowGlobalCursor: false)
+        return try typeUnicodeText(text, context: context)
     }
 
     let current = axString(element, kAXValueAttribute) ?? ""
@@ -117,6 +122,7 @@ private func insertText(_ text: String, into element: AXUIElement, described: St
     if let caretValue = AXValueCreate(.cfRange, &caret) {
         AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, caretValue)
     }
+    return .accessibilityAttribute
 }
 
 // MARK: - set_value

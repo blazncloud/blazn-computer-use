@@ -10,46 +10,45 @@ import SwiftUI
 // rather than whatever a real app happens to render. See docs/fixture-app.md
 // for the control -> truth-suite scenario map.
 
+// Window content-size clamp, documented in docs/fixture-app.md. manage_window
+// resize writes are clamped to these bounds. Expressed as a SwiftUI root-view
+// frame (below) so SwiftUI itself maintains the window's contentMin/MaxSize —
+// a delegate-set constraint gets overridden by SwiftUI's layout pass.
+enum WindowClamp {
+    static let minWidth: CGFloat = 720
+    static let minHeight: CGFloat = 540
+    static let maxWidth: CGFloat = 1200
+    static let maxHeight: CGFloat = 900
+    static let idealWidth: CGFloat = 960
+    static let idealHeight: CGFloat = 720
+}
+
 @main
 struct ComputerUseFixtureApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     var body: some Scene {
         WindowGroup("ComputerUse Fixture") {
             ContentView()
+                .frame(
+                    minWidth: WindowClamp.minWidth, idealWidth: WindowClamp.idealWidth,
+                    maxWidth: WindowClamp.maxWidth,
+                    minHeight: WindowClamp.minHeight, idealHeight: WindowClamp.idealHeight,
+                    maxHeight: WindowClamp.maxHeight)
         }
+        .windowResizability(.contentSize)
     }
 }
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    // Window size clamp, documented in docs/fixture-app.md. manage_window
-    // frame writes are expected to be clamped to these bounds:
-    //   width  in [WindowClamp.minWidth,  WindowClamp.maxWidth]
-    //   height in [WindowClamp.minHeight, WindowClamp.maxHeight]
-    enum WindowClamp {
-        static let minWidth: CGFloat = 720
-        static let minHeight: CGFloat = 540
-        static let maxWidth: CGFloat = 1200
-        static let maxHeight: CGFloat = 900
-    }
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         // Bring the fixture window up without forcibly stealing focus: the
         // truth suite drives focus explicitly, and an unconditional steal
         // could mask a headless-policy focus violation.
         NSApp.activate(ignoringOtherApps: false)
-        applyWindowConstraints()
+        NSApp.windows.first?.title = "ComputerUse Fixture"
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
-
-    private func applyWindowConstraints() {
-        guard let window = NSApp.windows.first else { return }
-        window.title = "ComputerUse Fixture"
-        window.contentMinSize = NSSize(width: WindowClamp.minWidth, height: WindowClamp.minHeight)
-        window.contentMaxSize = NSSize(width: WindowClamp.maxWidth, height: WindowClamp.maxHeight)
-        window.setContentSize(NSSize(width: 960, height: 720))
-        window.styleMask.insert(.resizable)
-    }
 }

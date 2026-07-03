@@ -316,6 +316,43 @@ func deliverDrag(from: CGPoint, to: CGPoint, context: DeliveryContext) async -> 
     return tier
 }
 
+/// Split text into Unicode-typing chunks: one grapheme cluster per chunk, each
+/// as its UTF-16 code units. A cluster that is several units (an emoji, a
+/// combining sequence) is delivered whole on a single key event so it is never
+/// torn apart mid-scalar. Pure, so the chunking is unit-testable without
+/// posting any events.
+func unicodeTypingChunks(_ text: String) -> [[UniChar]] {
+    text.map { Array(String($0).utf16) }
+}
+
+/// Type arbitrary text into the target pid via synthetic Unicode key events —
+/// the background-safe fallback for type_text when the element is not
+/// AX-value-settable (custom/web fields). Each grapheme cluster rides a
+/// keyDown/keyUp pair whose Unicode string is overridden, posted to the pid
+/// (Tier 3 discipline: never a global post, never the user's real cursor). Key
+/// events land on whatever the app has focused, so the caller focuses the
+/// target first. Returns the delivery tier used.
+@discardableResult
+func typeUnicodeText(_ text: String, context: DeliveryContext) throws -> InputTier {
+    let source = CGEventSource(stateID: .privateState)
+    for var chunk in unicodeTypingChunks(text) {
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
+            let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
+        else {
+            throw ToolError.failed("Could not synthesize a keyboard event for text entry.")
+        }
+        // Override the (meaningless) virtual key 0 with the cluster's actual
+        // characters; set on both edges so apps that read on either land it.
+        chunk.withUnsafeBufferPointer { buffer in
+            down.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
+            up.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
+        }
+        down.postToPid(context.pid)
+        up.postToPid(context.pid)
+    }
+    return .perPid
+}
+
 func keyDeliveryMode(context: DeliveryContext, targetAppIsActive: Bool) throws -> KeyDeliveryMode {
     guard context.allowGlobalCursor else {
         return .perPid
