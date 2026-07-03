@@ -146,26 +146,73 @@ private func captureWindowUnbounded(
 }
 
 /// Race an operation against a deadline. On timeout the operation's task is
-/// cancelled and abandoned (ScreenCaptureKit awaits do not always honor
-/// cancellation) and a recoverable tool error is thrown instead.
+/// cancelled and abandoned (a cold ScreenCaptureKit/replayd capture has been
+/// seen to ignore cancellation and never return) and a recoverable tool error
+/// is thrown instead.
+///
+/// This deliberately does NOT use a task group: a group implicitly awaits every
+/// child before it returns, so one un-cancellable child would pin the group
+/// past the deadline and defeat the timeout. Instead two unstructured tasks
+/// race through a resume-once continuation, and the loser is abandoned rather
+/// than awaited.
 func withTimeout<T: Sendable>(
     seconds: Double, label: String, operation: @escaping @Sendable () async throws -> T
 ) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
-        group.addTask { try await operation() }
-        group.addTask {
-            try await Task.sleep(for: .seconds(seconds))
-            throw ToolError.failed(
-                "\(label) timed out after \(Int(seconds))s. The macOS screen-capture "
-                    + "service (replayd) may be wedged; if this persists, run "
-                    + "`killall -9 replayd` (launchd restarts it clean) or restart the MCP server."
-            )
+    let race = TimeoutRace<T>()
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { continuation in
+            let work = Task {
+                let result: Result<T, any Error>
+                do { result = .success(try await operation()) } catch { result = .failure(error) }
+                await race.finish(result, resuming: continuation)
+            }
+            let timer = Task {
+                try? await Task.sleep(for: .seconds(seconds))
+                await race.finish(
+                    .failure(ToolError.failed(
+                        "\(label) timed out after \(Int(seconds))s. The macOS screen-capture "
+                            + "service (replayd) may be wedged; if this persists, run "
+                            + "`killall -9 replayd` (launchd restarts it clean) or restart the MCP server."
+                    )),
+                    resuming: continuation
+                )
+            }
+            Task { await race.track(work: work, timer: timer) }
         }
-        guard let first = try await group.next() else {
-            throw ToolError.failed("\(label) produced no result.")
-        }
-        group.cancelAll()
-        return first
+    } onCancel: {
+        Task { await race.cancel() }
+    }
+}
+
+/// Guards a `withTimeout` race so its continuation resumes exactly once and the
+/// losing task is cancelled (never awaited).
+private actor TimeoutRace<T: Sendable> {
+    private var settled = false
+    private var work: Task<Void, Never>?
+    private var timer: Task<Void, Never>?
+
+    func track(work: Task<Void, Never>, timer: Task<Void, Never>) {
+        self.work = work
+        self.timer = timer
+        // Only ever stop the timer; the work task is abandoned, not cancelled.
+        if settled { timer.cancel() }
+    }
+
+    func finish(_ result: Result<T, any Error>, resuming continuation: CheckedContinuation<T, any Error>) {
+        guard !settled else { return }
+        settled = true
+        // Stop the timer's sleep, but do NOT cancel the work task: a wedged
+        // ScreenCaptureKit call ignores cancellation, and cancelling it tears
+        // down its suspended continuation mid-flight (the "leaked continuation"
+        // warning). Left alone, the abandoned capture resumes and discards its
+        // result cleanly once replayd finally answers.
+        timer?.cancel()
+        continuation.resume(with: result)
+    }
+
+    func cancel() {
+        work?.cancel()
+        timer?.cancel()
     }
 }
 
