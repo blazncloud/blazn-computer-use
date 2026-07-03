@@ -19,12 +19,13 @@ struct ScrollCandidateFeatures: Equatable {
     let supportsScrollToVisible: Bool
 }
 
-/// Fitness of a candidate as the element that consumes a wheel event. Higher is
-/// better; a non-positive score means "not a scroll container." Tuned from what
-/// our trees expose: a real AXScrollArea (or anything carrying scroll bars)
-/// outranks a mere scroll-to-visible action; the scroll bar itself and its
-/// stepper/thumb are disqualified so a wheel never targets the control instead
-/// of the content.
+/// Fitness of a candidate as a scroll container. Tuned from what our trees
+/// expose: a real AXScrollArea (or anything carrying scroll bars) is a strong
+/// container; web-area/collection roles qualify on their own; a bare
+/// scroll-to-visible action is only a weak hint (an element that can be
+/// *scrolled into view* by its parent is not itself a scroller), below the
+/// routing threshold. The scroll bar itself and its stepper/thumb are
+/// disqualified so a wheel never targets the control instead of the content.
 func scrollContainerScore(_ f: ScrollCandidateFeatures) -> Int {
     switch f.role {
     case "AXScrollBar", "AXValueIndicator", "AXIncrementor": return -100
@@ -38,16 +39,28 @@ func scrollContainerScore(_ f: ScrollCandidateFeatures) -> Int {
     case "AXTable", "AXOutline", "AXList", "AXGrid", "AXCollection", "AXBrowser": score += 30
     default: break
     }
-    if f.supportsScrollToVisible { score += 10 }
+    if f.supportsScrollToVisible { score += 5 }
     return score
 }
 
-/// Rank scored candidates best-first: higher score wins, ties break to the
-/// innermost (smallest hop depth from the hit element). Pure, so the ranking
-/// policy is tested independent of the live AX walk.
+/// Minimum score to treat a candidate as a routable scroll container. Above a
+/// bare scroll-to-visible hint (5), at the collection-role floor (30) — so a
+/// leaf whose only signal is scroll-to-visible does not masquerade as a scroller.
+let scrollContainerRoutingThreshold = 30
+
+/// True when a candidate scores high enough to route a wheel to.
+func qualifiesAsScrollContainer(_ f: ScrollCandidateFeatures) -> Bool {
+    scrollContainerScore(f) >= scrollContainerRoutingThreshold
+}
+
+/// Rank scroll-container candidates innermost-first. macOS routes a wheel to the
+/// innermost scrollable region under the pointer, so proximity to the hit
+/// element — not raw score — decides which container drives; the score only
+/// gates whether a candidate is a container at all. Pure, so the ranking policy
+/// is tested independent of the live AX walk.
 func rankScrollCandidates<Item>(_ scored: [(item: Item, score: Int, depth: Int)]) -> [Item] {
-    scored.filter { $0.score > 0 }
-        .sorted { $0.score != $1.score ? $0.score > $1.score : $0.depth < $1.depth }
+    scored.filter { $0.score >= scrollContainerRoutingThreshold }
+        .sorted { $0.depth < $1.depth }
         .map(\.item)
 }
 
@@ -107,6 +120,18 @@ func scrollAtExtent(container: AXUIElement, deltaX: Int, deltaY: Int) -> Bool? {
         return deltaX > 0 ? value >= 0.999 : value <= 0.001
     }
     return nil
+}
+
+/// The container's visible viewport: its frame clipped to the window. A web
+/// area (and some scroll areas) reports its *content* frame, which can be many
+/// screens tall — sizing a "page" from that would scroll the whole document, so
+/// page-sized scrolls measure the clipped, on-screen height instead. Falls back
+/// to the raw frame when there is no window frame or the clip is degenerate.
+func visibleViewport(of element: AXUIElement, windowFrame: CGRect?) -> CGRect? {
+    guard let frame = axFrame(element) else { return nil }
+    guard let windowFrame else { return frame }
+    let clipped = frame.intersection(windowFrame)
+    return (clipped.isNull || clipped.isEmpty) ? frame : clipped
 }
 
 /// A signature of the container's scroll position (both bar fills), compared

@@ -42,38 +42,43 @@ import Testing
         }
     }
 
-    @Test func scrollToVisibleAloneIsAWeakPositive() {
-        let weak = scrollContainerScore(features("AXGroup", scrollToVisible: true))
-        #expect(weak > 0)
-        #expect(weak < scrollContainerScore(features("AXScrollArea")))
+    @Test func scrollToVisibleAloneDoesNotQualifyAsAContainer() {
+        // A bare scroll-to-visible action is a weak hint, below the routing
+        // threshold — an element that can be scrolled into view is not a scroller.
+        let group = features("AXGroup", scrollToVisible: true)
+        #expect(scrollContainerScore(group) > 0)
+        #expect(!qualifiesAsScrollContainer(group))
+        #expect(qualifiesAsScrollContainer(features("AXScrollArea")))
     }
 
     @Test func scrollBarStaysDisqualifiedEvenWithScrollToVisible() {
         #expect(scrollContainerScore(features("AXScrollBar", scrollToVisible: true)) < 0)
     }
 
-    // MARK: Ranking policy
+    // MARK: Ranking policy — innermost qualifying container wins
 
-    @Test func rankingDropsNonContainersAndOrdersByScore() {
+    @Test func rankingKeepsOnlyQualifiersOrderedInnermostFirst() {
         let ranked = rankScrollCandidates([
             (item: "leaf", score: 0, depth: 0),
-            (item: "list", score: 30, depth: 2),
-            (item: "scrollArea", score: 140, depth: 3),
+            (item: "innerList", score: 30, depth: 2),
+            (item: "outerScrollArea", score: 140, depth: 5),
             (item: "bar", score: -100, depth: 1),
         ])
-        #expect(ranked == ["scrollArea", "list"])
+        // The inner list (weaker score but nearer the hit) drives, not the
+        // higher-scored outer scroll area whose centre sits over other content.
+        #expect(ranked == ["innerList", "outerScrollArea"])
     }
 
-    @Test func rankingTieBreaksToTheInnermost() {
+    @Test func rankingDropsBelowThresholdCandidates() {
         let ranked = rankScrollCandidates([
-            (item: "outer", score: 40, depth: 5),
-            (item: "inner", score: 40, depth: 1),
+            (item: "scrollToVisibleOnly", score: 5, depth: 0),
+            (item: "list", score: 30, depth: 1),
         ])
-        #expect(ranked == ["inner", "outer"])
+        #expect(ranked == ["list"])
     }
 
-    @Test func rankingOfEmptyOrAllZeroIsEmpty() {
-        #expect(rankScrollCandidates([(item: "x", score: 0, depth: 0)]).isEmpty)
+    @Test func rankingOfEmptyOrAllWeakIsEmpty() {
+        #expect(rankScrollCandidates([(item: "x", score: 5, depth: 0)]).isEmpty)
         #expect(rankScrollCandidates([] as [(item: String, score: Int, depth: Int)]).isEmpty)
     }
 }

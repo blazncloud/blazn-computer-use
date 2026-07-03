@@ -56,14 +56,16 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     var deltaY = args.integer("delta_y") ?? 0
     if let direction = args.string("direction") {
         let pages = try ArgumentBounds.checkScrollPages(args.number("pages") ?? 1)
-        // Size from the top-ranked container's viewport; fall back to the hit
-        // element, then a default page height.
-        let frame = (ranked.first ?? target.element).flatMap(axFrame)
+        // Size a page from the top-ranked container's *visible* viewport (not a
+        // ~20px leaf row, nor a web area's full content height); fall back to the
+        // hit element, then a default page height.
+        let viewport = (ranked.first ?? target.element)
+            .flatMap { visibleViewport(of: $0, windowFrame: target.deliveryContext.windowFrame) }
         switch direction {
-        case "down": deltaY = Int(Double(frame?.height ?? 400) * pages)
-        case "up": deltaY = -Int(Double(frame?.height ?? 400) * pages)
-        case "right": deltaX = Int(Double(frame?.width ?? 400) * pages)
-        case "left": deltaX = -Int(Double(frame?.width ?? 400) * pages)
+        case "down": deltaY = Int(Double(viewport?.height ?? 400) * pages)
+        case "up": deltaY = -Int(Double(viewport?.height ?? 400) * pages)
+        case "right": deltaX = Int(Double(viewport?.width ?? 400) * pages)
+        case "left": deltaX = -Int(Double(viewport?.width ?? 400) * pages)
         default:
             throw ToolError.invalidArguments("direction must be up, down, left, or right.")
         }
@@ -73,15 +75,18 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     }
     try ArgumentBounds.checkScrollDelta(deltaX: deltaX, deltaY: deltaY)
 
-    // Pick the container to drive and a point over its visible centre; fall back
-    // to the raw hit point when nothing on the chain ranks as scrollable.
+    // Pick the container to drive. Post the wheel at the hit point itself — it
+    // already lies inside every ancestor we walked up through, so it is over the
+    // chosen container; relocating to a container centre can land the event on a
+    // sibling region (an outer scroll area's centre sits over other content).
+    // Only synthesize a point from the container when the target exposes none.
     let container = chooseScrollContainer(ranked, deltaX: deltaX, deltaY: deltaY)
     var fallbackReasons: [FallbackReason] = []
     let point: CGPoint
-    if let container, let frame = axFrame(container) {
-        let region = target.deliveryContext.windowFrame.map { frame.intersection($0) } ?? frame
-        let usable = (region.isNull || region.isEmpty) ? frame : region
-        point = CGPoint(x: usable.midX, y: usable.midY)
+    if let hit = target.point {
+        point = hit
+    } else if let container, let frame = axFrame(container) {
+        point = CGPoint(x: frame.midX, y: frame.midY)
     } else {
         if container == nil { fallbackReasons.append(.noScrollContainerFound) }
         point = try target.requirePoint()
