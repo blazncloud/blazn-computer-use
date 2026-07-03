@@ -481,7 +481,9 @@ let toolCatalog: [ToolSpec] = [
         name: "read_text",
         description: """
             Read the full text value of an element — the tree truncates long values. \
-            Supports offset/length chunking for very large documents.
+            Supports offset/length chunking for very large documents. For a big text \
+            surface (a long article, an editor buffer) pass visible_only to get just \
+            the on-screen slice, rendered to markdown with links and emphasis.
             """,
         inputSchema: objectSchema(
             [
@@ -491,6 +493,11 @@ let toolCatalog: [ToolSpec] = [
                 "length": integerParam(
                     "Maximum characters to return (default \(ArgumentBounds.maxReadTextCharacters), "
                         + "max \(ArgumentBounds.maxReadTextCharacters))."
+                ),
+                "visible_only": boolParam(
+                    "Return only the characters currently scrolled into view, rendered to "
+                        + "markdown (links as [text](url), bold/italic marked). Defaults on "
+                        + "automatically for very large values; pass false to force the full value."
                 ),
             ],
             required: ["app", "element_id"]

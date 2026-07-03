@@ -322,6 +322,28 @@ func readTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
     try requireAccessibilityTrusted()
     let target = try await resolveTarget(app: app, elementID: args.requireString("element_id"))
+
+    // Visible-range path: for a large text surface, pull only the on-screen
+    // slice (rendered to markdown) instead of the whole value. Activates when
+    // the caller asks (visible_only:true), or by default once the value is
+    // past the threshold and no explicit offset/length window was requested.
+    // An explicit visible_only:false, or an offset/length, keeps the classic
+    // full-value read; the path is best-effort and falls through when the
+    // element exposes no parameterized range attribute.
+    let visibleOnly = args.bool("visible_only")
+    let hasExplicitWindow = args["offset"] != nil || args["length"] != nil
+    let charCount = (axAttribute(target.element, "AXNumberOfCharacters") as? NSNumber)?.intValue
+    let isLarge = (charCount ?? 0) > TextExtraction.largeValueThreshold
+    let useVisible = visibleOnly == true || (visibleOnly == nil && !hasExplicitWindow && isLarge)
+    if useVisible, let visible = TextExtraction.visibleText(of: target.element) {
+        let total = charCount.map { " of \($0) total" } ?? ""
+        let header =
+            "Visible text of \(describeTarget(target)) — "
+            + "chars \(visible.range.location)..<\(visible.range.location + visible.range.length)\(total) "
+            + "(scroll for more, or omit visible_only for the full value)"
+        return .text(header + ":\n" + visible.markdown)
+    }
+
     guard let value = axString(target.element, kAXValueAttribute) else {
         throw ToolError.failed("\(describeTarget(target)) has no readable text value.")
     }
