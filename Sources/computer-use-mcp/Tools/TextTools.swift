@@ -18,10 +18,14 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
     let element: AXUIElement
     let described: String
+    let snapshotElement: SnapshotElement?
+    let windowTitle: String?
     if let elementID = args.string("element_id") {
         let target = try await resolveTarget(app: app, elementID: elementID)
         element = target.element
         described = describeTarget(target)
+        snapshotElement = target.snapshotElement
+        windowTitle = target.snapshot.windowTitle
     } else {
         guard let focused = axElement(app.axApplication, kAXFocusedUIElementAttribute) else {
             throw ToolError.failed(
@@ -30,18 +34,26 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         }
         element = focused
         described = "the focused element (\(axRole(focused)))"
+        snapshotElement = nil
+        windowTitle = await SnapshotStore.shared.load(forPid: app.pid)?.windowTitle
     }
 
     try SafetyPolicy.checkTyping(into: element, app: app, confirmed: confirmed)
+    // Read (before): capture the field's value before the insertion.
+    let before = ActionVerifier.captureBefore(element, family: .type)
     let tier = try insertText(text, into: element, app: app, described: described)
     let warning = readBackWarning(typed: text, element: element)
-    let snapshot = await SnapshotStore.shared.load(forPid: app.pid)
+    let verifier = ActionVerifier(
+        family: .type, intent: .insertText(text), deliveryTier: tier.rawValue,
+        dispatchSucceeded: true, hasTargetElement: snapshotElement != nil,
+        snapshotElement: snapshotElement, before: before, beforeWindowTitle: windowTitle)
     return try await stateResult(
-        app: app, windowTitle: snapshot?.windowTitle,
+        app: app, windowTitle: windowTitle,
         note: "Typed \(text.count) characters into \(described). "
             + (warning ?? "Verify the new value below."),
         screenshot: screenshotDetail(args),
-        focusTelemetry: focus.finish(deliveryTier: tier.rawValue)
+        focusTelemetry: focus.finish(deliveryTier: tier.rawValue),
+        verifier: verifier
     )
 }
 
