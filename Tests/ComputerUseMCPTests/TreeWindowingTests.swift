@@ -153,13 +153,27 @@ private func build(
         #expect(built.text.contains("off-screen"))
     }
 
-    @Test func windowingDisabledFallsBackToTheBlindPrefixCap() {
-        // With windowing off there is no viewport summary; the node falls back
-        // to the pre-existing first-maxChildrenPerNode prefix (150).
+    @Test func windowingDisabledMaterializesEveryRowUpToBudget() {
+        // Non-windowed callers (find / skill-replay) are bounded only by the
+        // element budget, not the per-node cap: every one of the 500 rows must
+        // materialize so a deep row is reachable, and no viewport summary.
         let tree = rowListTree(rowCount: 500, visible: 0..<13, total: 500)
         let built = build(tree, generation: "s1", maxElements: 5000, windowCollections: false)
-        #expect(built.elements.filter { $0.role == "AXRow" }.count == 150)
+        let rows = built.elements.filter { $0.role == "AXRow" }
+        #expect(rows.count == 500)
+        // The last row keeps its absolute locator index and is present in text.
+        #expect(rows.last!.path.last!.indexOfRole == 499)
+        #expect(built.text.contains("Row 500"))
         #expect(!built.text.contains("off-screen"))
+    }
+
+    @Test func windowingDisabledStillHonorsTheElementBudget() {
+        // The budget, not the per-node cap, is the bound: a tight budget stops
+        // materialization partway rather than letting one node run unbounded.
+        let tree = rowListTree(rowCount: 500, visible: 0..<13, total: 500)
+        let built = build(tree, generation: "s1", maxElements: 60, windowCollections: false)
+        #expect(built.elements.count <= 60)
+        #expect(built.text.contains("tree truncated at 60 elements"))
     }
 }
 
@@ -234,5 +248,70 @@ private func build(
             #expect(new.path == old.path)
         }
         #expect(result.diff.entryCount == 0)
+    }
+}
+
+/// Wraps a non-windowed BuiltTree in an AppSnapshot, exactly as find and
+/// refreshSkillSnapshot do, so the real resolveSkillLocator can be exercised.
+private func snapshot(from tree: BuiltTree) -> AppSnapshot {
+    AppSnapshot(
+        pid: 1, bundleIdentifier: "com.example", windowTitle: "Fixture",
+        windowOrigin: [0, 0], pixelsPerPoint: 1, windowSize: [300, 300],
+        createdAt: Date(timeIntervalSince1970: 0), generation: "s1",
+        treeFingerprint: treeFingerprint(tree.text), treeText: tree.text, scoped: false,
+        elements: tree.elements)
+}
+
+@Suite struct FindAndReplayDeepRowTests {
+    /// find builds a non-windowed tree and matches against its text lines; a
+    /// deep collection row must appear so `find "Row 400"` can hit it.
+    @Test func findMatchesADeepCollectionRow() {
+        let tree = rowListTree(rowCount: 500, total: 500)
+        let built = build(tree, generation: "s1", maxElements: 5000, windowCollections: false)
+        let matchingLines = built.text
+            .split(separator: "\n")
+            .filter { $0.lowercased().contains("row 400") }
+        #expect(!matchingLines.isEmpty)
+    }
+
+    /// The correctness-critical case: a skill recorded on a deep row stores its
+    /// locator path; on replay, resolveSkillLocator looks the row up by path in
+    /// the freshly captured (non-windowed) snapshot. If the row were capped out,
+    /// resolution would fail — this proves it re-resolves.
+    @Test func skillRecordedOnDeepRowReResolves() {
+        let tree = rowListTree(rowCount: 500, total: 500)
+        let built = build(tree, generation: "s1", maxElements: 5000, windowCollections: false)
+
+        // The row the agent "recorded" on: the 300th AXRow (index 299).
+        let recorded = try! #require(
+            built.elements.first { $0.role == "AXRow" && $0.path.last?.indexOfRole == 299 })
+        let locator = SkillLocator(role: "AXRow", label: recorded.label, path: recorded.path)
+
+        let resolution = resolveSkillLocator(locator, in: snapshot(from: built))
+        guard case .found(let element, _) = resolution else {
+            Issue.record("deep-row locator did not resolve: \(resolution)")
+            return
+        }
+        #expect(element.path == recorded.path)
+    }
+
+    /// The regression guard: with the old per-node cap a row past 150 would be
+    /// absent and resolution would fail. Prove that a windowed snapshot (the
+    /// wrong build for replay) indeed cannot resolve a deep row — documenting
+    /// why find/skill-replay must build non-windowed.
+    @Test func windowedSnapshotCannotResolveAnOffscreenRow() {
+        let tree = rowListTree(rowCount: 500, visible: 0..<13, total: 500)
+        let windowed = build(tree, generation: "s1")  // windowed: only 13 rows
+        let deepPath = [
+            LocatorStep(role: "AXScrollArea", indexOfRole: 0),
+            LocatorStep(role: "AXScrollArea", indexOfRole: 0),
+            LocatorStep(role: "AXOutline", indexOfRole: 0),
+            LocatorStep(role: "AXRow", indexOfRole: 299),
+        ]
+        let locator = SkillLocator(role: "AXRow", path: deepPath)
+        guard case .failed = resolveSkillLocator(locator, in: snapshot(from: windowed)) else {
+            Issue.record("windowed snapshot unexpectedly resolved an off-screen row")
+            return
+        }
     }
 }
