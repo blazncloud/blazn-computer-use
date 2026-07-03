@@ -67,17 +67,48 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     }
     try ArgumentBounds.checkScrollDelta(deltaX: deltaX, deltaY: deltaY)
 
+    // Read (before): is the container already pinned at the boundary in the
+    // scroll direction? Then "no movement" is expected, not a dropped event.
+    var before = ActionVerification()
+    before.scrollAtExtent = scrollExtentBefore(container: target.element, deltaX: deltaX, deltaY: deltaY)
+
     let point = try target.requirePoint()
     await AgentCursor.shared.glide(to: point)
     let tier = deliverScroll(at: point, deltaX: deltaX, deltaY: deltaY, context: target.deliveryContext)
     try? await Task.sleep(for: .milliseconds(80))
 
+    let verifier = ActionVerifier(
+        family: .scroll, intent: .scrollContent, deliveryTier: tier.rawValue,
+        dispatchSucceeded: true, hasTargetElement: false, snapshotElement: nil,
+        before: before, beforeWindowTitle: target.snapshot.windowTitle)
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle,
         note: "Scrolled (\(deltaX),\(deltaY)) at \(target.description).",
         screenshot: screenshotDetail(args),
-        focusTelemetry: focus.finish(deliveryTier: tier.rawValue)
+        focusTelemetry: focus.finish(deliveryTier: tier.rawValue),
+        verifier: verifier
     )
+}
+
+/// Best-effort: is the scroll container already at the boundary in the requested
+/// direction? Reads the container's own scroll bar (0…1). nil when the bar is
+/// unreadable — the reducer then leans on the whole-window change bit. A fuller
+/// container-ranking extent check is scroll task #7's job.
+private func scrollExtentBefore(container: AXUIElement?, deltaX: Int, deltaY: Int) -> Bool? {
+    guard let container else { return nil }
+    func barValue(_ attribute: String) -> Double? {
+        guard let bar = axElement(container, attribute),
+            let value = (axAttribute(bar, kAXValueAttribute) as? NSNumber)?.doubleValue
+        else { return nil }
+        return value
+    }
+    if deltaY != 0, let value = barValue("AXVerticalScrollBar") {
+        return deltaY > 0 ? value >= 0.999 : value <= 0.001
+    }
+    if deltaX != 0, let value = barValue("AXHorizontalScrollBar") {
+        return deltaX > 0 ? value >= 0.999 : value <= 0.001
+    }
+    return nil
 }
 
 func dragImpl(_ args: [String: Value]) async throws -> CallTool.Result {
@@ -109,11 +140,19 @@ func dragImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     await AgentCursor.shared.pulse(at: to)
     try? await Task.sleep(for: .milliseconds(80))
 
+    // Drag is a coordinate gesture with no re-readable target: success on a
+    // whole-window change, verifier_ambiguous otherwise (a drag with no visible
+    // effect could be a legitimate no-op).
+    let verifier = ActionVerifier(
+        family: .drag, intent: .activate, deliveryTier: tier.rawValue,
+        dispatchSucceeded: true, hasTargetElement: false, snapshotElement: nil,
+        beforeWindowTitle: snapshot.windowTitle)
     return try await stateResult(
         app: app, windowTitle: snapshot.windowTitle,
         note: "Dragged from (\(Int(from.x.rounded())),\(Int(from.y.rounded()))) "
             + "to (\(Int(to.x.rounded())),\(Int(to.y.rounded()))).",
         screenshot: screenshotDetail(args),
-        focusTelemetry: focus.finish(deliveryTier: tier.rawValue)
+        focusTelemetry: focus.finish(deliveryTier: tier.rawValue),
+        verifier: verifier
     )
 }
