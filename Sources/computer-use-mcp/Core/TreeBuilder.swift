@@ -266,7 +266,15 @@ func buildTreeCore<Node>(
             windowCollections
             ? denseCollectionWindow(element, role: role, children: children, accessors: accessors)
             : nil
-        let scanLimit = window?.scanLimit ?? min(children.count, maxChildrenPerNode)
+        // Windowed perception caps per-node fanout to bound tokens. Non-windowed
+        // callers (find, skill-replay) asked for the deep tree and are bounded
+        // only by the element budget: a collection row past maxChildrenPerNode
+        // must still materialize so find can match it and a skill recorded on it
+        // can re-resolve its locator (resolveSkillLocator looks the row up by
+        // path in the snapshot, so an unmaterialized row is unreachable).
+        let scanLimit =
+            window?.scanLimit
+            ?? (windowCollections ? min(children.count, maxChildrenPerNode) : children.count)
 
         var roleCounts: [String: Int] = [:]
         for childIndex in 0..<children.count {
