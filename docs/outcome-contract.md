@@ -5,8 +5,26 @@ Implementation design for Wave 2's anchor change: move `computer-use-mcp` from
 observed." Inspired by `actuallyepic/background-computer-use` (BCU), adapted to
 our snapshot/locator architecture.
 
-Status: design, ready to implement. Read-only research on all existing source;
-this doc is the only deliverable. Implementation is task #4.
+Status: implemented (task #4, Wave 2). All mutating tools emit a
+`computer-use-mcp/outcome` block; the reducer is unit-tested per §4 matrix row.
+
+As-built notes (where the code deviates from this design):
+- The delivery telemetry split (§6, open question) was adopted: a new
+  `computer-use-mcp/delivery` block owns `delivery_tier`, `fallback_reasons`,
+  and `ui_changed`; `computer-use-mcp/focus` keeps frontmost identity only.
+- `focusedElementChanged` is carried in the schema but is **not** used for
+  classification — counting a focus change as a click success signal risks a
+  false pass on a liar button (an AX press can focus the control), and dialogs
+  already flip `renderedTextChanged`. Menus rely on `renderedTextChanged`.
+- `manage_window` verifies `resize`/`move` (numeric frame compare); the other
+  window actions emit no outcome block (settle-poll + already-in-state depth is
+  window-verify task #6). Scroll extent detection is best-effort off the
+  container's own scroll bar (fuller ranking is scroll task #7).
+- `batch` aggregation (§8) is not yet implemented: each sub-action verifies
+  individually through dispatch, but the batch result carries only the final
+  step's outcome block.
+- A `verify` runtime flag (`COMPUTER_USE_MCP_VERIFY`, default on) gates the
+  verifier for A/B latency measurement; measured overhead is ~3% on a click.
 
 ---
 
