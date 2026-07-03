@@ -112,4 +112,18 @@ import Testing
         #expect(nearestOffsetIndex([-10, 0], target: 400) == nil)
         #expect(nearestOffsetIndex([], target: 400) == nil)
     }
+
+    // MARK: Scroll-bar value mapping (AXScrollBar set)
+
+    @Test func scrolledBarValueMovesByPageProportionInEachDirection() {
+        // One page ≈ 0.1 of the content; scrolling down 2 pages from 0.3 → 0.5.
+        #expect(scrolledBarValue(current: 0.3, pageProportion: 0.1, pages: 2, forward: true) == 0.5)
+        // Up 2 pages goes the other way.
+        #expect(abs(scrolledBarValue(current: 0.3, pageProportion: 0.1, pages: 2, forward: false) - 0.1) < 1e-9)
+    }
+
+    @Test func scrolledBarValueClampsToTheTrack() {
+        #expect(scrolledBarValue(current: 0.9, pageProportion: 0.5, pages: 3, forward: true) == 1.0)
+        #expect(scrolledBarValue(current: 0.1, pageProportion: 0.5, pages: 3, forward: false) == 0.0)
+    }
 }

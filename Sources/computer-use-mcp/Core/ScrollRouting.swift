@@ -151,6 +151,29 @@ func scrollMovementFingerprint(container: AXUIElement?, target: AXUIElement?) ->
     return "\(offset)|\(origin)|\(value)"
 }
 
+/// New scroll-bar value (0…1) after scrolling `pages` in a direction, from the
+/// current value and the thumb's proportion of the track (≈ viewport / content,
+/// i.e. one page). Clamped to [0, 1]. Pure, for testing the page→value mapping.
+func scrolledBarValue(current: Double, pageProportion: Double, pages: Double, forward: Bool) -> Double {
+    let delta = pageProportion * pages * (forward ? 1 : -1)
+    return min(1, max(0, current + delta))
+}
+
+/// One page as a fraction of the scrollable content, read from the scroll bar's
+/// thumb (AXValueIndicator) size relative to the track. nil when unreadable or
+/// degenerate — the caller then falls back to a default page fraction.
+func scrollBarPageProportion(_ bar: AXUIElement, vertical: Bool) -> Double? {
+    guard let track = axFrame(bar),
+        let thumb = axElements(bar, kAXChildrenAttribute).first(where: { axRole($0) == "AXValueIndicator" }),
+        let thumbFrame = axFrame(thumb)
+    else { return nil }
+    let proportion =
+        vertical
+        ? Double(thumbFrame.height / max(1, track.height))
+        : Double(thumbFrame.width / max(1, track.width))
+    return (proportion > 0 && proportion < 1) ? proportion : nil
+}
+
 /// Index of the candidate whose offset past the viewport edge is closest to the
 /// target scroll distance (both positive, measured in the scroll axis). Pure, so
 /// the "which descendant to reveal" policy is unit-tested without a live tree.

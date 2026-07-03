@@ -131,10 +131,49 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
                 verifier: verifier)
         }
 
-        // Strategy 1: the container's own page-scroll action (native AppKit
-        // scroll areas). The action lives on the AXScrollArea, which may be an
-        // ancestor of the innermost qualifier (e.g. above an AXOutline), so use
-        // the nearest ranked container that advertises it.
+        // Strategy 1: set the container's scroll-bar value. NSScrollView-backed
+        // lists (AppKit tables, the fixture row-list) do NOT honor
+        // AXScrollDownByPage via perform (it returns attributeUnsupported), but
+        // their AXScrollBar value is settable and moves the content in the
+        // background — the most reliable native path. The bar lives on the
+        // AXScrollArea, so use the nearest ranked container that exposes it.
+        // Verified against the target element (not the bar we just set, which
+        // would be circular).
+        let vertical = direction == "down" || direction == "up"
+        let barAttribute = vertical ? "AXVerticalScrollBar" : "AXHorizontalScrollBar"
+        if let barContainer = ranked.first(where: { axElement($0, barAttribute) != nil }),
+            let bar = axElement(barContainer, barAttribute),
+            let current = (axAttribute(bar, kAXValueAttribute) as? NSNumber)?.doubleValue
+        {
+            let forward = direction == "down" || direction == "right"
+            let proportion = scrollBarPageProportion(bar, vertical: vertical) ?? 0.9
+            let newValue = scrolledBarValue(
+                current: current, pageProportion: proportion, pages: args.number("pages") ?? 1, forward: forward)
+            if abs(newValue - current) > 1e-6 {
+                let ok =
+                    AXUIElementSetAttributeValue(bar, kAXValueAttribute as CFString, NSNumber(value: newValue))
+                    == .success
+                try? await Task.sleep(for: .milliseconds(80))
+                // The scroll took iff the bar now holds a different position: a
+                // container that honors the set moves and keeps the new value; one
+                // that ignores it leaves the old value in place. This reads the
+                // bar itself (not the target), so it works even when the caller
+                // scrolled via the container's own id, whose frame never moves.
+                let after = (axAttribute(bar, kAXValueAttribute) as? NSNumber)?.doubleValue ?? current
+                if ok, abs(after - current) > 1e-4 {
+                    return try await tier1Success(via: "setting the container's scroll-bar position")
+                }
+                if !fallbackReasons.contains(.scrollActionUnverified) {
+                    fallbackReasons.append(.scrollActionUnverified)
+                }
+            }
+        }
+
+        // Strategy 2: the container's own page-scroll action (some AppKit /
+        // custom scroll areas honor it, though NSScrollView reports it
+        // unsupported on perform). The action lives on the AXScrollArea, which
+        // may be an ancestor of the innermost qualifier, so use the nearest
+        // ranked container that advertises it.
         if let action = scrollPageAction(for: direction),
             let actionContainer = ranked.first(where: { axActionNames($0).contains(action) })
         {
@@ -151,10 +190,10 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
             fallbackReasons.append(.scrollActionUnverified)
         }
 
-        // Strategy 2: reveal an off-screen descendant. Web areas expose no
-        // page-scroll action, but their content supports AXScrollToVisible, and
-        // scrolling a descendant that sits ~pages viewports away into view
-        // advances the content by that much.
+        // Strategy 3: reveal an off-screen descendant. Web areas expose no
+        // settable scroll bar or page action, but their content supports
+        // AXScrollToVisible, and scrolling a descendant that sits ~pages
+        // viewports away into view advances the content by that much.
         if let container,
             let reveal = descendantToRevealForScroll(
                 container: container, direction: direction, pages: args.number("pages") ?? 1,
