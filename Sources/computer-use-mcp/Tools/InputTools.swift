@@ -73,7 +73,7 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     before.scrollAtExtent = scrollExtentBefore(container: target.element, deltaX: deltaX, deltaY: deltaY)
 
     let point = try target.requirePoint()
-    await AgentCursor.shared.glide(to: point)
+    await AgentCursor.shared.glide(to: point, targetWindow: target.deliveryContext.windowNumber)
     let tier = deliverScroll(at: point, deltaX: deltaX, deltaY: deltaY, context: target.deliveryContext)
     try? await Task.sleep(for: .milliseconds(80))
 
@@ -135,9 +135,9 @@ func dragImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         windowFrame: window?.frame,
         allowGlobalCursor: false
     )
-    await AgentCursor.shared.glide(to: from)
+    await AgentCursor.shared.glide(to: from, targetWindow: context.windowNumber)
     let tier = await deliverDrag(from: from, to: to, context: context)
-    await AgentCursor.shared.pulse(at: to)
+    await AgentCursor.shared.pulse(at: to, targetWindow: context.windowNumber)
     try? await Task.sleep(for: .milliseconds(80))
 
     // Drag is a coordinate gesture with no re-readable target: success on a

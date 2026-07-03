@@ -62,7 +62,9 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     }
 
     // The click landed: ripple the overlay at the point so the user sees it.
-    if let point = target.point { await AgentCursor.shared.pulse(at: point) }
+    if let point = target.point {
+        await AgentCursor.shared.pulse(at: point, targetWindow: target.deliveryContext.windowNumber)
+    }
 
     let verifier = ActionVerifier(
         family: .click, intent: intent, deliveryTier: outcome.deliveryTier.rawValue,
@@ -116,7 +118,9 @@ private struct InputActionOutcome {
 
 private func leftClick(_ target: PointTarget, clickCount: Int) async throws -> InputActionOutcome {
     // Animate the (cosmetic) agent cursor to the target before acting.
-    if let point = target.point { await AgentCursor.shared.glide(to: point) }
+    if let point = target.point {
+        await AgentCursor.shared.glide(to: point, targetWindow: target.deliveryContext.windowNumber)
+    }
 
     // Tier 1: accessibility press, when the element advertises it.
     if let element = target.element,
