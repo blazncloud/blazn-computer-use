@@ -46,13 +46,13 @@ func dispatchTool(name: String, arguments: [String: Value]) async -> CallTool.Re
     await SleepAssertion.shared.noteActivity()
     if let refusal = await preflightRefusal(name: name, arguments: arguments) {
         logToolCall(name, isError: true, since: start)
-        return .text(refusal, isError: true)
+        return codedErrorResult(refusal, code: toolErrorCode(forMessage: refusal))
     }
     let result: CallTool.Result
     do {
         result = try await spec.handler(arguments)
     } catch {
-        result = .text("\(error)", isError: true)
+        result = codedErrorResult("\(error)", code: toolErrorCode(for: error))
     }
     logToolCall(name, isError: result.isError == true, since: start)
     await Telemetry.shared.record(tool: name, isError: result.isError == true, since: start)
