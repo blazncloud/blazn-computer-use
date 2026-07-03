@@ -46,6 +46,57 @@ enum KeyDeliveryMode: String, Equatable {
     case globalSessionTap = "tier4-global-session-tap"
 }
 
+/// Why the ladder skipped a higher-priority tier for this delivery. Pure
+/// telemetry — the tier actually chosen is unchanged; these only explain it,
+/// so a caller (and the agent reading _meta) knows whether the event took the
+/// precise AX path or a droppable synthetic one, and why the earlier tiers
+/// were unavailable.
+enum FallbackReason: String, Equatable, Sendable {
+    /// No accessibility action for this gesture on the target (Tier 1 skipped);
+    /// delivery fell to a synthetic event.
+    case axActionUnsupported = "ax-action-unsupported"
+    /// No CGWindowID resolved for the window, so window-affined Tier 2 was
+    /// unavailable and the event went to the pid (Tier 3).
+    case windowNumberUnresolved = "window-number-unresolved"
+    /// The window exposed no frame, so Tier 2 coordinate bridging was
+    /// impossible and the event went to the pid (Tier 3).
+    case windowFrameUnresolved = "window-frame-unresolved"
+    /// NSEvent→CGEvent window bridging returned nil despite a resolvable
+    /// window, so Tier 2 fell to the pid (Tier 3).
+    case eventBridgeFailed = "event-bridge-failed"
+    /// The caller opted into the guarded global-cursor path (Tier 4),
+    /// bypassing the background-safe tiers.
+    case globalCursorRequested = "global-cursor-requested"
+}
+
+/// The tier a delivery actually used plus, in tier order, why each
+/// higher-priority tier was skipped.
+struct DeliveryOutcome: Equatable {
+    let tier: InputTier
+    let fallbackReasons: [FallbackReason]
+
+    init(tier: InputTier, fallbackReasons: [FallbackReason] = []) {
+        self.tier = tier
+        self.fallbackReasons = fallbackReasons
+    }
+}
+
+/// Reasons window-affined Tier 2 was unavailable for a context, given whether
+/// the NSEvent→CGEvent bridge succeeded. Pure and deterministic so the mapping
+/// is unit-testable; the live path calls it with the real bridge result. An
+/// empty result means Tier 2 was viable (and used).
+func perWindowFallbackReasons(context: DeliveryContext, bridgeSucceeded: Bool) -> [FallbackReason] {
+    var reasons: [FallbackReason] = []
+    if context.windowNumber == nil { reasons.append(.windowNumberUnresolved) }
+    if context.windowFrame == nil { reasons.append(.windowFrameUnresolved) }
+    // Both inputs present but the bridge still failed: the bridge itself is the
+    // reason Tier 2 was skipped, not a missing input.
+    if context.windowNumber != nil, context.windowFrame != nil, !bridgeSucceeded {
+        reasons.append(.eventBridgeFailed)
+    }
+    return reasons
+}
+
 /// Tiers that post synthetic events an app can silently drop (no success
 /// signal). AX tiers fail loudly and the global tiers use the real input
 /// path, so neither needs a "did it land" hint. Kept next to the tier enums
@@ -99,9 +150,10 @@ enum MouseButtonKind {
 @discardableResult
 func deliverClick(
     at point: CGPoint, button: MouseButtonKind, clickCount: Int, context: DeliveryContext
-) throws -> InputTier {
+) throws -> DeliveryOutcome {
     if context.allowGlobalCursor {
-        return deliverClickGlobal(at: point, button: button, clickCount: clickCount, context: context)
+        let tier = deliverClickGlobal(at: point, button: button, clickCount: clickCount, context: context)
+        return DeliveryOutcome(tier: tier, fallbackReasons: [.globalCursorRequested])
     }
 
     let source = CGEventSource(stateID: .privateState)
@@ -114,31 +166,37 @@ func deliverClick(
         return event
     }
 
-    var tier: InputTier = context.windowNumber != nil ? .perWindow : .perPid
+    var outcome = DeliveryOutcome(tier: context.windowNumber != nil ? .perWindow : .perPid)
     for clickState in 1...clickCount {
         guard let down = makeEvent(button.downType, clickState: clickState),
             let up = makeEvent(button.upType, clickState: clickState)
         else {
             throw ToolError.failed("Could not synthesize a click event.")
         }
-        tier = postToTarget(down: down, up: up, at: point, context: context)
+        outcome = postToTarget(down: down, up: up, at: point, context: context)
     }
-    return tier
+    return outcome
 }
 
 /// Post a down/up pair to the target, preferring window-affined delivery.
-private func postToTarget(down: CGEvent, up: CGEvent, at point: CGPoint, context: DeliveryContext) -> InputTier {
+private func postToTarget(down: CGEvent, up: CGEvent, at point: CGPoint, context: DeliveryContext) -> DeliveryOutcome {
     if let windowNumber = context.windowNumber, let frame = context.windowFrame,
         let localDown = bridgedWindowEvent(from: down, point: point, windowNumber: windowNumber, windowFrame: frame),
         let localUp = bridgedWindowEvent(from: up, point: point, windowNumber: windowNumber, windowFrame: frame)
     {
         localDown.postToPid(context.pid)
         localUp.postToPid(context.pid)
-        return .perWindow
+        return DeliveryOutcome(
+            tier: .perWindow,
+            fallbackReasons: perWindowFallbackReasons(context: context, bridgeSucceeded: true)
+        )
     }
     down.postToPid(context.pid)
     up.postToPid(context.pid)
-    return .perPid
+    return DeliveryOutcome(
+        tier: .perPid,
+        fallbackReasons: perWindowFallbackReasons(context: context, bridgeSucceeded: false)
+    )
 }
 
 /// Build a window-routed CGEvent by bridging an NSEvent carrying a windowNumber.

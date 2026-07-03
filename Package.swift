@@ -19,6 +19,12 @@ let package = Package(
             ],
             path: "Sources/computer-use-mcp"
         ),
+        // Deterministic GUI fixture app for the end-to-end "truth suite".
+        // See docs/fixture-app.md.
+        .executableTarget(
+            name: "ComputerUseFixture",
+            path: "Sources/ComputerUseFixture"
+        ),
         .testTarget(
             name: "ComputerUseMCPTests",
             dependencies: ["computer-use-mcp"],

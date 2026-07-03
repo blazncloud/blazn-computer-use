@@ -29,8 +29,11 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     case "right":
         outcome = try rightClick(target)
     case "middle":
-        let tier = try deliverClick(at: target.requirePoint(), button: .middle, clickCount: clickCount, context: target.deliveryContext)
-        outcome = InputActionOutcome(note: "Middle-clicked \(target.description) [\(tier.rawValue)].", deliveryTier: tier)
+        let delivery = try deliverClick(at: target.requirePoint(), button: .middle, clickCount: clickCount, context: target.deliveryContext)
+        outcome = InputActionOutcome(
+            note: "Middle-clicked \(target.description) [\(delivery.tier.rawValue)].",
+            deliveryTier: delivery.tier, fallbackReasons: delivery.fallbackReasons
+        )
     default:
         throw ToolError.invalidArguments("mouse_button \"\(buttonName)\" is not supported.")
     }
@@ -41,7 +44,7 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle, note: outcome.note,
         screenshot: screenshotDetail(args),
-        focusTelemetry: focus.finish(deliveryTier: outcome.deliveryTier.rawValue)
+        focusTelemetry: focus.finish(deliveryTier: outcome.deliveryTier.rawValue, fallbackReasons: outcome.fallbackReasons)
     )
 }
 
@@ -63,6 +66,13 @@ private func clickTargetLabel(_ target: PointTarget) -> String? {
 private struct InputActionOutcome {
     let note: String
     let deliveryTier: InputTier
+    let fallbackReasons: [FallbackReason]
+
+    init(note: String, deliveryTier: InputTier, fallbackReasons: [FallbackReason] = []) {
+        self.note = note
+        self.deliveryTier = deliveryTier
+        self.fallbackReasons = fallbackReasons
+    }
 }
 
 private func leftClick(_ target: PointTarget, clickCount: Int) async throws -> InputActionOutcome {
@@ -87,10 +97,15 @@ private func leftClick(_ target: PointTarget, clickCount: Int) async throws -> I
         )
     }
 
-    // Tiers 2–4: synthetic click at the point.
-    let tier = try deliverClick(at: target.requirePoint(), button: .left, clickCount: clickCount, context: target.deliveryContext)
+    // Tiers 2–4: synthetic click at the point. Tier 1 was unavailable (no
+    // pressable element), which is the first reason delivery fell through.
+    let delivery = try deliverClick(at: target.requirePoint(), button: .left, clickCount: clickCount, context: target.deliveryContext)
     let verb = clickCount > 1 ? "Double-clicked" : "Clicked"
-    return InputActionOutcome(note: "\(verb) \(target.description) [\(tier.rawValue)].", deliveryTier: tier)
+    return InputActionOutcome(
+        note: "\(verb) \(target.description) [\(delivery.tier.rawValue)].",
+        deliveryTier: delivery.tier,
+        fallbackReasons: [.axActionUnsupported] + delivery.fallbackReasons
+    )
 }
 
 private func rightClick(_ target: PointTarget) throws -> InputActionOutcome {
@@ -107,6 +122,10 @@ private func rightClick(_ target: PointTarget) throws -> InputActionOutcome {
             deliveryTier: .accessibilityAction
         )
     }
-    let tier = try deliverClick(at: target.requirePoint(), button: .right, clickCount: 1, context: target.deliveryContext)
-    return InputActionOutcome(note: "Right-clicked \(target.description) [\(tier.rawValue)].", deliveryTier: tier)
+    let delivery = try deliverClick(at: target.requirePoint(), button: .right, clickCount: 1, context: target.deliveryContext)
+    return InputActionOutcome(
+        note: "Right-clicked \(target.description) [\(delivery.tier.rawValue)].",
+        deliveryTier: delivery.tier,
+        fallbackReasons: [.axActionUnsupported] + delivery.fallbackReasons
+    )
 }

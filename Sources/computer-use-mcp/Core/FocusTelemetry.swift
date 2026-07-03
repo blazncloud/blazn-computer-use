@@ -53,6 +53,10 @@ struct FocusTelemetry: Equatable {
     let deliveryTier: String?
     let focusChangeAllowed: Bool
     let cursorMovementAllowed: Bool
+    /// Why the ladder skipped higher-priority tiers to reach `deliveryTier`
+    /// (FallbackReason raw values, in tier order). Empty when the top viable
+    /// tier was used. Surfaced so callers learn WHY delivery fell through.
+    var fallbackReasons: [String] = []
     /// Whether the re-perceived UI tree differed from the pre-action snapshot.
     /// Factual dirty bit — an unchanged tree after a background-event delivery
     /// is the one observable hint that the app may have dropped the event.
@@ -76,6 +80,9 @@ struct FocusTelemetry: Equatable {
         }
         if let deliveryTier {
             fields["delivery_tier"] = .string(deliveryTier)
+        }
+        if !fallbackReasons.isEmpty {
+            fields["fallback_reasons"] = .array(fallbackReasons.map { .string($0) })
         }
         if let uiChanged {
             fields["ui_changed"] = .bool(uiChanged)
@@ -101,13 +108,14 @@ struct FocusChangeTracker {
         )
     }
 
-    func finish(deliveryTier: String? = nil) -> FocusTelemetry {
+    func finish(deliveryTier: String? = nil, fallbackReasons: [FallbackReason] = []) -> FocusTelemetry {
         FocusTelemetry(
             before: before,
             after: FrontmostAppSnapshot.current(),
             deliveryTier: deliveryTier,
             focusChangeAllowed: focusChangeAllowed,
-            cursorMovementAllowed: cursorMovementAllowed
+            cursorMovementAllowed: cursorMovementAllowed,
+            fallbackReasons: fallbackReasons.map(\.rawValue)
         )
     }
 }
