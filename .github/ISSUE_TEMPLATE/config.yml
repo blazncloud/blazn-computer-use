@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/minghinmatthewlam/computer-use-mcp/blob/main/SECURITY.md
+    about: Do not file security issues publicly. Report privately per SECURITY.md.
+  - name: Question / discussion
+    url: https://github.com/minghinmatthewlam/computer-use-mcp/discussions
+    about: For usage questions and open-ended discussion (if Discussions is enabled).

@@ -1,0 +1,77 @@
+name: Bug report
+description: Report incorrect or unexpected behavior in computer-use-mcp
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. **Do not report security vulnerabilities here** —
+        see [SECURITY.md](../blob/main/SECURITY.md) for private disclosure.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did the tool do, and what did you expect instead?
+      placeholder: The click returned effect_not_verified even though the button visibly fired.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact tool calls / client actions. A minimal repro helps most.
+      placeholder: |
+        1. Client: Claude Code
+        2. Tool call: click {"app":"...","element_id":"..."}
+        3. Observed _meta / error
+    validations:
+      required: true
+  - type: input
+    id: target-app
+    attributes:
+      label: Target app
+      description: The app being driven, plus its type (native / Electron / browser) if known.
+      placeholder: Notes.app (native) / VS Code (Electron)
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: MCP client
+      description: Which client launched the server.
+      placeholder: Claude Code / Cursor / Codex CLI / Gemini CLI / custom
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `computer-use-mcp version`.
+      placeholder: v0.3.0
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: macOS 15.5 (Apple Silicon)
+    validations:
+      required: true
+  - type: textarea
+    id: health-report
+    attributes:
+      label: health_report (optional)
+      description: |
+        Paste `computer-use-mcp health_report --json` if permissions or the daemon
+        may be involved. It does not print daemon secrets.
+      render: json
+    validations:
+      required: false
+  - type: textarea
+    id: meta
+    attributes:
+      label: Relevant _meta / logs (optional)
+      description: The `computer-use-mcp/outcome` and `computer-use-mcp/delivery` blocks, or stderr with COMPUTER_USE_MCP_LOG=1.
+      render: shell
+    validations:
+      required: false

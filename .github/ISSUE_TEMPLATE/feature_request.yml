@@ -1,0 +1,51 @@
+name: Feature request
+description: Propose a new capability, tool, or behavior for computer-use-mcp
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What are you trying to do that the server can't do well today?
+      placeholder: I want a skill to fill a form that spans a scrolled, virtualized list...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What tool, option, or behavior would solve it? Sketch the shape if you can.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the system does this touch?
+      options:
+        - Perception (get_app_state / find / read_text)
+        - Action tools (click / type / scroll / drag / set_value)
+        - Skills (teach / replay)
+        - Safety / policy
+        - Daemon / multi-session
+        - Overlay / visible cursor
+        - Packaging / distribution / docs
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing tools/flags you tried, and why they fall short.
+    validations:
+      required: false
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This keeps macOS-only assumptions out of the protocol/tool layer where possible.
+        - label: This does not require weakening a default safety gate.
+    validations:
+      required: false
