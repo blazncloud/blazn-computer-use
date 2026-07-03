@@ -249,6 +249,22 @@ func axAttributedStringForRange(_ element: AXUIElement, range: CFRange) -> NSAtt
     return (value as! NSAttributedString)
 }
 
+/// Rich text of a WKWebView-style web area. Web content exposes its text
+/// through *text markers* rather than character ranges (a web area's kAXValue
+/// is empty and it answers no visible character range), so pull the marker
+/// range spanning the element and then the attributed string for it. Both are
+/// opaque parameterized attributes — the markers are CFTypes we pass straight
+/// back, never constructing them, so this needs no private AXTextMarker
+/// symbols. nil when the element answers no marker range (not web content, or
+/// web accessibility is not enabled).
+func axWebAreaAttributedString(_ element: AXUIElement) -> NSAttributedString? {
+    guard let range = axParameterizedAttribute(element, "AXTextMarkerRangeForUIElement", element),
+        let value = axParameterizedAttribute(element, "AXAttributedStringForTextMarkerRange", range),
+        CFGetTypeID(value) == CFAttributedStringGetTypeID()
+    else { return nil }
+    return (value as! NSAttributedString)
+}
+
 func axActionNames(_ element: AXUIElement) -> [String] {
     var names: CFArray?
     guard AXUIElementCopyActionNames(element, &names) == .success,

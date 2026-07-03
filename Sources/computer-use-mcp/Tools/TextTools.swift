@@ -335,13 +335,23 @@ func readTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let charCount = (axAttribute(target.element, "AXNumberOfCharacters") as? NSNumber)?.intValue
     let isLarge = (charCount ?? 0) > TextExtraction.largeValueThreshold
     let useVisible = visibleOnly == true || (visibleOnly == nil && !hasExplicitWindow && isLarge)
-    if useVisible, let visible = TextExtraction.visibleText(of: target.element) {
-        let total = charCount.map { " of \($0) total" } ?? ""
-        let header =
-            "Visible text of \(describeTarget(target)) — "
-            + "chars \(visible.range.location)..<\(visible.range.location + visible.range.length)\(total) "
-            + "(scroll for more, or omit visible_only for the full value)"
-        return .text(header + ":\n" + visible.markdown)
+    if useVisible {
+        if let visible = TextExtraction.visibleText(of: target.element) {
+            let total = charCount.map { " of \($0) total" } ?? ""
+            let header =
+                "Visible text of \(describeTarget(target)) — "
+                + "chars \(visible.range.location)..<\(visible.range.location + visible.range.length)\(total) "
+                + "(scroll for more, or omit visible_only for the full value)"
+            return .text(header + ":\n" + visible.markdown)
+        }
+        // Web content (WKWebView) carries no character range; pull its rich
+        // text via text markers and render it to markdown instead.
+        if let markdown = TextExtraction.webAreaMarkdown(of: target.element) {
+            let header =
+                "Rich text of \(describeTarget(target)) — web content rendered to markdown "
+                + "(omit visible_only for the raw value)"
+            return .text(header + ":\n" + markdown)
+        }
     }
 
     guard let value = axString(target.element, kAXValueAttribute) else {

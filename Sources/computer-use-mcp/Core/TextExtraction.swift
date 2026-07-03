@@ -29,7 +29,7 @@ enum TextExtraction {
     /// Pull the visible character range and render it. Prefers the attributed
     /// string (keeps links/emphasis); falls back to the plain string. nil when
     /// the element exposes neither parameterized attribute — the caller then
-    /// falls back to the classic full-value read.
+    /// tries the web-area path, then the classic full-value read.
     static func visibleText(of element: AXUIElement) -> VisibleText? {
         guard let range = axVisibleCharacterRange(element), range.length > 0 else { return nil }
         if let attributed = axAttributedStringForRange(element, range: range), attributed.length > 0 {
@@ -39,6 +39,18 @@ enum TextExtraction {
             return VisibleText(markdown: plain, range: range)
         }
         return nil
+    }
+
+    /// Rich text of a WKWebView web area, rendered to markdown. Web content
+    /// carries no character range, so this pulls the whole realized attributed
+    /// string via text markers — the visible-range equivalent for a web area,
+    /// whose AX tree only realizes on-screen (plus nearby) content. nil when
+    /// the element is not web content or exposes no marker range.
+    static func webAreaMarkdown(of element: AXUIElement) -> String? {
+        guard let attributed = axWebAreaAttributedString(element), attributed.length > 0 else {
+            return nil
+        }
+        return attributedStringToMarkdown(attributed)
     }
 }
 
@@ -67,6 +79,10 @@ struct RunStyle: Equatable {
 }
 
 private func markdownForRun(_ text: String, attributes: [NSAttributedString.Key: Any]) -> String {
+    // Attachment runs (images, embedded controls) surface as U+FFFC object
+    // replacement characters with no text; drop them so they don't litter the
+    // markdown with stray placeholder glyphs.
+    let text = text.replacingOccurrences(of: "\u{FFFC}", with: "")
     guard !text.isEmpty else { return text }
     // Keep surrounding whitespace outside the markers so we never emit the
     // invalid `** text **`; a whitespace-only run stays undecorated.

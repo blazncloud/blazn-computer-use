@@ -88,6 +88,16 @@ import Testing
         #expect(attributedStringToMarkdown(bold("   ")) == "   ")
     }
 
+    @Test func attachmentPlaceholderIsStripped() {
+        // Web attachments (an embedded control or image) arrive as U+FFFC with
+        // no text; they must not leak into the markdown as stray glyphs.
+        let combined = NSMutableAttributedString()
+        combined.append(plain("before "))
+        combined.append(plain("\u{FFFC}"))
+        combined.append(plain("after"))
+        #expect(attributedStringToMarkdown(combined) == "before after")
+    }
+
     @Test func linkWrapsEmphasis() {
         let attributed = NSMutableAttributedString(
             string: "x",
