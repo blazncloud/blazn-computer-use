@@ -65,10 +65,10 @@ import Testing
             focusChangeAllowed: false, cursorMovementAllowed: false,
             fallbackReasons: [FallbackReason.axActionUnsupported.rawValue, FallbackReason.windowNumberUnresolved.rawValue]
         )
-        guard case let .object(fields) = telemetry.value,
+        guard case let .object(fields)? = telemetry.deliveryValue,
             case let .array(reasons)? = fields["fallback_reasons"]
         else {
-            Issue.record("expected fallback_reasons array in telemetry")
+            Issue.record("expected fallback_reasons array in delivery telemetry")
             return
         }
         #expect(reasons.map(\.stringValue) == ["ax-action-unsupported", "window-number-unresolved"])
@@ -81,8 +81,8 @@ import Testing
             deliveryTier: InputTier.accessibilityAction.rawValue,
             focusChangeAllowed: false, cursorMovementAllowed: false
         )
-        guard case let .object(fields) = telemetry.value else {
-            Issue.record("expected object telemetry")
+        guard case let .object(fields)? = telemetry.deliveryValue else {
+            Issue.record("expected delivery telemetry")
             return
         }
         #expect(fields["fallback_reasons"] == nil)

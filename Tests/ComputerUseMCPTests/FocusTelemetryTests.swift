@@ -14,14 +14,20 @@ import Testing
             cursorMovementAllowed: false
         )
 
-        guard case let .object(fields) = telemetry.value else {
+        guard case let .object(fields) = telemetry.focusValue else {
             Issue.record("expected object telemetry")
             return
         }
         #expect(fields["focus_changed"]?.boolValue == false)
         #expect(fields["focus_change_allowed"]?.boolValue == false)
         #expect(fields["cursor_movement_allowed"]?.boolValue == false)
-        #expect(fields["delivery_tier"]?.stringValue == InputTier.accessibilityAttribute.rawValue)
+        // delivery_tier now lives in the sibling delivery block, not focus.
+        #expect(fields["delivery_tier"] == nil)
+        guard case let .object(delivery)? = telemetry.deliveryValue else {
+            Issue.record("expected delivery block")
+            return
+        }
+        #expect(delivery["delivery_tier"]?.stringValue == InputTier.accessibilityAttribute.rawValue)
     }
 
     @Test func focusTelemetryReportsChangedFrontmostApp() throws {
@@ -35,7 +41,7 @@ import Testing
             cursorMovementAllowed: true
         )
 
-        guard case let .object(fields) = telemetry.value else {
+        guard case let .object(fields) = telemetry.focusValue else {
             Issue.record("expected object telemetry")
             return
         }
@@ -51,18 +57,25 @@ import Testing
             deliveryTier: InputTier.perPid.rawValue,
             focusChangeAllowed: false, cursorMovementAllowed: false
         )
-        guard case let .object(unset) = telemetry.value else {
-            Issue.record("expected object telemetry")
+        // ui_changed unset: the delivery block has only the tier, no ui_changed.
+        guard case let .object(unset)? = telemetry.deliveryValue else {
+            Issue.record("expected delivery block")
             return
         }
         #expect(unset["ui_changed"] == nil)
 
         telemetry.uiChanged = false
-        guard case let .object(fields) = telemetry.value else {
-            Issue.record("expected object telemetry")
+        guard case let .object(fields)? = telemetry.deliveryValue else {
+            Issue.record("expected delivery block")
             return
         }
         #expect(fields["ui_changed"]?.boolValue == false)
+        // The focus block never carries ui_changed.
+        guard case let .object(focus) = telemetry.focusValue else {
+            Issue.record("expected focus block")
+            return
+        }
+        #expect(focus["ui_changed"] == nil)
     }
 
     @Test func droppedEventHintOnlyForBackgroundEventTiers() {
@@ -132,7 +145,7 @@ import Testing
         let tracker = FocusChangeTracker.start()
         let telemetry = tracker.finish()
 
-        guard case let .object(fields) = telemetry.value else {
+        guard case let .object(fields) = telemetry.focusValue else {
             Issue.record("expected object telemetry")
             return
         }

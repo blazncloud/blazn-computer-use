@@ -130,7 +130,8 @@ func stateResult(
     scope: TreeScope? = nil,
     maxElements: Int = defaultMaxTreeElements,
     ocr: Bool = false,
-    focusTelemetry: FocusTelemetry? = nil
+    focusTelemetry: FocusTelemetry? = nil,
+    verifier: ActionVerifier? = nil
 ) async throws -> CallTool.Result {
     try requireAccessibilityTrusted()
 
@@ -140,8 +141,15 @@ func stateResult(
 
     if detail == .noState {
         let confirmation = note ?? "Action completed."
-        return CallTool.Result.text(confirmation + " Call get_app_state when you need the updated UI state.")
+        var result = CallTool.Result.text(confirmation + " Call get_app_state when you need the updated UI state.")
             .withFocusTelemetry(focusTelemetry)
+        // No recapture on the fast path: honor the skip honestly rather than
+        // paying for a reread — a pre-resolved verdict still rides along, but
+        // an unresolved one becomes verifier_ambiguous, never a false success.
+        if let verifier, outcomeVerificationEnabled() {
+            result = result.withActionOutcome(verifier.skippedStateOutcome())
+        }
+        return result
     }
 
     // Give the UI a brief beat to settle after whatever just happened.
@@ -298,7 +306,21 @@ func stateResult(
 
     var enrichedTelemetry = focusTelemetry
     enrichedTelemetry?.uiChanged = !unchanged
-    if unchanged, let hint = droppedEventHint(deliveryTier: focusTelemetry?.deliveryTier) {
+
+    // Re-read the acted-on element and reduce to an outcome. The reread never
+    // throws — a failure degrades the classification, never the tool call.
+    var actionOutcome: ActionOutcome?
+    if let verifier, outcomeVerificationEnabled() {
+        actionOutcome = await verifier.finalize(
+            windowElement: window.element, treeChanged: !unchanged, afterWindowTitle: window.title)
+    }
+    if let sentence = actionOutcome?.humanSentence {
+        // A verified non-success verdict, in plain language for the transcript.
+        text += "\n\n" + sentence
+    } else if actionOutcome == nil, unchanged,
+        let hint = droppedEventHint(deliveryTier: focusTelemetry?.deliveryTier)
+    {
+        // Unverified tools keep the legacy dropped-event hint.
         text += "\n\n" + hint
     }
 
@@ -313,7 +335,9 @@ func stateResult(
             )
         )
     }
-    return .init(content: content, isError: false).withFocusTelemetry(enrichedTelemetry)
+    return .init(content: content, isError: false)
+        .withFocusTelemetry(enrichedTelemetry)
+        .withActionOutcome(actionOutcome)
 }
 
 /// Guidance when a synthetic background-event delivery produced no visible

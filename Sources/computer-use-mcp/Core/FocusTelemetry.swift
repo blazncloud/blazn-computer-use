@@ -4,6 +4,7 @@ import Foundation
 import MCP
 
 private let focusTelemetryMetaKey = "computer-use-mcp/focus"
+private let deliveryTelemetryMetaKey = "computer-use-mcp/delivery"
 
 struct FrontmostAppSnapshot: Equatable {
     let name: String
@@ -66,7 +67,10 @@ struct FocusTelemetry: Equatable {
         before != after
     }
 
-    var value: Value {
+    /// The `computer-use-mcp/focus` block: strictly frontmost-app identity and
+    /// the focus/cursor policy for this call. Delivery telemetry lives in its
+    /// own sibling block (`deliveryValue`).
+    var focusValue: Value {
         var fields: [String: Value] = [
             "focus_changed": .bool(focusChanged),
             "focus_change_allowed": .bool(focusChangeAllowed),
@@ -78,6 +82,16 @@ struct FocusTelemetry: Equatable {
         if let after {
             fields["frontmost_after"] = after.value
         }
+        return .object(fields)
+    }
+
+    /// The `computer-use-mcp/delivery` block: which tier landed the event, why
+    /// the ladder fell through, and whether the UI changed. nil when there is
+    /// nothing to report (read-only recapture with no delivery). Kept separate
+    /// from focus so delivery ("how we tried to make it happen") sits next to
+    /// the outcome contract ("did it happen").
+    var deliveryValue: Value? {
+        var fields: [String: Value] = [:]
         if let deliveryTier {
             fields["delivery_tier"] = .string(deliveryTier)
         }
@@ -87,11 +101,7 @@ struct FocusTelemetry: Equatable {
         if let uiChanged {
             fields["ui_changed"] = .bool(uiChanged)
         }
-        return .object(fields)
-    }
-
-    var metadata: Metadata {
-        Metadata(additionalFields: [focusTelemetryMetaKey: value])
+        return fields.isEmpty ? nil : .object(fields)
     }
 }
 
@@ -155,7 +165,10 @@ extension CallTool.Result {
         guard let telemetry else { return self }
         var result = self
         var fields = result._meta?.fields ?? [:]
-        fields[focusTelemetryMetaKey] = telemetry.value
+        fields[focusTelemetryMetaKey] = telemetry.focusValue
+        if let delivery = telemetry.deliveryValue {
+            fields[deliveryTelemetryMetaKey] = delivery
+        }
         result._meta = Metadata(additionalFields: fields)
         return result
     }
