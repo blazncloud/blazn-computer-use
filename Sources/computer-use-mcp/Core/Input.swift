@@ -70,6 +70,9 @@ enum FallbackReason: String, Equatable, Sendable {
     /// scroll only: no scrollable container was found on the target's AX
     /// ancestor chain, so the wheel was posted at the raw hit point.
     case noScrollContainerFound = "no-scroll-container-found"
+    /// scroll only: the container's AX page-scroll action fired but no movement
+    /// was observed, so delivery fell through to the synthetic wheel.
+    case scrollActionUnverified = "scroll-action-unverified"
 
     // Multi-strategy AX chain rungs that fired but whose effect was not
     // observed, so the chain fell through to the next rung. Surfaced so the

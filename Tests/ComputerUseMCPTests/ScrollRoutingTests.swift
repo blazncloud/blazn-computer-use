@@ -81,4 +81,35 @@ import Testing
         #expect(rankScrollCandidates([(item: "x", score: 5, depth: 0)]).isEmpty)
         #expect(rankScrollCandidates([] as [(item: String, score: Int, depth: Int)]).isEmpty)
     }
+
+    // MARK: Tier-1 AX page-scroll action mapping
+
+    @Test func everyDirectionMapsToItsPageScrollAction() {
+        #expect(scrollPageAction(for: "down") == "AXScrollDownByPage")
+        #expect(scrollPageAction(for: "up") == "AXScrollUpByPage")
+        #expect(scrollPageAction(for: "left") == "AXScrollLeftByPage")
+        #expect(scrollPageAction(for: "right") == "AXScrollRightByPage")
+    }
+
+    @Test func unknownDirectionHasNoPageScrollAction() {
+        #expect(scrollPageAction(for: "sideways") == nil)
+        #expect(scrollPageAction(for: "") == nil)
+    }
+
+    // MARK: Reveal-descendant selection (AXScrollToVisible equivalent)
+
+    @Test func nearestOffsetPicksTheCandidateClosestToTheTargetDistance() {
+        // Offsets past the viewport edge; target ~ one viewport (400).
+        #expect(nearestOffsetIndex([120, 380, 900], target: 400) == 1)
+    }
+
+    @Test func nearestOffsetIgnoresOnOrBehindTheEdge() {
+        // Zero/negative offsets are on-screen or behind the scroll direction.
+        #expect(nearestOffsetIndex([-50, 0, 700], target: 400) == 2)
+    }
+
+    @Test func nearestOffsetIsNilWhenNothingIsPastTheEdge() {
+        #expect(nearestOffsetIndex([-10, 0], target: 400) == nil)
+        #expect(nearestOffsetIndex([], target: 400) == nil)
+    }
 }

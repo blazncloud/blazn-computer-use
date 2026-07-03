@@ -52,9 +52,10 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     // sizes a semantic direction+pages scroll correctly.
     let ranked = target.element.map { rankedScrollContainers(from: $0) } ?? []
 
+    let direction = args.string("direction")
     var deltaX = args.integer("delta_x") ?? 0
     var deltaY = args.integer("delta_y") ?? 0
-    if let direction = args.string("direction") {
+    if let direction {
         let pages = try ArgumentBounds.checkScrollPages(args.number("pages") ?? 1)
         // Size a page from the top-ranked container's *visible* viewport (not a
         // ~20px leaf row, nor a web area's full content height); fall back to the
@@ -105,6 +106,74 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let beforeOffset = container.flatMap(scrollOffsetSignature)
 
     await AgentCursor.shared.glide(to: point, targetWindow: target.deliveryContext.windowNumber)
+
+    // Tier 1: drive the scroll through accessibility, which lands in the
+    // background where a SwiftUI List / WKWebView swallow a synthetic wheel. Two
+    // AX strategies for a semantic direction, each verified via the movement
+    // fingerprint; on no observed movement, fall through to the next, then to
+    // the wheel — the same chain philosophy as the click tier 1.
+    if let direction {
+        let pageCount = max(1, Int((args.number("pages") ?? 1).rounded()))
+        func tier1Success(via: String) async throws -> CallTool.Result {
+            before.scrollPositionChanged = true
+            before.notes.append("Scrolled via \(via) (tier 1).")
+            let verifier = ActionVerifier(
+                family: .scroll, intent: .scrollContent,
+                deliveryTier: InputTier.accessibilityAction.rawValue,
+                dispatchSucceeded: true, hasTargetElement: false, snapshotElement: nil,
+                before: before, beforeWindowTitle: target.snapshot.windowTitle)
+            return try await stateResult(
+                app: app, windowTitle: target.snapshot.windowTitle,
+                note: "Scrolled \(direction)\(pageCount > 1 ? " \(pageCount) pages" : "") at \(target.description).",
+                screenshot: screenshotDetail(args),
+                focusTelemetry: focus.finish(
+                    deliveryTier: InputTier.accessibilityAction.rawValue, fallbackReasons: fallbackReasons),
+                verifier: verifier)
+        }
+
+        // Strategy 1: the container's own page-scroll action (native AppKit
+        // scroll areas). The action lives on the AXScrollArea, which may be an
+        // ancestor of the innermost qualifier (e.g. above an AXOutline), so use
+        // the nearest ranked container that advertises it.
+        if let action = scrollPageAction(for: direction),
+            let actionContainer = ranked.first(where: { axActionNames($0).contains(action) })
+        {
+            let fingerprint = scrollMovementFingerprint(container: actionContainer, target: target.element)
+            var performed = true
+            for _ in 0..<pageCount where performed {
+                performed = AXUIElementPerformAction(actionContainer, action as CFString) == .success
+            }
+            try? await Task.sleep(for: .milliseconds(80))
+            let moved = scrollMovementFingerprint(container: actionContainer, target: target.element) != fingerprint
+            if performed, moved {
+                return try await tier1Success(via: "the container's \(action) action")
+            }
+            fallbackReasons.append(.scrollActionUnverified)
+        }
+
+        // Strategy 2: reveal an off-screen descendant. Web areas expose no
+        // page-scroll action, but their content supports AXScrollToVisible, and
+        // scrolling a descendant that sits ~pages viewports away into view
+        // advances the content by that much.
+        if let container,
+            let reveal = descendantToRevealForScroll(
+                container: container, direction: direction, pages: args.number("pages") ?? 1,
+                windowFrame: target.deliveryContext.windowFrame)
+        {
+            let fingerprint = scrollMovementFingerprint(container: container, target: target.element)
+            let performed = AXUIElementPerformAction(reveal, "AXScrollToVisible" as CFString) == .success
+            try? await Task.sleep(for: .milliseconds(80))
+            let moved = scrollMovementFingerprint(container: container, target: target.element) != fingerprint
+            if performed, moved {
+                return try await tier1Success(via: "revealing an off-screen element (AXScrollToVisible)")
+            }
+            if !fallbackReasons.contains(.scrollActionUnverified) {
+                fallbackReasons.append(.scrollActionUnverified)
+            }
+        }
+    }
+
+    // Tier 2: synthetic wheel at the hit point.
     let tier = deliverScroll(at: point, deltaX: deltaX, deltaY: deltaY, context: target.deliveryContext)
     try? await Task.sleep(for: .milliseconds(80))
 

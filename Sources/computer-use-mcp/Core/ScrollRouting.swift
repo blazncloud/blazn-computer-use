@@ -122,6 +122,84 @@ func scrollAtExtent(container: AXUIElement, deltaX: Int, deltaY: Int) -> Bool? {
     return nil
 }
 
+/// The AX page-scroll action name for a semantic direction, or nil for an
+/// unrecognized one. These actions (AXScrollDownByPage, …) drive the container
+/// directly through accessibility — reliable in the background, where a
+/// synthetic wheel is often swallowed by SwiftUI/WebKit views.
+func scrollPageAction(for direction: String) -> String? {
+    switch direction {
+    case "down": return "AXScrollDownByPage"
+    case "up": return "AXScrollUpByPage"
+    case "left": return "AXScrollLeftByPage"
+    case "right": return "AXScrollRightByPage"
+    default: return nil
+    }
+}
+
+/// A movement fingerprint combining three signals, because no single one covers
+/// every scroll surface:
+///   - the container's scroll-bar fills (native scroll areas);
+///   - the target element's on-screen origin (a web paragraph slides up);
+///   - the target element's value (a virtualized list reuses the same AX element
+///     at a fixed frame, so only its value changes — "Row 001" → "Row 025").
+/// Compared before/after an action to decide if anything moved. All-"-" means
+/// nothing was readable and movement cannot be confirmed.
+func scrollMovementFingerprint(container: AXUIElement?, target: AXUIElement?) -> String {
+    let offset = container.flatMap(scrollOffsetSignature) ?? "-"
+    let origin = target.flatMap(axFrame).map { "\(Int($0.origin.x.rounded())),\(Int($0.origin.y.rounded()))" } ?? "-"
+    let value = target.flatMap { axString($0, kAXValueAttribute) } ?? "-"
+    return "\(offset)|\(origin)|\(value)"
+}
+
+/// Index of the candidate whose offset past the viewport edge is closest to the
+/// target scroll distance (both positive, measured in the scroll axis). Pure, so
+/// the "which descendant to reveal" policy is unit-tested without a live tree.
+func nearestOffsetIndex(_ offsets: [Double], target: Double) -> Int? {
+    offsets.enumerated()
+        .filter { $0.element > 0 }
+        .min { abs($0.element - target) < abs($1.element - target) }?
+        .offset
+}
+
+/// Equivalent AX scroll for containers that expose no page-scroll action (web
+/// areas): the off-screen descendant to reveal so that scrolling it into view
+/// advances the content ~`pages` viewports in the requested direction. Collects
+/// descendants that support AXScrollToVisible and sit past the viewport edge in
+/// that direction, then picks the one whose distance past the edge is closest to
+/// the requested amount. nil when nothing is revealable (e.g. a virtualized list
+/// whose off-screen rows are not realized).
+func descendantToRevealForScroll(
+    container: AXUIElement, direction: String, pages: Double, windowFrame: CGRect?
+) -> AXUIElement? {
+    guard let viewport = visibleViewport(of: container, windowFrame: windowFrame) else { return nil }
+    let vertical = direction == "down" || direction == "up"
+    let towardPositive = direction == "down" || direction == "right"
+
+    var elements: [AXUIElement] = []
+    var offsets: [Double] = []
+    func edgeOffset(_ frame: CGRect) -> Double {
+        if vertical {
+            return towardPositive ? Double(frame.minY - viewport.maxY) : Double(viewport.minY - frame.maxY)
+        }
+        return towardPositive ? Double(frame.minX - viewport.maxX) : Double(viewport.minX - frame.maxX)
+    }
+    func walk(_ element: AXUIElement, depth: Int) {
+        guard depth < 12, elements.count < 500 else { return }
+        if axActionNames(element).contains("AXScrollToVisible"), let frame = axFrame(element) {
+            let offset = edgeOffset(frame)
+            if offset > 0 {
+                elements.append(element)
+                offsets.append(offset)
+            }
+        }
+        for child in axElements(element, kAXChildrenAttribute) { walk(child, depth: depth + 1) }
+    }
+    walk(container, depth: 0)
+
+    let target = (vertical ? Double(viewport.height) : Double(viewport.width)) * pages
+    return nearestOffsetIndex(offsets, target: target).map { elements[$0] }
+}
+
 /// The container's visible viewport: its frame clipped to the window. A web
 /// area (and some scroll areas) reports its *content* frame, which can be many
 /// screens tall — sizing a "page" from that would scroll the whole document, so
