@@ -39,7 +39,9 @@ func findImpl(_ args: [String: Value]) async throws -> CallTool.Result {
                 windowOrigin: window.frame.origin,
                 pixelsPerPoint: pixelsPerPoint,
                 generation: generation,
-                maxElements: 5000
+                maxElements: 5000,
+                // Search must see off-screen collection rows, so it never windows.
+                windowCollections: false
             )
         }
     }

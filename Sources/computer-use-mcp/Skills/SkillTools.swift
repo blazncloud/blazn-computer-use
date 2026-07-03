@@ -295,7 +295,9 @@ private func refreshSkillSnapshot(app: ResolvedApp) async throws {
             windowOrigin: window.frame.origin,
             pixelsPerPoint: pixelsPerPoint,
             generation: generation,
-            maxElements: 5000
+            maxElements: 5000,
+            // Skill locator resolution must see every element, not a viewport slice.
+            windowCollections: false
         )
     }
 }
