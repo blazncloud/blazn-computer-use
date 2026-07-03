@@ -73,7 +73,7 @@ Verified (launched while Finder was frontmost):
 | Disabled button | `disabled-button` | AXButton, `disabled` | — | `unsupported`: control is present but disabled; an action attempt must not be classified `success`. |
 | Toggle | `toggle-box` | AXCheckBox (`value` 0/1) | `toggle-state` → `on`/`off` | `success` with a settable value: toggling flips both the checkbox `AXValue` and the independent state readout. |
 | Keystroke input | `keystroke-input` | AXTextArea, read-only `AXValue` | `keystroke-echo` → typed text | `type_text` CGEvent fallback: the element is **not** AX-value-settable (getter only, no setter), so an AX `set_value` must fail and typing has to fall back to synthetic key events routed to the focused first responder. The echo readout confirms keystrokes landed. |
-| Virtualized list | `row-list` | AXOutline of 500 AXRows | row `AXValue` = `Row 001`…`Row 500` | Dense-collection viewport windowing: only ~150 rows near the viewport are realized in the AX tree at a time; rows past the viewport report off-screen frames. Scroll + re-read exercises progressive traversal. |
+| Virtualized list | `row-list` | AXTable of 500 AXRows (AppKit NSScrollView + NSTableView via NSViewRepresentable) | row `AXValue` = `Row 001`…`Row 500` | Dense-collection viewport windowing: only ~visible rows are realized in the AX tree at a time; rows past the viewport report off-screen frames, and NSTableView exposes AXRows/AXVisibleRows natively. Scroll + re-read exercises progressive traversal. Background scrolling: a real NSScrollView does NOT honor `AXScrollDownByPage` on perform (returns `attributeUnsupported`), but its `AXVerticalScrollBar` value IS settable and moves the content — which the scroll tool's tier-1 uses to actually scroll the list in the background (a plain SwiftUI `List` moved nothing). |
 | Web pane | `web-pane` | AXGroup → AXWebArea | see web sub-controls below | Web-AX exposure and skeleton traversal into WKWebView content. |
 | Window clamp | window `ComputerUse Fixture` | AXWindow | (frame via `list_windows`) | `manage_window` resize clamping — see below. |
 
@@ -115,9 +115,10 @@ Observed clamp behavior for `manage_window action:resize` (read back via
 
 ## Notes
 
-- Launching prints one `reentrant operation in its NSTableView delegate`
-  warning. It comes from the SwiftUI `List` (NSTableView-backed) laying out
-  inside the outer `ScrollView`; it is a benign log line on current macOS and
-  does not affect AX perceivability or the 500-row virtualization.
+- The row-list is a real AppKit `NSScrollView` + `NSTableView` bridged via
+  `NSViewRepresentable` (not a SwiftUI `List`), specifically so its scroll
+  position is drivable in the background through the AX scroll-bar value. A
+  SwiftUI `List` swallows synthetic wheels and no-ops `AXScrollDownByPage`, so a
+  correctly-routed background scroll moved nothing.
 - The fixture never steals focus on launch (`activate(ignoringOtherApps:
   false)`) so it cannot mask a headless-policy focus violation in the suite.
