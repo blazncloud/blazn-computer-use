@@ -320,15 +320,38 @@ func deliverDrag(from: CGPoint, to: CGPoint, context: DeliveryContext) async -> 
         }
     }
     post(.leftMouseDown, from)
+    // Abort guard: the button is held from here on, so every exit path must
+    // release it. A drag that completes releases at the destination; one that
+    // bails early (cancellation, a future throw) releases at the origin —
+    // dropping where it began so a half-finished drag is a no-op instead of a
+    // stuck mouse button.
+    var released = false
+    var aborted = true
+    func release() {
+        guard !released else { return }
+        released = true
+        post(.leftMouseUp, dragReleasePoint(from: from, to: to, aborted: aborted))
+    }
+    defer { release() }
+
     let steps = 24
     for i in 1...steps {
+        if Task.isCancelled { return tier }  // aborted stays true → defer drops at origin
         let t = Double(i) / Double(steps)
         let p = CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t)
         post(.leftMouseDragged, p)
         try? await Task.sleep(for: .milliseconds(16))
     }
-    post(.leftMouseUp, to)
+    aborted = false
+    release()
     return tier
+}
+
+/// Where a drag releases its button: the destination on normal completion, or
+/// the origin when aborting so the gesture drops where it began (a no-op)
+/// rather than stranding a held button. Pure, unit-tested.
+func dragReleasePoint(from: CGPoint, to: CGPoint, aborted: Bool) -> CGPoint {
+    aborted ? from : to
 }
 
 /// Split text into Unicode-typing chunks: one grapheme cluster per chunk, each
