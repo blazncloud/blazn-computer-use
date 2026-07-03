@@ -35,7 +35,7 @@ struct ComputerUseFixtureApp: App {
                     minHeight: WindowClamp.minHeight, idealHeight: WindowClamp.idealHeight,
                     maxHeight: WindowClamp.maxHeight)
         }
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
     }
 }
 

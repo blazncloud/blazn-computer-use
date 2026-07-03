@@ -279,12 +279,7 @@ func clickMenuItemImpl(_ args: [String: Value]) async throws -> CallTool.Result 
 
     var current = menuBar
     for (index, segment) in segments.enumerated() {
-        // Children of a menu-bar/menu-item container: descend through the
-        // AXMenu wrapper when present.
-        var candidates = axElements(current, kAXChildrenAttribute)
-        if candidates.count == 1, axRole(candidates[0]) == "AXMenu" {
-            candidates = axElements(candidates[0], kAXChildrenAttribute)
-        }
+        let candidates = await menuChildren(of: current)
         guard let match = matchMenuItem(segment, in: candidates) else {
             let available = candidates.compactMap { axString($0, kAXTitleAttribute) }
                 .filter { !$0.isEmpty }.joined(separator: ", ")
@@ -311,6 +306,31 @@ func clickMenuItemImpl(_ args: [String: Value]) async throws -> CallTool.Result 
         screenshot: screenshotDetail(args),
         focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAction.rawValue)
     )
+}
+
+/// Children of a menu container, descending the single AXMenu wrapper when
+/// present. A submenu's items populate lazily — only once the menu is shown —
+/// so when the wrapper exists but is empty, perform the item's show/press
+/// action, let it settle, and read again. The open is gated on the presence of
+/// an AXMenu wrapper, so a leaf command (which has none) is never pressed here:
+/// an intermediate item is only ever opened, never activated. Background-safe:
+/// the AX action delivers to the element with no real cursor.
+private func menuChildren(of element: AXUIElement) async -> [AXUIElement] {
+    func descend(_ raw: [AXUIElement]) -> [AXUIElement] {
+        guard let menu = raw.first(where: { axRole($0) == "AXMenu" }) else { return raw }
+        return axElements(menu, kAXChildrenAttribute)
+    }
+    let raw = axElements(element, kAXChildrenAttribute)
+    let items = descend(raw)
+    guard items.isEmpty, raw.contains(where: { axRole($0) == "AXMenu" }) else { return items }
+
+    // The submenu wrapper is present but empty: show it to force population.
+    for action in ["AXShowMenu", kAXPressAction as String] where axActionNames(element).contains(action) {
+        guard AXUIElementPerformAction(element, action as CFString) == .success else { continue }
+        try? await Task.sleep(for: .milliseconds(120))
+        break
+    }
+    return descend(axElements(element, kAXChildrenAttribute))
 }
 
 /// Match a menu segment against items: exact title (case-insensitive) first,
