@@ -203,6 +203,52 @@ func axFrame(_ element: AXUIElement) -> CGRect? {
     return CGRect(origin: position, size: size)
 }
 
+/// Copy a parameterized AX attribute (one that takes an input, e.g. a range).
+/// Returns nil unless the app answers `.success`.
+func axParameterizedAttribute(
+    _ element: AXUIElement, _ name: String, _ parameter: CFTypeRef
+) -> CFTypeRef? {
+    var value: CFTypeRef?
+    guard
+        AXUIElementCopyParameterizedAttributeValue(element, name as CFString, parameter, &value)
+            == .success
+    else { return nil }
+    return value
+}
+
+/// The character range currently scrolled into view for a large text surface.
+/// Backs the visible-range read path; nil when the element doesn't expose it.
+func axVisibleCharacterRange(_ element: AXUIElement) -> CFRange? {
+    guard let value = axAttribute(element, kAXVisibleCharacterRangeAttribute),
+        CFGetTypeID(value) == AXValueGetTypeID()
+    else { return nil }
+    var range = CFRange()
+    guard AXValueGetValue(value as! AXValue, .cfRange, &range) else { return nil }
+    return range
+}
+
+/// Plain text for a character range via the parameterized attribute.
+func axStringForRange(_ element: AXUIElement, range: CFRange) -> String? {
+    var range = range
+    guard let rangeValue = AXValueCreate(.cfRange, &range),
+        let value = axParameterizedAttribute(
+            element, kAXStringForRangeParameterizedAttribute as String, rangeValue)
+    else { return nil }
+    return value as? String
+}
+
+/// Rich (attributed) text for a character range via the parameterized
+/// attribute — carries font traits and link runs the plain string drops.
+func axAttributedStringForRange(_ element: AXUIElement, range: CFRange) -> NSAttributedString? {
+    var range = range
+    guard let rangeValue = AXValueCreate(.cfRange, &range),
+        let value = axParameterizedAttribute(
+            element, kAXAttributedStringForRangeParameterizedAttribute as String, rangeValue),
+        CFGetTypeID(value) == CFAttributedStringGetTypeID()
+    else { return nil }
+    return (value as! NSAttributedString)
+}
+
 func axActionNames(_ element: AXUIElement) -> [String] {
     var names: CFArray?
     guard AXUIElementCopyActionNames(element, &names) == .success,
