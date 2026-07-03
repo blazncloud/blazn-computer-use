@@ -9,6 +9,10 @@ import MCP
 struct PointTarget {
     /// The element under the point (hit-tested or resolved from an id), if any.
     let element: AXUIElement?
+    /// The snapshot element (locator) when the target came from an element id,
+    /// so the outcome verifier can re-resolve and re-read it after the action.
+    /// nil for coordinate clicks — there is no locator to re-read.
+    let snapshotElement: SnapshotElement?
     /// Global screen point (top-left origin). Nil when the element exposes no
     /// frame — such targets can only be driven by accessibility actions, and
     /// point-based delivery must fail loudly rather than act at (0,0).
@@ -46,8 +50,8 @@ func resolvePointTarget(_ args: [String: Value], app: ResolvedApp, allowGlobalCu
         let target = try await resolveTarget(app: app, elementID: elementID)
         let point = axFrame(target.element).map { CGPoint(x: $0.midX, y: $0.midY) }
         return PointTarget(
-            element: target.element, point: point, snapshot: target.snapshot,
-            description: describeTarget(target), deliveryContext: context
+            element: target.element, snapshotElement: target.snapshotElement, point: point,
+            snapshot: target.snapshot, description: describeTarget(target), deliveryContext: context
         )
     }
 
@@ -58,7 +62,7 @@ func resolvePointTarget(_ args: [String: Value], app: ResolvedApp, allowGlobalCu
         let point = try screenPoint(x: x, y: y, snapshot: snapshot)
         let element = accessibilityElement(at: point, pid: app.pid)
         return PointTarget(
-            element: element, point: point, snapshot: snapshot,
+            element: element, snapshotElement: nil, point: point, snapshot: snapshot,
             description: "(\(Int(x)),\(Int(y)))", deliveryContext: context
         )
     }

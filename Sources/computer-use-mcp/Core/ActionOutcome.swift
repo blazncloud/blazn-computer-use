@@ -485,13 +485,13 @@ struct ActionVerifier: Sendable {
     /// coordinate clicks and whole-window families.
     let snapshotElement: SnapshotElement?
     /// Fields captured before dispatch (before_* slots filled).
-    var before: ActionVerification
+    var before: ActionVerification = ActionVerification()
     /// Window title before dispatch, for the window-title-changed bit.
-    var beforeWindowTitle: String?
+    var beforeWindowTitle: String? = nil
     /// A fully decided outcome (already-satisfied / unsupported / skipped
     /// dispatch), when the handler classified pre-dispatch. finalize returns it
     /// verbatim without an after-reread.
-    var resolved: ActionOutcome?
+    var resolved: ActionOutcome? = nil
 
     /// Capture the target-local before fields for a family that reads them.
     static func captureBefore(_ element: AXUIElement?, family: ActionFamily) -> ActionVerification {

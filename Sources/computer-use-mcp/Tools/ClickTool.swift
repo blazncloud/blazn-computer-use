@@ -22,6 +22,29 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let target = try await resolvePointTarget(args, app: app, allowGlobalCursor: allowGlobalCursor)
     try SafetyPolicy.checkClick(label: clickTargetLabel(target), app: app, confirmed: confirmed)
 
+    let intent = clickIntent(target, button: buttonName)
+
+    // Read-act-read, pre-dispatch: a disabled control cannot perform the action.
+    // Classify it `unsupported` and do not press a dead control — distinct from
+    // a verified failure (retrying won't help), and not a raw throw.
+    if let element = target.element, target.snapshotElement != nil,
+        axBool(element, kAXEnabledAttribute) == false
+    {
+        let verifier = ActionVerifier(
+            family: .click, intent: intent, deliveryTier: InputTier.accessibilityAction.rawValue,
+            dispatchSucceeded: false, hasTargetElement: true, snapshotElement: target.snapshotElement,
+            resolved: .unsupported(.unsupported, "\(target.description) is disabled and cannot be clicked."))
+        return try await stateResult(
+            app: app, windowTitle: target.snapshot.windowTitle,
+            note: "\(target.description) is disabled; no click was performed.",
+            screenshot: screenshotDetail(args),
+            focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAction.rawValue),
+            verifier: verifier)
+    }
+
+    // Read (before): capture the target's fields before dispatch.
+    let before = ActionVerifier.captureBefore(target.element, family: .click)
+
     let outcome: InputActionOutcome
     switch buttonName {
     case "left":
@@ -41,11 +64,27 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     // The click landed: ripple the overlay at the point so the user sees it.
     if let point = target.point { await AgentCursor.shared.pulse(at: point) }
 
+    let verifier = ActionVerifier(
+        family: .click, intent: intent, deliveryTier: outcome.deliveryTier.rawValue,
+        dispatchSucceeded: true, hasTargetElement: target.snapshotElement != nil,
+        snapshotElement: target.snapshotElement, before: before,
+        beforeWindowTitle: target.snapshot.windowTitle)
+
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle, note: outcome.note,
         screenshot: screenshotDetail(args),
-        focusTelemetry: focus.finish(deliveryTier: outcome.deliveryTier.rawValue, fallbackReasons: outcome.fallbackReasons)
+        focusTelemetry: focus.finish(deliveryTier: outcome.deliveryTier.rawValue, fallbackReasons: outcome.fallbackReasons),
+        verifier: verifier
     )
+}
+
+/// The intended effect of a click, for the outcome verifier. A left click on a
+/// text-entry field is a focus/caret placement (its effect is often invisible);
+/// everything else is a generic activation whose effect is an observed change.
+private func clickIntent(_ target: PointTarget, button: String) -> ActionIntent {
+    guard button == "left" else { return .activate }
+    if let role = target.snapshotElement?.role, isTextEntryRole(role) { return .focusTarget }
+    return .activate
 }
 
 func clickCountArgument(_ args: [String: Value]) throws -> Int {

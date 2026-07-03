@@ -60,6 +60,16 @@ func runCall(_ args: [String]) async {
         }
     }
 
+    // Opt-in _meta dump (COMPUTER_USE_MCP_SHOW_META=1): the focus / delivery /
+    // outcome telemetry blocks are otherwise invisible on the CLI.
+    if Config.bool("show_meta") == true, let fields = result._meta?.fields, !fields.isEmpty {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(fields), let json = String(data: data, encoding: .utf8) {
+            print("_meta: \(json)")
+        }
+    }
+
     if result.isError == true {
         exit(1)
     }
