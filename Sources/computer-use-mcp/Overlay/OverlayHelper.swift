@@ -108,6 +108,10 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
     /// ordered just above the target, so anything occluding the target also
     /// occludes the cursor.
     private let panelIdleLevel: NSWindow.Level = .screenSaver
+    /// Escape hatch (cursor_topmost / COMPUTER_USE_MCP_CURSOR_TOPMOST=1): keep
+    /// the cursor unconditionally above every window, the pre-target-ordering
+    /// behavior. Flip this if the target-relative ordering ever hides the glyph.
+    private let topmostMode = Config.bool("cursor_topmost") == true
 
     func start() {
         guard let primary = NSScreen.screens.first else { exit(0) }
@@ -387,12 +391,19 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
 
     // MARK: target window z-order
 
-    /// Order the cursor panel directly above the target window in the global
-    /// z-stack, so anything occluding the target also occludes the cursor — the
-    /// glyph can only appear where the target app is actually visible. Panels on
-    /// other displays (the target lives on exactly one, "Displays have separate
-    /// Spaces") stay at the idle level. A nil/closed/unknown target restores the
-    /// idle level everywhere: the cursor floats above all windows, as before.
+    /// Order the cursor panel directly above the target window so anything
+    /// occluding the target also occludes the cursor — but ONLY in the trust
+    /// case that motivates it: a *different* app is frontmost AND its front
+    /// window is on the *same display* as the target, so the cursor could
+    /// otherwise appear to float over the app that is covering the target.
+    ///
+    /// In every other case — topmost escape hatch, the target itself frontmost,
+    /// or the focused app on another display / a fullscreen Space elsewhere —
+    /// the cursor stays at the idle level above all windows. Dropping a panel to
+    /// `.normal` loses to fullscreen and cross-Space compositing, which made the
+    /// glyph vanish while the target was plainly visible (the #18 regression);
+    /// "prefer visible" is the safe default, and clipping is opt-in to the one
+    /// scenario that needs it (proven by the occlusion self-test).
     private func applyTargetWindow(_ id: CGWindowID?) {
         guard let id, let info = windowInfo(for: id) else {
             resetTargetWindow()
@@ -401,10 +412,17 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         let sameTarget = id == currentTarget
         currentTarget = id
 
-        // Only the cursor panels move; the chip panels stay pinned on top.
         let center = appKitPoint(fromGlobalTopLeft: CGPoint(x: info.bounds.midX, y: info.bounds.midY))
+        let targetFrame = NSScreen.screens.first { $0.frame.contains(center) }?.frame
+        let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let isBackground = info.ownerPID != 0 && frontPID != nil && frontPID != info.ownerPID
+        let shouldClip =
+            !topmostMode && isBackground && targetFrame != nil
+            && frontmostAppScreenFrame(pid: frontPID) == targetFrame
+
+        // Only the cursor panels move; the chip panels stay pinned on top.
         for panel in cursorPanels {
-            if panel.frame.contains(center) {
+            if shouldClip && panel.frame.contains(center) {
                 panel.level = .normal
                 // Cross-process ordering: `relativeTo` takes the other window's
                 // CGWindowID even when it belongs to a different app.
@@ -415,13 +433,32 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
             }
         }
 
-        let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let isBackground = info.ownerPID != 0 && frontPID != nil && frontPID != info.ownerPID
         let newBackgroundTarget = isBackground ? info.ownerName : nil
         if newBackgroundTarget != backgroundTarget || !sameTarget {
             backgroundTarget = newBackgroundTarget
             refreshChipText()
         }
+    }
+
+    /// Frame of the display showing the frontmost app's front window, or nil if
+    /// it has no on-screen window — used to decide whether that app can actually
+    /// be occluding the target (same display) or is off on another one.
+    private func frontmostAppScreenFrame(pid: pid_t?) -> CGRect? {
+        guard let pid,
+            let list = CGWindowListCopyWindowInfo(
+                [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+        else { return nil }
+        for window in list {  // front-to-back
+            guard (window[kCGWindowOwnerPID as String] as? pid_t) == pid,
+                (window[kCGWindowLayer as String] as? Int) == 0,
+                let boundsDict = window[kCGWindowBounds as String]
+            else { continue }
+            var bounds = CGRect.zero
+            guard CGRectMakeWithDictionaryRepresentation(boundsDict as! CFDictionary, &bounds) else { return nil }
+            let center = appKitPoint(fromGlobalTopLeft: CGPoint(x: bounds.midX, y: bounds.midY))
+            return NSScreen.screens.first { $0.frame.contains(center) }?.frame
+        }
+        return nil
     }
 
     /// Return every cursor panel to the idle level above all windows and drop
