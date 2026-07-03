@@ -1,17 +1,10 @@
 # DRAFT — groundwork for a future Homebrew tap. NOT published or tapped yet.
 #
-# This formula is a placeholder committed as scaffolding. It cannot be installed
-# until the first GitHub release ships a stable source tarball and the `url`,
-# `sha256`, and `version` below are filled in for that release. Presented in the
-# README as "coming".
-#
-# When the first release is cut:
-#   1. Point `url` at the release tarball
-#      (https://github.com/minghinmatthewlam/computer-use-mcp/archive/refs/tags/vX.Y.Z.tar.gz).
-#   2. Set `sha256` to `shasum -a 256` of that tarball.
-#   3. Bump `version` to match the tag.
-#   4. Move this file into a homebrew-tap repo (e.g. minghinmatthewlam/homebrew-tap)
-#      so users can `brew install minghinmatthewlam/tap/computer-use-mcp`.
+# Filled in for the v0.4.0 release tarball (url/sha256/version below). The one
+# remaining step to make it installable: copy this file into a homebrew-tap repo
+# (e.g. minghinmatthewlam/homebrew-tap) so users can
+# `brew install minghinmatthewlam/tap/computer-use-mcp`. On each new release,
+# update url/version and set `sha256` to `shasum -a 256` of the new tarball.
 #
 # Note on permissions: Homebrew installs an ad-hoc-signed build from source, which
 # is fine for local use but means macOS attributes Accessibility / Screen Recording
@@ -24,10 +17,9 @@ class ComputerUseMcp < Formula
   homepage "https://github.com/minghinmatthewlam/computer-use-mcp"
   license "MIT"
 
-  # TODO(release): replace with the real release tarball + checksum + version.
-  version "0.3.0"
-  url "https://github.com/minghinmatthewlam/computer-use-mcp/archive/refs/tags/v0.3.0.tar.gz"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  version "0.4.0"
+  url "https://github.com/minghinmatthewlam/computer-use-mcp/archive/refs/tags/v0.4.0.tar.gz"
+  sha256 "207ddbec27b62adcf26e0e81ecca4f078ae2f07bcce54724a9f4817479b6af2b"
 
   depends_on :macos
   depends_on macos: :sonoma # macOS 14+
