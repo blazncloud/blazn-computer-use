@@ -223,10 +223,10 @@ private func postSkyLightSpecs(_ specs: [SkyLightEventSpec], pid: pid_t, posting
     for spec in specs {
         guard let event = makeCGEvent(from: spec) else { return false }
         for field in spec.integerFields {
-            _ = posting.setIntegerField(event, field: field.field, value: field.value)
+            guard posting.setIntegerField(event, field: field.field, value: field.value) else { return false }
         }
         if let point = spec.windowLocation {
-            _ = posting.setWindowLocation(event, point)
+            guard posting.setWindowLocation(event, point) else { return false }
         }
         guard posting.post(event, to: pid, attachAuthMessage: spec.attachAuthMessage) else {
             return false
@@ -290,9 +290,11 @@ private extension MouseButtonKind {
     }
 }
 
-// The symbol table is immutable after init. The stored values are C function
-// pointers loaded by dlsym; Swift cannot prove those pointer types are Sendable,
-// but sharing this singleton only shares resolved addresses, not mutable state.
+// The symbol table is immutable after init. The stored values are raw C function
+// pointers resolved with dlsym/unsafeBitCast and the dlopen handle is never
+// mutated or closed after initialization. Swift cannot prove these function
+// pointer values are Sendable, so the singleton is @unchecked Sendable; sharing
+// it across tasks only shares resolved code addresses, not mutable Swift state.
 private final class SkyLightSymbols: @unchecked Sendable {
     static let shared = SkyLightSymbols()
 
@@ -302,6 +304,7 @@ private final class SkyLightSymbols: @unchecked Sendable {
     typealias SetIntegerFieldFn = @convention(c) (UnsafeMutableRawPointer, UInt32, Int64) -> Void
     typealias ObjCGetClassFn = @convention(c) (UnsafePointer<CChar>) -> UnsafeMutableRawPointer?
     typealias SelRegisterNameFn = @convention(c) (UnsafePointer<CChar>) -> UnsafeMutableRawPointer?
+    typealias ObjectGetClassFn = @convention(c) (UnsafeMutableRawPointer) -> UnsafeMutableRawPointer?
     typealias ClassRespondsToSelectorFn = @convention(c) (UnsafeMutableRawPointer, UnsafeMutableRawPointer) -> Bool
     typealias FactoryMsgSendFn =
         @convention(c) (UnsafeMutableRawPointer, UnsafeMutableRawPointer, UnsafeMutableRawPointer, Int32, UInt32) -> UnsafeMutableRawPointer?
@@ -312,6 +315,7 @@ private final class SkyLightSymbols: @unchecked Sendable {
     private let setIntegerFieldFn: SetIntegerFieldFn?
     private let objcGetClass: ObjCGetClassFn?
     private let selRegisterName: SelRegisterNameFn?
+    private let objectGetClass: ObjectGetClassFn?
     private let classRespondsToSelector: ClassRespondsToSelectorFn?
     private let factoryMsgSend: FactoryMsgSendFn?
 
@@ -336,14 +340,15 @@ private final class SkyLightSymbols: @unchecked Sendable {
 
         objcGetClass = Self.load("objc_getClass", handle: Self.rtldDefaultHandle)
         selRegisterName = Self.load("sel_registerName", handle: Self.rtldDefaultHandle)
+        objectGetClass = Self.load("object_getClass", handle: Self.rtldDefaultHandle)
         classRespondsToSelector = Self.load("class_respondsToSelector", handle: Self.rtldDefaultHandle)
         factoryMsgSend = Self.load("objc_msgSend", handle: Self.rtldDefaultHandle)
     }
 
     func post(_ event: CGEvent, to pid: pid_t, attachAuthMessage: Bool) -> Bool {
         guard let postToPid, let eventPtr = eventPointer(event) else { return false }
-        if attachAuthMessage {
-            attachAuthenticationMessage(to: event, eventPtr: eventPtr, pid: pid)
+        if attachAuthMessage, !attachAuthenticationMessage(to: event, eventPtr: eventPtr, pid: pid) {
+            return false
         }
         postToPid(pid, eventPtr)
         return true
@@ -361,22 +366,25 @@ private final class SkyLightSymbols: @unchecked Sendable {
         return true
     }
 
-    private func attachAuthenticationMessage(to event: CGEvent, eventPtr: UnsafeMutableRawPointer, pid: pid_t) {
+    private func attachAuthenticationMessage(to event: CGEvent, eventPtr: UnsafeMutableRawPointer, pid: pid_t) -> Bool {
         guard
             let objcGetClass,
             let selRegisterName,
+            let objectGetClass,
             let classRespondsToSelector,
             let factoryMsgSend,
             let setAuthMessage,
             let cls = withCString("SLSEventAuthenticationMessage", objcGetClass),
+            let metaclass = objectGetClass(cls),
             let sel = withCString("messageWithEventRecord:pid:version:", selRegisterName),
-            classRespondsToSelector(cls, sel),
+            classRespondsToSelector(metaclass, sel),
             let record = extractEventRecord(event),
             let message = factoryMsgSend(cls, sel, record, Int32(pid), 0)
         else {
-            return
+            return false
         }
         setAuthMessage(eventPtr, message)
+        return true
     }
 
     private func extractEventRecord(_ event: CGEvent) -> UnsafeMutableRawPointer? {

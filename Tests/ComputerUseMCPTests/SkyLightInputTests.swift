@@ -95,6 +95,49 @@ import Testing
         #expect(key.allSatisfy { $0.flags == .maskCommand })
     }
 
+    @Test func mousePostingFailsWhenRequiredIntegerFieldFails() {
+        let posting = RecordingSkyLightPosting(integerFieldResult: false)
+        let context = DeliveryContext(
+            pid: 123,
+            windowNumber: nil,
+            windowFrame: nil,
+            allowGlobalCursor: false)
+
+        #expect(!postSkyLightMouseClick(
+            point: CGPoint(x: 25, y: 30),
+            button: .left,
+            clickCount: 1,
+            context: context,
+            posting: posting))
+        #expect(posting.integerFields == [1])
+        #expect(posting.postAttachAuthMessages.isEmpty)
+    }
+
+    @Test func mousePostingFailsWhenRequiredWindowLocationFails() {
+        let posting = RecordingSkyLightPosting(windowLocationResult: false)
+        let context = DeliveryContext(
+            pid: 123,
+            windowNumber: nil,
+            windowFrame: CGRect(x: 10, y: 10, width: 100, height: 50),
+            allowGlobalCursor: false)
+
+        #expect(!postSkyLightMouseClick(
+            point: CGPoint(x: 25, y: 30),
+            button: .left,
+            clickCount: 1,
+            context: context,
+            posting: posting))
+        #expect(posting.windowLocations == [CGPoint(x: 15, y: 30)])
+        #expect(posting.postAttachAuthMessages.isEmpty)
+    }
+
+    @Test func keyboardPostingRequiresAuthenticatedPostSuccess() {
+        let posting = RecordingSkyLightPosting(postResult: false)
+
+        #expect(!postSkyLightUnicodeKeyboard([65], pid: 123, posting: posting))
+        #expect(posting.postAttachAuthMessages == [true])
+    }
+
     private func fieldsByNumber(_ fields: [SkyLightIntegerField]) -> [Int: Int64] {
         Dictionary(uniqueKeysWithValues: fields.map { ($0.field, $0.value) })
     }
@@ -128,5 +171,37 @@ private final class ProbeSkyLightPosting: SkyLightEventPosting {
     func setIntegerField(_ event: CGEvent, field: Int, value: Int64) -> Bool {
         Issue.record("setIntegerField should not be called by these tests")
         return false
+    }
+}
+
+private final class RecordingSkyLightPosting: SkyLightEventPosting {
+    let enabled = true
+    let available = true
+    let postResult: Bool
+    let integerFieldResult: Bool
+    let windowLocationResult: Bool
+    var integerFields: [Int] = []
+    var windowLocations: [CGPoint] = []
+    var postAttachAuthMessages: [Bool] = []
+
+    init(postResult: Bool = true, integerFieldResult: Bool = true, windowLocationResult: Bool = true) {
+        self.postResult = postResult
+        self.integerFieldResult = integerFieldResult
+        self.windowLocationResult = windowLocationResult
+    }
+
+    func post(_ event: CGEvent, to pid: pid_t, attachAuthMessage: Bool) -> Bool {
+        postAttachAuthMessages.append(attachAuthMessage)
+        return postResult
+    }
+
+    func setWindowLocation(_ event: CGEvent, _ point: CGPoint) -> Bool {
+        windowLocations.append(point)
+        return windowLocationResult
+    }
+
+    func setIntegerField(_ event: CGEvent, field: Int, value: Int64) -> Bool {
+        integerFields.append(field)
+        return integerFieldResult
     }
 }
