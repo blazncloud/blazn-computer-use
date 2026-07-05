@@ -178,6 +178,7 @@ private func syntheticReplay(
         #expect(replayExpectationTimedOut(timeout) == true)
         #expect(replayExpectationTimedOut(met) == false)
     }
+
     @Test func outcomeGateLetsExpectationsProveDelayedObservableEffects() {
         let delayed = ReplayStepOutcome(
             classification: .effectNotVerified,
@@ -198,10 +199,9 @@ private func syntheticReplay(
             rawValue: .object([:])
         )
 
-        #expect(replayOutcomeFailsBeforeExpectation(delayed, hasExpectation: true) == false)
-        #expect(replayOutcomeFailsBeforeExpectation(delayed, hasExpectation: false) == true)
-        #expect(replayOutcomeFailsBeforeExpectation(unsupported, hasExpectation: true) == true)
-        #expect(replayOutcomeFailsBeforeExpectation(success, hasExpectation: false) == false)
+        #expect(replayOutcomeFailsBeforeExpectation(delayed, canExpectationProve: true) == false)
+        #expect(replayOutcomeFailsBeforeExpectation(delayed, canExpectationProve: false) == true)
+        #expect(replayOutcomeFailsBeforeExpectation(unsupported, canExpectationProve: true) == true)
+        #expect(replayOutcomeFailsBeforeExpectation(success, canExpectationProve: false) == false)
     }
-
 }

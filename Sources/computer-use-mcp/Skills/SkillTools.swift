@@ -241,6 +241,17 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
             }
         }
 
+        let expectationArguments = step.expect.map {
+            replayWaitArguments(for: $0, app: skill.app, params: provided)
+        }
+        var expectationWasUnmetBeforeStep = false
+        if var expectationArguments {
+            expectationArguments["timeout_seconds"] = .double(1)
+            let beforeExpectation = await dispatchTool(name: "wait_for", arguments: expectationArguments)
+            expectationWasUnmetBeforeStep = beforeExpectation.isError != true
+                && replayExpectationTimedOut(beforeExpectation)
+        }
+
         let result = await dispatchTool(name: step.tool, arguments: arguments)
         if result.isError == true {
             return failure(
@@ -263,7 +274,10 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
         let outcome = replayStepOutcome(from: result)
         let needsExpectationProof = outcome.map { $0.classification != .success } ?? false
-        if let outcome, replayOutcomeFailsBeforeExpectation(outcome, hasExpectation: step.expect != nil) {
+        let canExpectationProveOutcome = needsExpectationProof
+            && expectationArguments != nil
+            && expectationWasUnmetBeforeStep
+        if let outcome, replayOutcomeFailsBeforeExpectation(outcome, canExpectationProve: canExpectationProveOutcome) {
             return failure(
                 step: index + 1,
                 tool: step.tool,
@@ -278,17 +292,7 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         lastResult = result
         var replaySuccessResult = result
 
-        if let expect = step.expect {
-            var waitArguments: [String: Value] = ["app": .string(skill.app)]
-            if let role = expect.role { waitArguments["role"] = .string(role) }
-            if let label = expect.label {
-                waitArguments["label"] = .string(substituteParams(in: label, params: provided))
-            }
-            if let value = expect.valueContains {
-                waitArguments["value_contains"] = .string(substituteParams(in: value, params: provided))
-            }
-            if expect.gone == true { waitArguments["gone"] = .bool(true) }
-            if let timeout = expect.timeoutSeconds { waitArguments["timeout_seconds"] = .double(timeout) }
+        if let waitArguments = expectationArguments {
             let waitResult = await dispatchTool(name: "wait_for", arguments: waitArguments)
             if waitResult.isError == true || replayExpectationTimedOut(waitResult) {
                 return failure(
@@ -299,7 +303,7 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
                 )
             }
             lastResult = waitResult
-            if needsExpectationProof {
+            if canExpectationProveOutcome {
                 replaySuccessResult = waitResult
             }
         }
@@ -345,8 +349,26 @@ func replayExpectationTimedOut(_ result: CallTool.Result) -> Bool {
     batchResultText(result).hasPrefix("TIMED OUT after ")
 }
 
-func replayOutcomeFailsBeforeExpectation(_ outcome: ReplayStepOutcome, hasExpectation: Bool) -> Bool {
-    outcome.classification == .unsupported || (outcome.classification != .success && !hasExpectation)
+func replayOutcomeFailsBeforeExpectation(_ outcome: ReplayStepOutcome, canExpectationProve: Bool) -> Bool {
+    outcome.classification == .unsupported || (outcome.classification != .success && !canExpectationProve)
+}
+
+func replayWaitArguments(
+    for expectation: SkillExpectation,
+    app: String,
+    params: [String: String]
+) -> [String: Value] {
+    var arguments: [String: Value] = ["app": .string(app)]
+    if let role = expectation.role { arguments["role"] = .string(role) }
+    if let label = expectation.label {
+        arguments["label"] = .string(substituteParams(in: label, params: params))
+    }
+    if let value = expectation.valueContains {
+        arguments["value_contains"] = .string(substituteParams(in: value, params: params))
+    }
+    if expectation.gone == true { arguments["gone"] = .bool(true) }
+    if let timeout = expectation.timeoutSeconds { arguments["timeout_seconds"] = .double(timeout) }
+    return arguments
 }
 
 /// Capture a fresh snapshot for locator resolution (mirrors find's capture:
