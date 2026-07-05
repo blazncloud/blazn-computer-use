@@ -513,16 +513,17 @@ extension ActionVerifier {
     ) -> ActionOutcome? {
         guard v.targetInWebArea == true else { return nil }
         guard deliveryTier == InputTier.accessibilityAttribute.rawValue else { return nil }
+        guard v.independentElementChanged != true else { return nil }
         var record = v
         record.notes.append(
-            "AX attribute delivery inside web content can echo local accessibility state without proving renderer/DOM observation."
+            "The only confirming signal was AX-observed local state or tree change; no independent web-content diff corroborated it."
         )
         return ActionOutcome(
             classification: .effectNotVerified,
             failureDomain: .web,
             summary:
-                "The target is inside web content. Accessibility reported a change, but AX attribute delivery "
-                + "does not prove that the renderer or DOM observed it.",
+                "The target is inside web content. Accessibility reported a change, but no independent "
+                + "web-content change confirmed that the renderer or DOM observed it.",
             verification: record,
             webAXEchoRisk: true)
     }

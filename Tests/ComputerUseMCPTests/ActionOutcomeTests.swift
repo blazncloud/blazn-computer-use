@@ -194,7 +194,7 @@ import Testing
         #expect(outcome.webAXEchoRisk)
     }
 
-    @Test func webAXEchoIndependentDiffStillDowngradesAttributeDelivery() {
+    @Test func webAXEchoTextMatchingIndependentDiffEarnsSuccess() {
         var v = ActionVerification()
         v.beforeValuePreview = ""
         v.afterValuePreview = "hello"
@@ -202,6 +202,21 @@ import Testing
         v.renderedTextChanged = true
         v.targetInWebArea = true
         v.independentElementChanged = true
+        let outcome = ActionVerifier.reduce(
+            family: .type, intent: .insertText("hello"), verification: v,
+            rereadFailed: false, dispatchSucceeded: true, deliveryTier: attrTier, hasTargetElement: true)
+        #expect(outcome.classification == .success)
+        #expect(!outcome.webAXEchoRisk)
+    }
+
+    @Test func webAXEchoNonMatchingIndependentChurnIsDowngraded() {
+        var v = ActionVerification()
+        v.beforeValuePreview = ""
+        v.afterValuePreview = "hello"
+        v.targetStateChanged = true
+        v.renderedTextChanged = true
+        v.targetInWebArea = true
+        v.independentElementChanged = false
         let outcome = ActionVerifier.reduce(
             family: .type, intent: .insertText("hello"), verification: v,
             rereadFailed: false, dispatchSucceeded: true, deliveryTier: attrTier, hasTargetElement: true)
