@@ -21,9 +21,7 @@ func runServe() async {
 
     await server.withMethodHandler(ListTools.self) { _ in
         .init(
-            tools: toolCatalog.map {
-                Tool(name: $0.name, description: $0.description, inputSchema: $0.inputSchema)
-            }
+            tools: toolCatalog.map(\.tool)
         )
     }
 

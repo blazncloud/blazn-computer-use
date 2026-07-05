@@ -54,6 +54,69 @@ private let includeStateParam = boolParam(
         + "The fastest mode for chained actions; call get_app_state when you need state again."
 )
 
+private let readOnlyLocalAnnotations = Tool.Annotations(
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false
+)
+
+private let readOnlyAppAnnotations = Tool.Annotations(
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true
+)
+
+private let nondestructiveAppActionAnnotations = Tool.Annotations(
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true
+)
+
+private let destructiveAppActionAnnotations = Tool.Annotations(
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+    openWorldHint: true
+)
+
+private let openAppAnnotations = Tool.Annotations(
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true
+)
+
+private let openURLAnnotations = Tool.Annotations(
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true
+)
+
+private let writeClipboardAnnotations = Tool.Annotations(
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false
+)
+
+private let skillWriteAnnotations = Tool.Annotations(
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+    openWorldHint: false
+)
+
+private let recorderAnnotations = Tool.Annotations(
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true
+)
+
 let toolCatalog: [ToolSpec] = [
     ToolSpec(
         name: "list_apps",
@@ -63,6 +126,7 @@ let toolCatalog: [ToolSpec] = [
             opened first. Call this first when the target app is unknown or ambiguous.
             """,
         inputSchema: objectSchema([:]),
+        annotations: readOnlyAppAnnotations,
         handler: { args in try await listApps(args) }
     ),
     ToolSpec(
@@ -105,6 +169,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["app"]
         ),
+        annotations: readOnlyAppAnnotations,
         handler: { args in try await getAppState(args) }
     ),
     ToolSpec(
@@ -128,6 +193,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["app", "query"]
         ),
+        annotations: readOnlyAppAnnotations,
         handler: { args in try await find(args) }
     ),
     ToolSpec(
@@ -155,6 +221,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["app"]
         ),
+        annotations: destructiveAppActionAnnotations,
         handler: { args in try await click(args) }
     ),
     ToolSpec(
@@ -175,6 +242,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["app", "text"]
         ),
+        annotations: destructiveAppActionAnnotations,
         handler: { args in try await typeText(args) }
     ),
     ToolSpec(
@@ -197,6 +265,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["app", "key"]
         ),
+        annotations: destructiveAppActionAnnotations,
         handler: { args in try await pressKey(args) }
     ),
     ToolSpec(
@@ -231,6 +300,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["app"]
         ),
+        annotations: nondestructiveAppActionAnnotations,
         handler: { args in try await scroll(args) }
     ),
     ToolSpec(
@@ -253,6 +323,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["app", "from_x", "from_y", "to_x", "to_y"]
         ),
+        annotations: destructiveAppActionAnnotations,
         handler: { args in try await drag(args) }
     ),
     ToolSpec(
@@ -276,6 +347,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["app", "element_id", "value"]
         ),
+        annotations: destructiveAppActionAnnotations,
         handler: { args in try await setValue(args) }
     ),
     ToolSpec(
@@ -300,6 +372,12 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["app", "element_id", "text"]
         ),
+        annotations: Tool.Annotations(
+            readOnlyHint: false,
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: true
+        ),
         handler: { args in try await selectText(args) }
     ),
     ToolSpec(
@@ -322,6 +400,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["app", "element_id"]
         ),
+        annotations: destructiveAppActionAnnotations,
         handler: { args in try await performSecondaryAction(args) }
     ),
     ToolSpec(
@@ -341,6 +420,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["app"]
         ),
+        annotations: openAppAnnotations,
         handler: { args in try await openApp(args) }
     ),
     ToolSpec(
@@ -359,6 +439,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["url"]
         ),
+        annotations: openURLAnnotations,
         handler: { args in try await openURL(args) }
     ),
     ToolSpec(
@@ -370,6 +451,7 @@ let toolCatalog: [ToolSpec] = [
             wrong window.
             """,
         inputSchema: objectSchema(["app": appParam], required: ["app"]),
+        annotations: readOnlyAppAnnotations,
         handler: { args in try await listWindows(args) }
     ),
     ToolSpec(
@@ -412,6 +494,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["app", "action"]
         ),
+        annotations: destructiveAppActionAnnotations,
         handler: { args in try await manageWindow(args) }
     ),
     ToolSpec(
@@ -431,13 +514,32 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["app", "path"]
         ),
+        annotations: destructiveAppActionAnnotations,
         handler: { args in try await clickMenuItem(args) }
     ),
     ToolSpec(
         name: "read_clipboard",
         description: "Read the current text content of the system clipboard.",
         inputSchema: objectSchema([:]),
+        annotations: readOnlyLocalAnnotations,
         handler: { args in try await readClipboard(args) }
+    ),
+    ToolSpec(
+        name: "health_report",
+        description: """
+            Report this MCP server's runtime health: process identity, TCC permissions, \
+            capture-service status, daemon files, and recent daemon telemetry. This is \
+            read-only; degraded permissions or capture health are reported in structured \
+            content and outcome metadata, not as a tool error.
+            """,
+        inputSchema: objectSchema([
+            "probe_capture_service": boolParam(
+                "Default false. Set true for a stronger local ScreenCaptureKit responsiveness "
+                    + "probe; it enumerates shareable content but does not capture pixels."
+            )
+        ]),
+        annotations: readOnlyLocalAnnotations,
+        handler: { args in try await healthReport(args) }
     ),
     ToolSpec(
         name: "write_clipboard",
@@ -454,6 +556,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["text"]
         ),
+        annotations: writeClipboardAnnotations,
         handler: { args in try await writeClipboard(args) }
     ),
     ToolSpec(
@@ -475,6 +578,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["app"]
         ),
+        annotations: readOnlyAppAnnotations,
         handler: { args in try await waitFor(args) }
     ),
     ToolSpec(
@@ -502,6 +606,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["app", "element_id"]
         ),
+        annotations: readOnlyAppAnnotations,
         handler: { args in try await readText(args) }
     ),
     ToolSpec(
@@ -532,6 +637,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["app", "actions"]
         ),
+        annotations: destructiveAppActionAnnotations,
         handler: { args in try await batch(args) }
     ),
     ToolSpec(
@@ -575,6 +681,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["name", "description", "app", "steps"]
         ),
+        annotations: skillWriteAnnotations,
         handler: { args in try await saveSkill(args) }
     ),
     ToolSpec(
@@ -603,6 +710,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["name"]
         ),
+        annotations: destructiveAppActionAnnotations,
         handler: { args in try await runSkill(args) }
     ),
     ToolSpec(
@@ -616,12 +724,14 @@ let toolCatalog: [ToolSpec] = [
             ["name": stringParam("Name of the saved skill (see list_skills).")],
             required: ["name"]
         ),
+        annotations: readOnlyLocalAnnotations,
         handler: { args in try await getSkill(args) }
     ),
     ToolSpec(
         name: "list_skills",
         description: "List saved skills with their target app, step count, description, and params.",
         inputSchema: objectSchema([:]),
+        annotations: readOnlyLocalAnnotations,
         handler: { args in try await listSkills(args) }
     ),
     ToolSpec(
@@ -634,6 +744,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["name"]
         ),
+        annotations: skillWriteAnnotations,
         handler: { args in try await deleteSkill(args) }
     ),
     ToolSpec(
@@ -651,6 +762,7 @@ let toolCatalog: [ToolSpec] = [
             ["app": appParam],
             required: ["app"]
         ),
+        annotations: recorderAnnotations,
         handler: { args in try await recordSkillStart(args) }
     ),
     ToolSpec(
@@ -662,6 +774,7 @@ let toolCatalog: [ToolSpec] = [
             save_skill.
             """,
         inputSchema: objectSchema([:]),
+        annotations: recorderAnnotations,
         handler: { args in try await recordSkillStop(args) }
     ),
 ]

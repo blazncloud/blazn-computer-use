@@ -1,8 +1,76 @@
+import MCP
 import Testing
 
 @testable import computer_use_mcp
 
+private func healthToolSpec(_ name: String) throws -> ToolSpec {
+    guard let spec = toolCatalog.first(where: { $0.name == name }) else {
+        throw ToolError.failed("Missing tool spec \(name).")
+    }
+    return spec
+}
+
 @Suite struct HealthReportTests {
+    @Test func healthReportToolIsRegisteredReadOnly() throws {
+        let spec = try healthToolSpec("health_report")
+        #expect(spec.annotations.readOnlyHint == true)
+        #expect(spec.annotations.destructiveHint == false)
+        #expect(spec.annotations.idempotentHint == true)
+        #expect(spec.annotations.openWorldHint == false)
+    }
+
+    @Test func healthReportToolReturnsStructuredContentAndSuccessOutcomeWhenDegraded() async throws {
+        let result = try await healthReportImpl([:]) { probe in
+            #expect(probe == false)
+            return Self.mockReport(
+                accessibility: false,
+                screenRecording: true,
+                captureServiceStatus: .skipped
+            )
+        }
+
+        #expect(result.isError == false)
+        guard case let .object(report)? = result.structuredContent else {
+            Issue.record("expected structured health report")
+            return
+        }
+        #expect(report["version"]?.stringValue == "test")
+        guard case let .object(permissions)? = report["permissions"],
+            case let .object(accessibility)? = permissions["accessibility"]
+        else {
+            Issue.record("expected permissions.accessibility object")
+            return
+        }
+        #expect(accessibility["granted"]?.boolValue == false)
+
+        guard case let .object(outcome)? = result._meta?["computer-use-mcp/outcome"] else {
+            Issue.record("expected outcome metadata")
+            return
+        }
+        #expect(outcome["classification"]?.stringValue == "success")
+        #expect(outcome["failure_domain"] == nil)
+    }
+
+    @Test func healthReportToolPassesCaptureProbeArgumentToFactory() async throws {
+        let result = try await healthReportImpl(["probe_capture_service": .bool(true)]) { probe in
+            #expect(probe == true)
+            return Self.mockReport(
+                accessibility: true,
+                screenRecording: true,
+                captureServiceStatus: .responsive
+            )
+        }
+
+        #expect(result.isError == false)
+        guard case let .object(report)? = result.structuredContent,
+            case let .object(captureService)? = report["captureService"]
+        else {
+            Issue.record("expected captureService object")
+            return
+        }
+        #expect(captureService["status"]?.stringValue == "responsive")
+    }
+
     @Test func recommendationStartsWithAccessibility() {
         let action = recommendedNextAction(
             accessibility: false,
@@ -51,5 +119,62 @@ import Testing
         )
 
         #expect(action.contains("--probe-capture"))
+    }
+
+    private static func mockReport(
+        accessibility: Bool,
+        screenRecording: Bool,
+        captureServiceStatus: CaptureServiceStatus
+    ) -> HealthReport {
+        let captureService = CaptureServiceDiagnostic(status: captureServiceStatus, detail: "mock")
+        return HealthReport(
+            reportVersion: 1,
+            version: "test",
+            executablePath: "/tmp/computer-use-mcp",
+            bundleIdentifier: nil,
+            process: ProcessDiagnostics(
+                current: ProcessIdentity(
+                    pid: 123,
+                    name: "computer-use-mcp",
+                    bundleIdentifier: nil,
+                    bundlePath: nil,
+                    executablePath: "/tmp/computer-use-mcp"
+                ),
+                parent: nil
+            ),
+            permissions: PermissionDiagnostics(
+                accessibility: PermissionStatus(
+                    granted: accessibility,
+                    status: accessibility ? "granted" : "not_granted",
+                    requiredFor: "mock accessibility"
+                ),
+                screenRecording: PermissionStatus(
+                    granted: screenRecording,
+                    status: screenRecording ? "granted" : "not_granted",
+                    requiredFor: "mock screen recording"
+                )
+            ),
+            captureService: captureService,
+            daemon: DaemonDiagnostics(
+                runtimeDirectory: "/tmp/computer-use-mcp",
+                runtimeDirectoryExists: false,
+                socketPath: "/tmp/computer-use-mcp/socket",
+                socketExists: false,
+                lockPath: "/tmp/computer-use-mcp/lock",
+                lockExists: false,
+                logPath: "/tmp/computer-use-mcp/log",
+                logExists: false,
+                secretPath: "/tmp/computer-use-mcp/secret",
+                secretExists: false,
+                secretContentsReported: false
+            ),
+            telemetry: nil,
+            tccAttribution: "mock attribution",
+            recommendedNextAction: recommendedNextAction(
+                accessibility: accessibility,
+                screenRecording: screenRecording,
+                captureServiceStatus: captureService.status
+            )
+        )
     }
 }

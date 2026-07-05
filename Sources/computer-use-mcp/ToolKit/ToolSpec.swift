@@ -7,7 +7,14 @@ struct ToolSpec: Sendable {
     let name: String
     let description: String
     let inputSchema: Value
+    let annotations: Tool.Annotations
     let handler: @Sendable ([String: Value]) async throws -> CallTool.Result
+}
+
+extension ToolSpec {
+    var tool: Tool {
+        Tool(name: name, description: description, inputSchema: inputSchema, annotations: annotations)
+    }
 }
 
 /// Tools with side effects on apps, windows, the system clipboard, launched

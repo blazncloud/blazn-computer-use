@@ -83,6 +83,10 @@ func readText(_ args: [String: Value]) async throws -> CallTool.Result {
     try await readTextImpl(args)
 }
 
+func healthReport(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await healthReportImpl(args)
+}
+
 func batch(_ args: [String: Value]) async throws -> CallTool.Result {
     try await batchImpl(args)
 }

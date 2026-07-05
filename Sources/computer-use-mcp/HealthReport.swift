@@ -141,7 +141,7 @@ private func tccAttributionNote(parent: ProcessIdentity?) -> String {
     return "macOS may attribute CLI TCC grants to \(parentName) or another responsible host app; a signed app bundle gives production installs a stable identity."
 }
 
-struct HealthReport: Codable {
+struct HealthReport: Codable, Sendable {
     let reportVersion: Int
     let version: String
     let executablePath: String
@@ -163,7 +163,7 @@ struct HealthReport: Codable {
     }
 }
 
-struct ProcessDiagnostics: Codable {
+struct ProcessDiagnostics: Codable, Sendable {
     let current: ProcessIdentity
     let parent: ProcessIdentity?
 
@@ -183,7 +183,7 @@ struct ProcessDiagnostics: Codable {
     }
 }
 
-struct ProcessIdentity: Codable {
+struct ProcessIdentity: Codable, Sendable {
     let pid: Int32
     let name: String?
     let bundleIdentifier: String?
@@ -233,12 +233,12 @@ private func processExecutablePath(pid: Int32) -> String? {
     return String(decoding: bytes, as: UTF8.self)
 }
 
-struct PermissionDiagnostics: Codable {
+struct PermissionDiagnostics: Codable, Sendable {
     let accessibility: PermissionStatus
     let screenRecording: PermissionStatus
 }
 
-struct PermissionStatus: Codable {
+struct PermissionStatus: Codable, Sendable {
     let granted: Bool
     let status: String
     let requiredFor: String
@@ -248,13 +248,13 @@ struct PermissionStatus: Codable {
     }
 }
 
-enum CaptureServiceStatus: String, Codable {
+enum CaptureServiceStatus: String, Codable, Sendable {
     case responsive
     case notResponding = "not_responding"
     case skipped
 }
 
-struct CaptureServiceDiagnostic: Codable {
+struct CaptureServiceDiagnostic: Codable, Sendable {
     let status: CaptureServiceStatus
     let detail: String
 
@@ -280,7 +280,7 @@ private func telemetryDiagnostics(now: Date = Date()) -> TelemetryReport? {
     return TelemetryReport(snapshot: snapshot, path: path, now: now)
 }
 
-struct TelemetryReport: Codable {
+struct TelemetryReport: Codable, Sendable {
     let snapshotPath: String
     let snapshotAgeSeconds: Double
     let snapshotAgeNote: String
@@ -322,7 +322,7 @@ struct TelemetryReport: Codable {
     }
 }
 
-struct TelemetryToolReport: Codable {
+struct TelemetryToolReport: Codable, Sendable {
     let calls: Int
     let errors: Int
     let meanMs: Double
@@ -340,7 +340,7 @@ struct TelemetryToolReport: Codable {
     }
 }
 
-struct DaemonDiagnostics: Codable {
+struct DaemonDiagnostics: Codable, Sendable {
     let runtimeDirectory: String
     let runtimeDirectoryExists: Bool
     let socketPath: String

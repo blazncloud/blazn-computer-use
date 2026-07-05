@@ -43,6 +43,49 @@ private func requiredProperties(for toolName: String) throws -> [String] {
 }
 
 @Suite struct SchemaTests {
+    @Test func everyRegisteredToolHasAnnotations() {
+        #expect(!toolCatalog.isEmpty)
+        for spec in toolCatalog {
+            #expect(!spec.annotations.isEmpty, "\(spec.name) is missing MCP tool annotations")
+            #expect(spec.tool.annotations == spec.annotations)
+        }
+    }
+
+    @Test func toolAnnotationsCoverInterestingClassifications() throws {
+        let getAppState = try toolSpec("get_app_state").annotations
+        #expect(getAppState.readOnlyHint == true)
+        #expect(getAppState.destructiveHint == false)
+        #expect(getAppState.idempotentHint == true)
+        #expect(getAppState.openWorldHint == true)
+
+        let click = try toolSpec("click").annotations
+        #expect(click.readOnlyHint == false)
+        #expect(click.destructiveHint == true)
+        #expect(click.idempotentHint == false)
+        #expect(click.openWorldHint == true)
+
+        let setValue = try toolSpec("set_value").annotations
+        #expect(setValue.readOnlyHint == false)
+        #expect(setValue.idempotentHint == false)
+
+        let openApp = try toolSpec("open_app").annotations
+        #expect(openApp.readOnlyHint == false)
+        #expect(openApp.destructiveHint == false)
+        #expect(openApp.idempotentHint == true)
+        #expect(openApp.openWorldHint == true)
+
+        let openURL = try toolSpec("open_url").annotations
+        #expect(openURL.readOnlyHint == false)
+        #expect(openURL.idempotentHint == false)
+        #expect(openURL.openWorldHint == true)
+
+        let deleteSkill = try toolSpec("delete_skill").annotations
+        #expect(deleteSkill.readOnlyHint == false)
+        #expect(deleteSkill.destructiveHint == true)
+        #expect(deleteSkill.idempotentHint == false)
+        #expect(deleteSkill.openWorldHint == false)
+    }
+
     @Test func secondaryActionAcceptsConfirmArgument() throws {
         #expect(try schemaType(schemaProperty("confirm", in: "perform_secondary_action")) == "boolean")
     }
