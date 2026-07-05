@@ -282,7 +282,7 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
                     step: index + 1, tool: step.tool,
                     reason: "the step ran but its expectation was not met — " + batchResultText(waitResult),
                     failureKind: .expectation,
-                    result: result
+                    result: waitResult
                 )
             }
             lastResult = waitResult

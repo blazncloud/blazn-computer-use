@@ -123,7 +123,7 @@ struct ReplayVerdictRecorder {
             tool: steps[index - 1].tool,
             attempted: true,
             succeeded: true,
-            classification: outcome?.classification ?? .success,
+            classification: outcome?.classification,
             failureDomain: outcome?.failureDomain,
             reason: nil,
             failureKind: nil,

@@ -135,4 +135,39 @@ private func syntheticReplay(
         }
         #expect(steps.count == 2)
     }
+
+    @Test func successfulStepWithoutOutcomeDoesNotClaimVerifiedClassification() {
+        let skill = replaySkill(steps: 1)
+        var recorder = ReplayVerdictRecorder(skill: skill, startAtStep: 1)
+
+        recorder.recordSuccess(step: 1, result: .text("legacy tool completed"))
+
+        let step = recorder.verdict.steps[0]
+        #expect(step.attempted == true)
+        #expect(step.succeeded == true)
+        #expect(step.classification == nil)
+        guard case .object(let fields) = step.value else {
+            Issue.record("expected step object")
+            return
+        }
+        #expect(fields["classification"] == nil)
+    }
+
+    @Test func failureWithoutOutcomeDoesNotCarrySuccessClassification() {
+        let skill = replaySkill(steps: 1)
+        var recorder = ReplayVerdictRecorder(skill: skill, startAtStep: 1)
+
+        recorder.recordFailure(
+            step: 1,
+            result: .text("expectation timed out", isError: true),
+            reason: "the step ran but its expectation was not met — timed out",
+            failureKind: .expectation
+        )
+
+        let step = recorder.verdict.steps[0]
+        #expect(step.attempted == true)
+        #expect(step.succeeded == false)
+        #expect(step.classification == nil)
+        #expect(step.failureKind == .expectation)
+    }
 }
