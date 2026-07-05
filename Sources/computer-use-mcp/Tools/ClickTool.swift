@@ -43,7 +43,8 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     }
 
     // Read (before): capture the target's fields before dispatch.
-    let before = ActionVerifier.captureBefore(target.element, family: .click)
+    let before = ActionVerifier.captureBefore(
+        target.element, family: .click, snapshotElement: target.snapshotElement)
 
     let outcome: InputActionOutcome
     switch buttonName {

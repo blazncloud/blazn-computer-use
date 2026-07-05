@@ -223,6 +223,20 @@ struct TreeDiff {
     /// Worth sending instead of the full tree: non-empty, and smaller than
     /// half the outline (a rewrite-everything diff is not a diff).
     var isCompact: Bool { entryCount > 0 && entryCount * 2 <= totalElements }
+
+    /// True when the post-state diff contains any changed/added/removed line
+    /// other than the acted target's own line. This is the corroboration needed
+    /// for web-value writes, where the target's AXValue can echo without DOM
+    /// observation.
+    func hasChangeIndependent(of target: SnapshotElement?) -> Bool {
+        let entries = changed + added + removed
+        guard let target else { return !entries.isEmpty }
+        let targetPrefix = target.id + " "
+        return entries.contains { entry in
+            let body = entry.dropFirst(2)
+            return !body.hasPrefix(targetPrefix)
+        }
+    }
 }
 
 /// Carry element ids forward across a UI change and compute the diff.

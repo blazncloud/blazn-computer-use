@@ -150,6 +150,67 @@ import Testing
         #expect(outcome.failureDomain == .verification)
     }
 
+    @Test func webAXEchoBareTypeTextIsEffectNotVerifiedWeb() {
+        var v = ActionVerification()
+        v.beforeValuePreview = ""
+        v.afterValuePreview = "hello"
+        v.targetStateChanged = true
+        v.renderedTextChanged = true
+        v.targetInWebArea = true
+        v.independentElementChanged = false
+        let outcome = ActionVerifier.reduce(
+            family: .type, intent: .insertText("hello"), verification: v,
+            rereadFailed: false, dispatchSucceeded: true, deliveryTier: attrTier, hasTargetElement: true)
+        #expect(outcome.classification == .effectNotVerified)
+        #expect(outcome.failureDomain == .web)
+        #expect(outcome.webAXEchoRisk)
+    }
+
+    @Test func webAXEchoSyntheticKeystrokeDeliveryIsNotDowngraded() {
+        var v = ActionVerification()
+        v.beforeValuePreview = ""
+        v.afterValuePreview = "hello"
+        v.targetStateChanged = true
+        v.renderedTextChanged = true
+        v.targetInWebArea = true
+        v.independentElementChanged = false
+        let outcome = ActionVerifier.reduce(
+            family: .type, intent: .insertText("hello"), verification: v,
+            rereadFailed: false, dispatchSucceeded: true, deliveryTier: droppableTier, hasTargetElement: true)
+        #expect(outcome.classification == .success)
+        #expect(!outcome.webAXEchoRisk)
+    }
+
+    @Test func webAXEchoIndependentCorroboratingDiffIsNotDowngraded() {
+        var v = ActionVerification()
+        v.beforeValuePreview = ""
+        v.afterValuePreview = "hello"
+        v.targetStateChanged = true
+        v.renderedTextChanged = true
+        v.targetInWebArea = true
+        v.independentElementChanged = true
+        let outcome = ActionVerifier.reduce(
+            family: .type, intent: .insertText("hello"), verification: v,
+            rereadFailed: false, dispatchSucceeded: true, deliveryTier: attrTier, hasTargetElement: true)
+        #expect(outcome.classification == .success)
+        #expect(!outcome.webAXEchoRisk)
+    }
+
+    @Test func nonWebAXValueEchoIsNotDowngraded() {
+        var v = ActionVerification()
+        v.beforeValuePreview = ""
+        v.afterValuePreview = "hello"
+        v.targetStateChanged = true
+        v.renderedTextChanged = true
+        v.targetInWebArea = false
+        v.independentElementChanged = false
+        let outcome = ActionVerifier.reduce(
+            family: .type, intent: .insertText("hello"), verification: v,
+            rereadFailed: false, dispatchSucceeded: true, deliveryTier: attrTier, hasTargetElement: true)
+        #expect(outcome.classification == .success)
+        #expect(!outcome.webAXEchoRisk)
+    }
+
     @Test func secureFieldTypeIsAmbiguous() {
         var v = ActionVerification()
         v.afterValuePreview = nil  // never read a secure field
@@ -191,6 +252,22 @@ import Testing
             rereadFailed: false, dispatchSucceeded: true, deliveryTier: attrTier, hasTargetElement: true)
         #expect(outcome.classification == .effectNotVerified)
         #expect(outcome.failureDomain == .verification)
+    }
+
+    @Test func webAXEchoBareSetValueIsEffectNotVerifiedWeb() {
+        var v = ActionVerification()
+        v.beforeValuePreview = "old"
+        v.afterValuePreview = "new"
+        v.targetStateChanged = true
+        v.renderedTextChanged = true
+        v.targetInWebArea = true
+        v.independentElementChanged = false
+        let outcome = ActionVerifier.reduce(
+            family: .setValue, intent: .setText("new"), verification: v,
+            rereadFailed: false, dispatchSucceeded: true, deliveryTier: attrTier, hasTargetElement: true)
+        #expect(outcome.classification == .effectNotVerified)
+        #expect(outcome.failureDomain == .web)
+        #expect(outcome.webAXEchoRisk)
     }
 
     @Test func checkboxSetValueAlreadyInStateIsSuccess() {
@@ -321,6 +398,21 @@ import Testing
         }
         #expect(fields["classification"]?.stringValue == "effect_not_verified")
         #expect(fields["failure_domain"]?.stringValue == "transport")
+    }
+
+    @Test func webAXEchoRiskSerializesAtOutcomeTopLevel() {
+        let outcome = ActionOutcome(
+            classification: .effectNotVerified,
+            failureDomain: .web,
+            summary: "web echo",
+            verification: nil,
+            webAXEchoRisk: true)
+        guard case let .object(fields) = outcome.value else {
+            Issue.record("expected object")
+            return
+        }
+        #expect(fields["failure_domain"]?.stringValue == "web")
+        #expect(fields["web_ax_echo_risk"]?.boolValue == true)
     }
 
     @Test func withActionOutcomeAttachesMetaBlock() {

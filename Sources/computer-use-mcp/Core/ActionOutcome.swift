@@ -56,6 +56,10 @@ enum FailureDomain: String, Sendable {
     /// Pairs with effect_not_verified.
     case verification
 
+    /// The target is inside web content, where AX can echo a value write back
+    /// without proving the renderer/DOM observed it.
+    case web
+
     /// The app accepted the action but applied app-specific semantics that
     /// diverge from the request (clamped a window frame, snapped a slider).
     /// Pairs with success or effect_not_verified.
@@ -90,6 +94,12 @@ struct ActionVerification: Sendable {
     /// Scroll only: the container was already pinned at the boundary in the
     /// requested direction, so "no movement" is expected, not a dropped event.
     var scrollAtExtent: Bool? = nil
+    /// The acted-on element is inside an AXWebArea, where AXValue readback can
+    /// be an accessibility echo rather than renderer/DOM evidence.
+    var targetInWebArea: Bool? = nil
+    /// A post-state diff line changed somewhere other than the acted target.
+    /// This is independent corroboration that the renderer/UI observed work.
+    var independentElementChanged: Bool? = nil
 
     // Derived: any target-local field moved.
     var targetStateChanged: Bool? = nil
@@ -126,6 +136,8 @@ struct ActionVerification: Sendable {
         put("window_frame_changed", windowFrameChanged)
         put("scroll_position_changed", scrollPositionChanged)
         put("scroll_at_extent", scrollAtExtent)
+        put("target_in_web_area", targetInWebArea)
+        put("independent_element_changed", independentElementChanged)
         put("target_state_changed", targetStateChanged)
         if !notes.isEmpty {
             fields["notes"] = .array(notes.map { .string($0) })
@@ -141,6 +153,21 @@ struct ActionOutcome: Sendable {
     let failureDomain: FailureDomain?
     let summary: String
     let verification: ActionVerification?
+    let webAXEchoRisk: Bool
+
+    init(
+        classification: ActionClassification,
+        failureDomain: FailureDomain?,
+        summary: String,
+        verification: ActionVerification?,
+        webAXEchoRisk: Bool = false
+    ) {
+        self.classification = classification
+        self.failureDomain = failureDomain
+        self.summary = summary
+        self.verification = verification
+        self.webAXEchoRisk = webAXEchoRisk
+    }
 
     var isSuccess: Bool { classification == .success }
 
@@ -161,6 +188,9 @@ struct ActionOutcome: Sendable {
         }
         if let verification {
             fields["verification"] = verification.value
+        }
+        if webAXEchoRisk {
+            fields["web_ax_echo_risk"] = .bool(true)
         }
         return .object(fields)
     }
@@ -328,6 +358,9 @@ extension ActionVerifier {
         case .type:
             let (ok, _) = intent.satisfiedByAfter(v)
             if ok {
+                if let webEcho = webAXEchoDowngradeIfNeeded(verification: v, deliveryTier: deliveryTier) {
+                    return webEcho
+                }
                 return .success("The typed text is present in the field.", v)
             }
             if windowChanged {
@@ -352,6 +385,9 @@ extension ActionVerifier {
         case .setValue:
             let (ok, note) = intent.satisfiedByAfter(v)
             if ok {
+                if let webEcho = webAXEchoDowngradeIfNeeded(verification: v, deliveryTier: deliveryTier) {
+                    return webEcho
+                }
                 var record = v
                 if let note { record.notes.append(note) }
                 let outcome = ActionOutcome(
@@ -465,6 +501,26 @@ extension ActionVerifier {
     private static func frameString(_ pair: (Double, Double)) -> String {
         "\(Int(pair.0.rounded()))x\(Int(pair.1.rounded()))"
     }
+
+    private static func webAXEchoDowngradeIfNeeded(
+        verification v: ActionVerification, deliveryTier: String
+    ) -> ActionOutcome? {
+        guard v.targetInWebArea == true else { return nil }
+        guard deliveryTier == InputTier.accessibilityAttribute.rawValue else { return nil }
+        guard v.independentElementChanged != true else { return nil }
+        var record = v
+        record.notes.append(
+            "The only confirming signal was the target element's AX value echo; no independent web-content diff corroborated it."
+        )
+        return ActionOutcome(
+            classification: .effectNotVerified,
+            failureDomain: .web,
+            summary:
+                "The target is inside web content. Accessibility echoed the written value back, but no independent "
+                + "web-content change confirmed that the renderer or DOM observed it.",
+            verification: record,
+            webAXEchoRisk: true)
+    }
 }
 
 // MARK: - The verifier: captures before-state, reduces after the reread
@@ -491,12 +547,15 @@ struct ActionVerifier: Sendable {
     var resolved: ActionOutcome? = nil
 
     /// Capture the target-local before fields for a family that reads them.
-    static func captureBefore(_ element: AXUIElement?, family: ActionFamily) -> ActionVerification {
+    static func captureBefore(
+        _ element: AXUIElement?, family: ActionFamily, snapshotElement: SnapshotElement? = nil
+    ) -> ActionVerification {
         var v = ActionVerification()
         guard family.readsTargetFields, let element else { return v }
         v.beforeValuePreview = verifierValuePreview(element)
         v.beforeSelected = verifierToggleState(element)
         v.beforeFocused = axBool(element, kAXFocusedAttribute)
+        v.targetInWebArea = targetIsInWebArea(element, snapshotElement: snapshotElement)
         return v
     }
 
@@ -513,11 +572,14 @@ struct ActionVerifier: Sendable {
 
     /// Re-resolve the target, read the after-state, and reduce to an outcome.
     /// A reread problem degrades the classification; it never throws.
-    func finalize(windowElement: AXUIElement?, treeChanged: Bool, afterWindowTitle: String?) async -> ActionOutcome {
+    func finalize(
+        windowElement: AXUIElement?, treeChanged: Bool, diff: TreeDiff?, afterWindowTitle: String?
+    ) async -> ActionOutcome {
         if let resolved { return resolved }
 
         var v = before
         v.renderedTextChanged = treeChanged
+        v.independentElementChanged = diff?.hasChangeIndependent(of: snapshotElement)
         if let beforeWindowTitle {
             v.windowTitleChanged = beforeWindowTitle != afterWindowTitle
         }

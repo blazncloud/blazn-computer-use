@@ -118,6 +118,7 @@ func frameworksIndicateWebRenderer(_ frameworkNames: [String]) -> Bool {
         let lowered = name.lowercased()
         return lowered.contains("chromium embedded framework")
             || lowered.contains("electron framework")
+            || lowered.contains("webkit.framework")
     }
 }
 
@@ -136,11 +137,51 @@ func appLooksLikeWebRenderer(pid: pid_t) -> Bool {
 /// content, if any survived filtering, immediately follows it.
 func hasEmptyWebArea(_ elements: [SnapshotElement]) -> Bool {
     for (index, element) in elements.enumerated() where element.role == "AXWebArea" {
-        let prefix = element.path
-        let next = index + 1 < elements.count ? elements[index + 1] : nil
-        let hasContent =
-            next.map { $0.path.count > prefix.count && Array($0.path.prefix(prefix.count)) == prefix } ?? false
-        if !hasContent { return true }
+        if !hasEmittedChild(of: element, at: index, in: elements) { return true }
+    }
+    return false
+}
+
+/// WKWebView cold-start can first expose only a childless web container, then
+/// materialize the real web area later. This shape is narrow by design so
+/// ordinary get_app_state calls do not pay a retry tax.
+func hasColdStartWebContentShape(_ elements: [SnapshotElement]) -> Bool {
+    for (index, element) in elements.enumerated() {
+        guard !hasEmittedChild(of: element, at: index, in: elements) else { continue }
+        if element.role == "AXWebArea" { return true }
+        if isWebAreaShapedPlaceholder(element) { return true }
+    }
+    return false
+}
+
+private func hasEmittedChild(of element: SnapshotElement, at index: Int, in elements: [SnapshotElement]) -> Bool {
+    let prefix = element.path
+    let next = index + 1 < elements.count ? elements[index + 1] : nil
+    return next.map { $0.path.count > prefix.count && Array($0.path.prefix(prefix.count)) == prefix } ?? false
+}
+
+private func isWebAreaShapedPlaceholder(_ element: SnapshotElement) -> Bool {
+    guard element.role == "AXGroup" || element.role == "AXScrollArea" else { return false }
+    let label = element.label?.lowercased() ?? ""
+    return label.contains("web")
+}
+
+/// True when the target is itself an AXWebArea or lives below one. Prefer the
+/// snapshot locator path when available: it is free and already carries the
+/// materialized ancestry from get_app_state. Fall back to a bounded live
+/// AXParent walk for focused elements and coordinate hit-test targets.
+func targetIsInWebArea(_ element: AXUIElement?, snapshotElement: SnapshotElement?, maxDepth: Int = 32) -> Bool {
+    if let snapshotElement,
+        snapshotElement.role == "AXWebArea" || snapshotElement.path.contains(where: { $0.role == "AXWebArea" })
+    {
+        return true
+    }
+    guard let element else { return false }
+    var current: AXUIElement? = element
+    for _ in 0..<maxDepth {
+        guard let candidate = current else { return false }
+        if axRole(candidate) == "AXWebArea" { return true }
+        current = axElement(candidate, kAXParentAttribute)
     }
     return false
 }

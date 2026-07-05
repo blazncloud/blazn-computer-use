@@ -40,7 +40,7 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
     try SafetyPolicy.checkTyping(into: element, app: app, confirmed: confirmed)
     // Read (before): capture the field's value before the insertion.
-    let before = ActionVerifier.captureBefore(element, family: .type)
+    let before = ActionVerifier.captureBefore(element, family: .type, snapshotElement: snapshotElement)
     let tier = try insertText(text, into: element, app: app, described: described)
     let warning = readBackWarning(typed: text, element: element)
     let verifier = ActionVerifier(
@@ -158,7 +158,8 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     )
 
     // Read (before): capture the target's fields before dispatch.
-    let before = ActionVerifier.captureBefore(target.element, family: .setValue)
+    let before = ActionVerifier.captureBefore(
+        target.element, family: .setValue, snapshotElement: target.snapshotElement)
     let windowTitle = target.snapshot.windowTitle
     func verifier(
         intent: ActionIntent, tier: InputTier, dispatched: Bool, resolved: ActionOutcome? = nil
