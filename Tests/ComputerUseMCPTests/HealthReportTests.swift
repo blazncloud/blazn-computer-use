@@ -17,6 +17,13 @@ private func structuredReport(in result: CallTool.Result) throws -> [String: Val
     return report
 }
 
+private func resultText(in result: CallTool.Result) throws -> String {
+    guard case let .text(text, _, _)? = result.content.first else {
+        throw ToolError.failed("Expected text health report summary.")
+    }
+    return text
+}
+
 private func outcomeFields(in result: CallTool.Result) throws -> [String: Value] {
     guard case let .object(outcome)? = result._meta?[actionOutcomeMetaKey] else {
         throw ToolError.failed("Expected outcome metadata.")
@@ -33,7 +40,7 @@ private func outcomeFields(in result: CallTool.Result) throws -> [String: Value]
         #expect(spec.annotations.openWorldHint == false)
     }
 
-    @Test func healthReportToolReturnsStructuredContentAndNonSuccessOutcomeWhenDegraded() async throws {
+    @Test func healthReportToolReturnsStructuredContentAndSuccessOutcomeWhenDegraded() async throws {
         let result = try await healthReportImpl([:]) { probe in
             #expect(probe == false)
             return Self.mockReport(
@@ -44,6 +51,10 @@ private func outcomeFields(in result: CallTool.Result) throws -> [String: Value]
         }
 
         #expect(result.isError == false)
+        let summary = try resultText(in: result)
+        #expect(summary.contains("completed with degraded health"))
+        #expect(summary.contains("Grant Accessibility"))
+
         let report = try structuredReport(in: result)
         #expect(report["version"]?.stringValue == "test")
         guard case let .object(permissions)? = report["permissions"],
@@ -55,11 +66,11 @@ private func outcomeFields(in result: CallTool.Result) throws -> [String: Value]
         #expect(accessibility["granted"]?.boolValue == false)
 
         let outcome = try outcomeFields(in: result)
-        #expect(outcome["classification"]?.stringValue == "effect_not_verified")
-        #expect(outcome["failure_domain"]?.stringValue == "verification")
+        #expect(outcome["classification"]?.stringValue == "success")
+        #expect(outcome["failure_domain"] == nil)
     }
 
-    @Test func healthReportToolDoesNotClaimSuccessWhenCaptureProbeIsSkipped() async throws {
+    @Test func healthReportToolReturnsSuccessOutcomeWhenCaptureProbeIsSkipped() async throws {
         let result = try await healthReportImpl([:]) { probe in
             #expect(probe == false)
             return Self.mockReport(
@@ -70,9 +81,13 @@ private func outcomeFields(in result: CallTool.Result) throws -> [String: Value]
         }
 
         #expect(result.isError == false)
+        let summary = try resultText(in: result)
+        #expect(summary.contains("without verified capture health"))
+        #expect(summary.contains("--probe-capture"))
+
         let outcome = try outcomeFields(in: result)
-        #expect(outcome["classification"]?.stringValue == "effect_not_verified")
-        #expect(outcome["failure_domain"]?.stringValue == "verification")
+        #expect(outcome["classification"]?.stringValue == "success")
+        #expect(outcome["failure_domain"] == nil)
     }
 
     @Test func healthReportToolPassesCaptureProbeArgumentToFactory() async throws {
@@ -86,6 +101,9 @@ private func outcomeFields(in result: CallTool.Result) throws -> [String: Value]
         }
 
         #expect(result.isError == false)
+        let summary = try resultText(in: result)
+        #expect(summary == "Health report is ready: permissions and capture health are verified.")
+
         let report = try structuredReport(in: result)
         guard case let .object(captureService)? = report["captureService"] else {
             Issue.record("expected captureService object")

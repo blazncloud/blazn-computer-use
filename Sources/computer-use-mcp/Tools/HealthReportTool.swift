@@ -22,7 +22,7 @@ func healthReportResult(_ report: HealthReport) throws -> CallTool.Result {
         structuredContent: report,
         isError: false
     )
-    return result.withActionOutcome(healthReportOutcome(report, summary: summary))
+    return result.withActionOutcome(healthReportOutcome(summary: summary))
 }
 
 private func healthReportSummary(_ report: HealthReport) -> String {
@@ -35,8 +35,6 @@ private func healthReportSummary(_ report: HealthReport) -> String {
     return "Health report completed with degraded health: \(report.recommendedNextAction)"
 }
 
-private func healthReportOutcome(_ report: HealthReport, summary: String) -> ActionOutcome {
-    report.provenReady
-        ? .success(summary)
-        : .effectNotVerified(.verification, summary)
+private func healthReportOutcome(summary: String) -> ActionOutcome {
+    .success(summary)
 }
