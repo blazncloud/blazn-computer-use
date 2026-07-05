@@ -34,6 +34,20 @@ func getAppStateImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 /// custom-drawn UI or an embedded web view whose accessibility is off.
 let sparseTreeThreshold = 10
 
+/// Bounded cold-web retry schedule. Total budget is 2400ms, deliberately below
+/// the ~2.5s ceiling and far below the observed ~20s WKWebView lag.
+let webMaterializationRetryBackoffMilliseconds = [150, 300, 600, 900, 450]
+
+func webMaterializationRetryBackoff(coldStartShape: Bool) -> [Int] {
+    coldStartShape ? webMaterializationRetryBackoffMilliseconds : []
+}
+
+func webContentNotMaterializedNote() -> String {
+    "Web content has not materialized in the accessibility tree yet. The returned tree is current, "
+        + "but the embedded web view is still exposing only its placeholder; retry get_app_state shortly "
+        + "or use ocr:true/coordinates if you need to act immediately."
+}
+
 /// Guidance appended to a sparse get_app_state tree. When the app provably
 /// rejected the web-accessibility opt-in, say so — the agent should go
 /// straight to OCR + coordinate clicks instead of re-fetching the tree.
@@ -226,8 +240,10 @@ func stateResult(
 
     var (snapshot, tree, unchanged, diff) = await captureSnapshot()
     var webAXUnsupported = false
+    var webContentNotMaterialized = false
     let emptyWebArea = hasEmptyWebArea(tree.elements)
-    var needsWebAX = emptyWebArea
+    let coldStartWebContent = hasColdStartWebContentShape(tree.elements)
+    var needsWebAX = emptyWebArea || coldStartWebContent
     if !needsWebAX && tree.elements.count < sparseTreeThreshold {
         needsWebAX = await AssistiveAccess.shared.looksLikeWebRenderer(pid: app.pid)
     }
@@ -239,9 +255,19 @@ func stateResult(
         // A sparse tree that stayed sparse after an earlier forced enable is
         // just a small window: don't re-pay the settle on every call.
         let outcome = await AssistiveAccess.shared.enable(pid: app.pid, force: true)
-        if outcome == .applied || (outcome == .alreadyApplied && emptyWebArea) {
-            try? await Task.sleep(for: .milliseconds(500))
-            (snapshot, tree, unchanged, diff) = await captureSnapshot()
+        if outcome == .applied || (outcome == .alreadyApplied && (emptyWebArea || coldStartWebContent)) {
+            let delays = webMaterializationRetryBackoff(coldStartShape: coldStartWebContent || emptyWebArea)
+            if delays.isEmpty {
+                try? await Task.sleep(for: .milliseconds(500))
+                (snapshot, tree, unchanged, diff) = await captureSnapshot()
+            } else {
+                for milliseconds in delays {
+                    guard hasColdStartWebContentShape(tree.elements) else { break }
+                    try? await Task.sleep(for: .milliseconds(milliseconds))
+                    (snapshot, tree, unchanged, diff) = await captureSnapshot()
+                }
+                webContentNotMaterialized = hasColdStartWebContentShape(tree.elements)
+            }
         } else if outcome == .unsupported {
             webAXUnsupported = true
         }
@@ -265,6 +291,9 @@ func stateResult(
     text += "\n"
     if let captureNote {
         text += captureNote + "\n"
+    }
+    if webContentNotMaterialized {
+        text += webContentNotMaterializedNote() + "\n"
     }
     // Action results skip resending a tree the agent already has; explicit
     // perception (get_app_state, .full) always returns it. A changed tree
@@ -317,7 +346,7 @@ func stateResult(
     var actionOutcome: ActionOutcome?
     if let verifier {
         actionOutcome = await verifier.finalize(
-            windowElement: window.element, treeChanged: !unchanged, afterWindowTitle: window.title)
+            windowElement: window.element, treeChanged: !unchanged, diff: diff, afterWindowTitle: window.title)
     }
     if let sentence = actionOutcome?.humanSentence {
         // A verified non-success verdict, in plain language for the transcript.
