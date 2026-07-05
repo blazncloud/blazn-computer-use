@@ -23,7 +23,7 @@ extension ToolSpec {
 let mutatingToolNames: Set<String> = [
     "click", "type_text", "press_key", "scroll", "drag", "set_value",
     "select_text", "perform_secondary_action", "open_app", "open_url",
-    "manage_window", "click_menu_item", "write_clipboard", "batch",
+    "manage_window", "click_menu_item", "page", "write_clipboard", "batch",
     "run_skill", "save_skill", "delete_skill",
     // The recorder owns a single event tap on a daemon run-loop thread, so
     // both ends must run in the daemon, not per-shim in-process.
@@ -36,7 +36,7 @@ let mutatingToolNames: Set<String> = [
 /// a tool here silently removes it from all three.
 let appScopedToolNames: Set<String> = [
     "click", "type_text", "press_key", "scroll", "drag", "set_value",
-    "select_text", "perform_secondary_action", "click_menu_item", "manage_window",
+    "select_text", "perform_secondary_action", "click_menu_item", "page", "manage_window",
     "batch", "run_skill",
 ]
 

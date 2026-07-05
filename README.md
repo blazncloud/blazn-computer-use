@@ -322,8 +322,9 @@ apps that draw their own UI) · `find` (search elements by text — the fast way
 locate a control) · `list_apps` · `list_windows` · `read_text` · `wait_for`
 
 **Act** `click` · `type_text` · `press_key` · `scroll` · `drag` · `set_value` ·
-`select_text` · `perform_secondary_action` · `click_menu_item` · `batch` (a short
-action sequence in one round-trip, stopping at the first failure)
+`select_text` · `perform_secondary_action` · `click_menu_item` · `page` (CSS
+selector web interaction with DOM verification where available) · `batch` (a
+short action sequence in one round-trip, stopping at the first failure)
 
 **System** `open_app` · `open_url` · `manage_window` · `read_clipboard` ·
 `write_clipboard`

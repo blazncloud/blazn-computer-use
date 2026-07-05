@@ -117,6 +117,14 @@ private func requiredProperties(for toolName: String) throws -> [String] {
         #expect(try schemaType(schemaProperty("allow_focus_change", in: "press_key")) == "boolean")
     }
 
+    @Test func pageToolExposesSelectorActionAndVerificationArguments() throws {
+        #expect(try schemaType(schemaProperty("selector", in: "page")) == "string")
+        #expect(try schemaType(schemaProperty("action", in: "page")) == "string")
+        #expect(try schemaType(schemaProperty("verify_selector", in: "page")) == "string")
+        #expect(try schemaType(schemaProperty("cdp_port", in: "page")) == "integer")
+        #expect(try requiredProperties(for: "page") == ["app", "selector"])
+    }
+
     @Test func focusMutatingSystemToolsExposeFocusChangeOptIn() throws {
         #expect(try schemaType(schemaProperty("allow_focus_change", in: "open_url")) == "boolean")
         #expect(try schemaType(schemaProperty("allow_focus_change", in: "manage_window")) == "boolean")

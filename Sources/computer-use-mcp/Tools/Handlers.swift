@@ -67,6 +67,10 @@ func clickMenuItem(_ args: [String: Value]) async throws -> CallTool.Result {
     try await clickMenuItemImpl(args)
 }
 
+func page(_ args: [String: Value]) async throws -> CallTool.Result {
+    try await pageImpl(args)
+}
+
 func readClipboard(_ args: [String: Value]) async throws -> CallTool.Result {
     try await readClipboardImpl(args)
 }

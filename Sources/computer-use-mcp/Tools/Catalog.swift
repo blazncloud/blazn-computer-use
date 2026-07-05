@@ -518,6 +518,43 @@ let toolCatalog: [ToolSpec] = [
         handler: { args in try await clickMenuItem(args) }
     ),
     ToolSpec(
+        name: "page",
+        description: """
+            Act on web content by CSS selector when browser/webview accessibility ids are \
+            unreliable. click evaluates getBoundingClientRect in the page, converts the \
+            viewport point to screen coordinates, and clicks through the background input \
+            ladder without moving the real cursor. set_text uses browser JavaScript Apple \
+            Events, Electron CDP Input.insertText, or WKWebView AX fallback. DOM readback \
+            is reported in _meta; AX-only fallback evidence is downgraded honestly.
+            """,
+        inputSchema: objectSchema(
+            [
+                "app": appParam,
+                "selector": stringParam("CSS selector for the page element, e.g. \"#submit\" or \"input[name=email]\"."),
+                "action": enumParam(["click", "set_text"], "Action to perform. Defaults to click."),
+                "text": stringParam("Text for action:set_text. Ignored for click."),
+                "verify_selector": stringParam(
+                    "Optional CSS selector to read back for DOM verification. Defaults to selector. "
+                        + "For buttons that mutate another element, point this at the mutated element."
+                ),
+                "window_title": stringParam(
+                    "Optional window title to target a specific window. Defaults to the app's front window."
+                ),
+                "cdp_port": integerParam(
+                    "Electron only: Chrome DevTools Protocol port for Input.insertText / Runtime.evaluate."
+                ),
+                "target_url_contains": stringParam(
+                    "Electron only: choose the CDP page target whose URL contains this substring."
+                ),
+                "include_screenshot": includeScreenshotParam,
+                "include_state": includeStateParam,
+                "confirm": confirmParam,
+            ],
+            required: ["app", "selector"]
+        ),
+        handler: { args in try await page(args) }
+    ),
+    ToolSpec(
         name: "read_clipboard",
         description: "Read the current text content of the system clipboard.",
         inputSchema: objectSchema([:]),
