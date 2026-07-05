@@ -1,5 +1,5 @@
-import CoreGraphics
 import ApplicationServices
+import CoreGraphics
 import Testing
 
 @testable import computer_use_mcp
@@ -13,7 +13,9 @@ private struct MockPageJavaScriptExecutor: PageJavaScriptExecuting {
         response
     }
 
-    func insertText(_ text: String, selector: String, app: ResolvedApp, cdpPort: Int?, targetURLContains: String?) async throws {}
+    func insertText(
+        _ text: String, selector: String, app: ResolvedApp, window: TargetWindow, cdpPort: Int?, targetURLContains: String?
+    ) async throws {}
 }
 
 @Suite struct PageToolTests {
@@ -24,7 +26,7 @@ private struct MockPageJavaScriptExecutor: PageJavaScriptExecuting {
         {"vx":15,"vy":25,"sx":100,"sy":200,"dpr":2,"value":"before","text":"Before","pageSignature":"Before|"}
         """
         let probe = try parsePageProbe(raw)
-        #expect(probe.coordinate.screenPoint == CGPoint(x: 130, y: 250))
+        #expect(probe.coordinate.screenPoint == CGPoint(x: 115, y: 225))
         #expect(probe.snapshot.value == "before")
         #expect(probe.snapshot.text == "Before")
     }
@@ -125,6 +127,55 @@ private struct MockPageJavaScriptExecutor: PageJavaScriptExecuting {
             axChanged: nil, deliveryTier: "apple-events-javascript", host: .safari,
             expectedText: "hello")
         #expect(outcome.classification == .success)
+    }
+
+    @Test func setTextRejectsDOMChangeWithoutExpectedReadback() {
+        let before = PageDOMSnapshot(value: "old", text: nil, pageSignature: "|old")
+        let after = PageDOMSnapshot(value: "sanitized", text: nil, pageSignature: "|sanitized")
+        let outcome = classifyPageOutcome(
+            evidence: .dom, action: .setText, beforeDOM: before, afterDOM: after,
+            axChanged: nil, deliveryTier: "apple-events-javascript", host: .safari,
+            expectedText: "hello")
+        #expect(outcome.classification == .effectNotVerified)
+        #expect(outcome.failureDomain == .verification)
+    }
+
+    @Test func setTextClearingNonValueElementRequiresEmptyTextReadback() {
+        let before = PageDOMSnapshot(value: nil, text: "old", pageSignature: "old|")
+        let after = PageDOMSnapshot(value: nil, text: "old", pageSignature: "old|")
+        let outcome = classifyPageOutcome(
+            evidence: .dom, action: .setText, beforeDOM: before, afterDOM: after,
+            axChanged: nil, deliveryTier: "apple-events-javascript", host: .safari,
+            expectedText: "")
+        #expect(outcome.classification == .effectNotVerified)
+        #expect(outcome.failureDomain == .verification)
+    }
+
+    @Test func cdpTargetHintMustMatch() throws {
+        let targets: [[String: Any]] = [
+            ["url": "https://example.test/page", "webSocketDebuggerUrl": "ws://127.0.0.1/devtools/page/1"]
+        ]
+        #expect(try selectCDPPageTarget(targets, targetURLContains: "example", port: 9222)?["url"] as? String == "https://example.test/page")
+        #expect(throws: (any Error).self) {
+            _ = try selectCDPPageTarget(targets, targetURLContains: "missing", port: 9222)
+        }
+    }
+
+    @Test func browserAppleScriptTargetsResolvedWindowTitle() throws {
+        let script = try browserAppleScript(
+            "1 + 1", app: appWithBundle("com.apple.Safari"), host: .safari, windowTitle: "Target Page")
+        #expect(script.contains("set wantedTitle to \"Target Page\""))
+        #expect(script.contains("current tab of targetWindow"))
+        #expect(!script.contains("current tab of front window"))
+    }
+
+    @Test func browserAppleScriptCanTargetResolvedWindowFrame() throws {
+        let script = try browserAppleScript(
+            "1 + 1", app: appWithBundle("com.google.Chrome"), host: .chromium,
+            windowTitle: nil, windowFrame: CGRect(x: 10, y: 20, width: 300, height: 400))
+        #expect(script.contains("set targetLeft to 10"))
+        #expect(script.contains("set targetBottom to 420"))
+        #expect(script.contains("active tab of targetWindow"))
     }
 
     private func appWithBundle(_ bundleIdentifier: String) -> ResolvedApp {

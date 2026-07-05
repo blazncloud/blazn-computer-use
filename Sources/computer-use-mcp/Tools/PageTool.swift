@@ -32,10 +32,7 @@ struct PageCoordinateProbe: Equatable {
     let devicePixelRatio: Double
 
     var screenPoint: CGPoint {
-        CGPoint(
-            x: contentScreenX + viewportX * devicePixelRatio,
-            y: contentScreenY + viewportY * devicePixelRatio
-        )
+        CGPoint(x: contentScreenX + viewportX, y: contentScreenY + viewportY)
     }
 }
 
@@ -58,7 +55,9 @@ struct PageProbe {
 protocol PageJavaScriptExecuting {
     func evaluate(_ javascript: String, app: ResolvedApp, window: TargetWindow, cdpPort: Int?, targetURLContains: String?) async throws
         -> String
-    func insertText(_ text: String, selector: String, app: ResolvedApp, cdpPort: Int?, targetURLContains: String?) async throws
+    func insertText(
+        _ text: String, selector: String, app: ResolvedApp, window: TargetWindow, cdpPort: Int?, targetURLContains: String?
+    ) async throws
 }
 
 struct SystemPageJavaScriptExecutor: PageJavaScriptExecuting {
@@ -67,7 +66,7 @@ struct SystemPageJavaScriptExecutor: PageJavaScriptExecuting {
     ) async throws -> String {
         switch pageHostType(for: app) {
         case .safari, .chromium:
-            return try await runBrowserAppleScript(javascript, app: app)
+            return try await runBrowserAppleScript(javascript, app: app, window: window)
         case .electron:
             let port = try await resolveCDPPort(explicit: cdpPort)
             return try await CDPClient(port: port, targetURLContains: targetURLContains).evaluate(javascript)
@@ -78,7 +77,9 @@ struct SystemPageJavaScriptExecutor: PageJavaScriptExecuting {
         }
     }
 
-    func insertText(_ text: String, selector: String, app: ResolvedApp, cdpPort: Int?, targetURLContains: String?) async throws {
+    func insertText(
+        _ text: String, selector: String, app: ResolvedApp, window: TargetWindow, cdpPort: Int?, targetURLContains: String?
+    ) async throws {
         switch pageHostType(for: app) {
         case .electron:
             let port = try await resolveCDPPort(explicit: cdpPort)
@@ -87,7 +88,7 @@ struct SystemPageJavaScriptExecutor: PageJavaScriptExecuting {
             try await client.insertText(text)
         case .safari, .chromium:
             let script = pageSetTextJavaScript(selector: selector, text: text)
-            _ = try await runBrowserAppleScript(script, app: app)
+            _ = try await runBrowserAppleScript(script, app: app, window: window)
         case .wkWebView:
             throw ToolError.failed("JavaScript text entry is not available for WKWebView apps; using AX fallback when possible.")
         case .unsupported:
@@ -193,7 +194,7 @@ private func pageSetText(
         selector: verifySelector, app: app, window: window, cdpPort: cdpPort,
         targetURLContains: targetURLContains)
     try await pageJavaScriptExecutor.insertText(
-        text, selector: selector, app: app, cdpPort: cdpPort, targetURLContains: targetURLContains)
+        text, selector: selector, app: app, window: window, cdpPort: cdpPort, targetURLContains: targetURLContains)
     try? await Task.sleep(for: .milliseconds(80))
     let after = try? await pageDOMSnapshot(
         selector: verifySelector, app: app, window: window, cdpPort: cdpPort,
@@ -325,11 +326,14 @@ func classifyPageOutcome(
         guard let afterDOM else {
             return .ambiguous(.verification, "The page action ran, but DOM verification could not be read afterward.", verification)
         }
-        if action == .setText, let expectedText,
-            afterDOM.value == expectedText || afterDOM.text?.contains(expectedText) == true
-        {
-            verification.notes.append("DOM readback matched the requested text.")
-            return .success("DOM verification confirmed the page text changed.", verification)
+        if action == .setText, let expectedText {
+            if pageSnapshot(afterDOM, matchesExpectedText: expectedText) {
+                verification.notes.append("DOM readback matched the requested text.")
+                return .success("DOM verification confirmed the requested page text.", verification)
+            }
+            return .effectNotVerified(
+                .verification,
+                "DOM verification did not confirm the requested text after set_text.", verification)
         }
         if afterDOM.differs(from: beforeDOM) {
             verification.notes.append("DOM readback changed after the page action.")
@@ -357,6 +361,14 @@ func classifyPageOutcome(
             .verification,
             "No confirming DOM change was observed after the AX fallback action.", verification)
     }
+}
+
+private func pageSnapshot(_ snapshot: PageDOMSnapshot, matchesExpectedText expectedText: String) -> Bool {
+    if let value = snapshot.value {
+        return value == expectedText
+    }
+    guard let text = snapshot.text else { return false }
+    return expectedText.isEmpty ? text.isEmpty : text.contains(expectedText)
 }
 
 private func resolvedPageVerifier(outcome: ActionOutcome, tier: String) -> ActionVerifier {
@@ -558,26 +570,11 @@ private func pageTextDeliveryTier(host: PageHostType) -> String {
     host == .electron ? "cdp-input-insert-text" : "apple-events-javascript"
 }
 
-private func runBrowserAppleScript(_ javascript: String, app: ResolvedApp) async throws -> String {
-    let script: String
-    switch pageHostType(for: app) {
-    case .safari:
-        script = """
-        tell application id "\(app.bundleIdentifier)"
-          if not (exists front window) then error "No browser window is open"
-          do JavaScript \(appleScriptString(javascript)) in current tab of front window
-        end tell
-        """
-    case .chromium:
-        script = """
-        tell application id "\(app.bundleIdentifier)"
-          if not (exists front window) then error "No browser window is open"
-          execute javascript \(appleScriptString(javascript)) in active tab of front window
-        end tell
-        """
-    default:
-        throw ToolError.failed("Apple Events JavaScript is unsupported for \(app.bundleIdentifier).")
-    }
+private func runBrowserAppleScript(_ javascript: String, app: ResolvedApp, window: TargetWindow) async throws -> String {
+    let script = try browserAppleScript(
+        javascript, app: app, host: pageHostType(for: app),
+        windowTitle: axString(window.element, kAXTitleAttribute) ?? window.title,
+        windowFrame: window.frame)
     do {
         return try await runProcess("/usr/bin/osascript", arguments: ["-e", script])
     } catch {
@@ -585,6 +582,149 @@ private func runBrowserAppleScript(_ javascript: String, app: ResolvedApp) async
             "JavaScript Apple Events failed for \(app.name). Enable 'Allow JavaScript from Apple Events' "
                 + "in the browser, or use a host with CDP. Underlying error: \(error)")
     }
+}
+
+func browserAppleScript(
+    _ javascript: String, app: ResolvedApp, host: PageHostType, windowTitle: String?, windowFrame: CGRect? = nil
+) throws -> String {
+    let target = browserWindowTargetAppleScript(windowTitle: windowTitle, windowFrame: windowFrame)
+    switch host {
+    case .safari:
+        return """
+        tell application id "\(app.bundleIdentifier)"
+        \(target)
+          do JavaScript \(appleScriptString(javascript)) in current tab of targetWindow
+        end tell
+        """
+    case .chromium:
+        return """
+        tell application id "\(app.bundleIdentifier)"
+        \(target)
+          execute javascript \(appleScriptString(javascript)) in active tab of targetWindow
+        end tell
+        """
+    default:
+        throw ToolError.failed("Apple Events JavaScript is unsupported for \(app.bundleIdentifier).")
+    }
+}
+
+private func browserWindowTargetAppleScript(windowTitle: String?, windowFrame: CGRect?) -> String {
+    let title = windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let title, !title.isEmpty {
+        return """
+          if not (exists window 1) then error "No browser window is open"
+          set targetWindow to missing value
+        \(browserWindowTitleMatchAppleScript(title, windowFrame: windowFrame))
+          if targetWindow is missing value then error "No browser window matching the resolved target title."
+        """
+    }
+    if let windowFrame {
+        return """
+          if not (exists window 1) then error "No browser window is open"
+          set targetWindow to missing value
+        \(browserWindowFrameMatchAppleScript(windowFrame))
+          if targetWindow is missing value then error "No browser window matching the resolved target frame."
+        """
+    }
+    return """
+      if not (exists window 1) then error "No browser window is open"
+      set targetWindow to front window
+    """
+}
+
+private func browserWindowFrameMatchAppleScript(_ frame: CGRect) -> String {
+    """
+    \(browserWindowFramePreambleAppleScript(frame))
+      set frameMatches to {}
+      repeat with candidate in windows
+        try
+          set candidateBounds to bounds of candidate
+          if \(browserWindowFrameConditionAppleScript()) then set end of frameMatches to contents of candidate
+        end try
+      end repeat
+      if (count of frameMatches) is 1 then
+        set targetWindow to item 1 of frameMatches
+      else if (count of frameMatches) > 1 then
+        error "Browser window frame matched multiple windows; target is ambiguous."
+      end if
+    """
+}
+
+private func browserWindowTitleMatchAppleScript(_ title: String, windowFrame: CGRect?) -> String {
+    let quotedTitle = appleScriptString(title)
+    let framePreamble = windowFrame.map(browserWindowFramePreambleAppleScript) ?? ""
+    return """
+      set wantedTitle to \(quotedTitle)
+    \(framePreamble)
+      set exactTitleMatches to {}
+      repeat with candidate in windows
+        try
+          set candidateTitle to name of candidate as text
+          if candidateTitle is wantedTitle then set end of exactTitleMatches to contents of candidate
+        end try
+      end repeat
+      \(browserWindowChooseMatchAppleScript("exactTitleMatches", windowFrame: windowFrame))
+      if targetWindow is missing value then
+        set partialTitleMatches to {}
+        repeat with candidate in windows
+          try
+            set candidateTitle to name of candidate as text
+            if candidateTitle contains wantedTitle then set end of partialTitleMatches to contents of candidate
+          end try
+        end repeat
+        \(browserWindowChooseMatchAppleScript("partialTitleMatches", windowFrame: windowFrame))
+      end if
+    """
+}
+
+private func browserWindowFramePreambleAppleScript(_ frame: CGRect) -> String {
+    """
+      set targetLeft to \(Int(frame.minX.rounded()))
+      set targetTop to \(Int(frame.minY.rounded()))
+      set targetRight to \(Int(frame.maxX.rounded()))
+      set targetBottom to \(Int(frame.maxY.rounded()))
+    """
+}
+
+private func browserWindowChooseMatchAppleScript(_ matchList: String, windowFrame: CGRect?) -> String {
+    if windowFrame == nil {
+        return """
+          if (count of \(matchList)) is 1 then
+            set targetWindow to item 1 of \(matchList)
+          else if (count of \(matchList)) > 1 then
+            error "Browser window title matched multiple windows; target is ambiguous."
+          end if
+        """
+    }
+    return """
+      if (count of \(matchList)) is 1 then
+        set targetWindow to item 1 of \(matchList)
+      else if (count of \(matchList)) > 1 then
+        set frameMatches to {}
+        repeat with candidate in \(matchList)
+          try
+            set candidateBounds to bounds of candidate
+            if \(browserWindowFrameConditionAppleScript()) then set end of frameMatches to contents of candidate
+          end try
+        end repeat
+        if (count of frameMatches) is 1 then
+          set targetWindow to item 1 of frameMatches
+        else if (count of frameMatches) > 1 then
+          error "Browser window title and frame matched multiple windows; target is ambiguous."
+        else
+          error "Browser window title matched multiple windows; no match had the resolved frame."
+        end if
+      end if
+    """
+}
+
+private func browserWindowFrameConditionAppleScript() -> String {
+    """
+    (item 1 of candidateBounds as integer) is targetLeft and ¬
+              (item 2 of candidateBounds as integer) is targetTop and ¬
+              (item 3 of candidateBounds as integer) is targetRight and ¬
+              (item 4 of candidateBounds as integer) is targetBottom
+    """
 }
 
 private func runProcess(_ path: String, arguments: [String]) async throws -> String {
@@ -691,11 +831,8 @@ private struct CDPClient {
     }
 
     private func webSocketURL() async throws -> URL {
-        let targets = try await pageTargets()
-        let target = targets.first { target in
-            guard let hint = targetURLContains?.lowercased(), !hint.isEmpty else { return true }
-            return (target["url"] as? String)?.lowercased().contains(hint) == true
-        } ?? targets.first
+        let target = try selectCDPPageTarget(
+            try await pageTargets(), targetURLContains: targetURLContains, port: port)
         guard let raw = target?["webSocketDebuggerUrl"] as? String, let url = URL(string: raw) else {
             throw ToolError.failed("No CDP page target with a websocket URL on port \(port).")
         }
@@ -710,6 +847,16 @@ private struct CDPClient {
         }
         return array.filter { $0["type"] as? String == "page" }
     }
+}
+
+func selectCDPPageTarget(_ targets: [[String: Any]], targetURLContains: String?, port: Int) throws -> [String: Any]? {
+    guard let hint = targetURLContains?.trimmingCharacters(in: .whitespacesAndNewlines), !hint.isEmpty else {
+        return targets.first
+    }
+    guard let target = targets.first(where: { ($0["url"] as? String)?.localizedCaseInsensitiveContains(hint) == true }) else {
+        throw ToolError.failed("No CDP page target URL containing \(hint) on port \(port).")
+    }
+    return target
 }
 
 private func findAXElement(selector: String, in root: AXUIElement) throws -> AXUIElement {
