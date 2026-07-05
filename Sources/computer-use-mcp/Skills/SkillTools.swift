@@ -273,7 +273,8 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         }
 
         let outcome = replayStepOutcome(from: result)
-        let needsExpectationProof = outcome.map { $0.classification != .success } ?? false
+        let needsExpectationProof = outcome.map { $0.classification != .success }
+            ?? isMutatingTool(step.tool)
         let canExpectationProveOutcome = needsExpectationProof
             && expectationArguments != nil
             && expectationWasUnmetBeforeStep
@@ -282,6 +283,15 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
                 step: index + 1,
                 tool: step.tool,
                 reason: outcome.summary ?? "step outcome was \(outcome.classification.rawValue)",
+                failureKind: .outcome,
+                result: result
+            )
+        }
+        if outcome == nil, replayMissingOutcomeFails(tool: step.tool, canExpectationProve: canExpectationProveOutcome) {
+            return failure(
+                step: index + 1,
+                tool: step.tool,
+                reason: "step returned no verifier outcome; add an expect postcondition to prove it",
                 failureKind: .outcome,
                 result: result
             )
@@ -351,6 +361,10 @@ func replayExpectationTimedOut(_ result: CallTool.Result) -> Bool {
 
 func replayOutcomeFailsBeforeExpectation(_ outcome: ReplayStepOutcome, canExpectationProve: Bool) -> Bool {
     outcome.classification == .unsupported || (outcome.classification != .success && !canExpectationProve)
+}
+
+func replayMissingOutcomeFails(tool: String, canExpectationProve: Bool) -> Bool {
+    isMutatingTool(tool) && !canExpectationProve
 }
 
 func replayWaitArguments(

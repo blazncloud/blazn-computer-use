@@ -204,4 +204,12 @@ private func syntheticReplay(
         #expect(replayOutcomeFailsBeforeExpectation(unsupported, canExpectationProve: true) == true)
         #expect(replayOutcomeFailsBeforeExpectation(success, canExpectationProve: false) == false)
     }
+
+    @Test func mutatingStepWithoutOutcomeRequiresExpectationProof() {
+        #expect(replayMissingOutcomeFails(tool: "select_text", canExpectationProve: false) == true)
+        #expect(replayMissingOutcomeFails(tool: "select_text", canExpectationProve: true) == false)
+        #expect(replayMissingOutcomeFails(tool: "read_text", canExpectationProve: false) == false)
+        #expect(replayMissingOutcomeFails(tool: "wait_for", canExpectationProve: false) == false)
+    }
+
 }
