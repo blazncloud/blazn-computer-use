@@ -16,15 +16,27 @@ func healthReportImpl(
 }
 
 func healthReportResult(_ report: HealthReport) throws -> CallTool.Result {
-    let summary =
-        report.ready
-        ? "Health report is ready: permissions and capture health are available."
-        : "Health report completed with degraded health: \(report.recommendedNextAction)"
-
+    let summary = healthReportSummary(report)
     let result = try CallTool.Result(
         content: [.text(text: summary, annotations: nil, _meta: nil)],
         structuredContent: report,
         isError: false
     )
-    return result.withActionOutcome(.success(summary))
+    return result.withActionOutcome(healthReportOutcome(report, summary: summary))
+}
+
+private func healthReportSummary(_ report: HealthReport) -> String {
+    if report.provenReady {
+        return "Health report is ready: permissions and capture health are verified."
+    }
+    if report.ready {
+        return "Health report completed without verified capture health: \(report.recommendedNextAction)"
+    }
+    return "Health report completed with degraded health: \(report.recommendedNextAction)"
+}
+
+private func healthReportOutcome(_ report: HealthReport, summary: String) -> ActionOutcome {
+    report.provenReady
+        ? .success(summary)
+        : .effectNotVerified(.verification, summary)
 }

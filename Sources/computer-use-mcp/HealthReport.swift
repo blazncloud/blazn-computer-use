@@ -161,6 +161,12 @@ struct HealthReport: Codable, Sendable {
             && permissions.screenRecording.granted
             && captureService.status != .notResponding
     }
+
+    var provenReady: Bool {
+        permissions.accessibility.granted
+            && permissions.screenRecording.granted
+            && captureService.status == .responsive
+    }
 }
 
 struct ProcessDiagnostics: Codable, Sendable {

@@ -10,6 +10,20 @@ private func healthToolSpec(_ name: String) throws -> ToolSpec {
     return spec
 }
 
+private func structuredReport(in result: CallTool.Result) throws -> [String: Value] {
+    guard case let .object(report)? = result.structuredContent else {
+        throw ToolError.failed("Expected structured health report.")
+    }
+    return report
+}
+
+private func outcomeFields(in result: CallTool.Result) throws -> [String: Value] {
+    guard case let .object(outcome)? = result._meta?[actionOutcomeMetaKey] else {
+        throw ToolError.failed("Expected outcome metadata.")
+    }
+    return outcome
+}
+
 @Suite struct HealthReportTests {
     @Test func healthReportToolIsRegisteredReadOnly() throws {
         let spec = try healthToolSpec("health_report")
@@ -19,7 +33,7 @@ private func healthToolSpec(_ name: String) throws -> ToolSpec {
         #expect(spec.annotations.openWorldHint == false)
     }
 
-    @Test func healthReportToolReturnsStructuredContentAndSuccessOutcomeWhenDegraded() async throws {
+    @Test func healthReportToolReturnsStructuredContentAndNonSuccessOutcomeWhenDegraded() async throws {
         let result = try await healthReportImpl([:]) { probe in
             #expect(probe == false)
             return Self.mockReport(
@@ -30,10 +44,7 @@ private func healthToolSpec(_ name: String) throws -> ToolSpec {
         }
 
         #expect(result.isError == false)
-        guard case let .object(report)? = result.structuredContent else {
-            Issue.record("expected structured health report")
-            return
-        }
+        let report = try structuredReport(in: result)
         #expect(report["version"]?.stringValue == "test")
         guard case let .object(permissions)? = report["permissions"],
             case let .object(accessibility)? = permissions["accessibility"]
@@ -43,12 +54,25 @@ private func healthToolSpec(_ name: String) throws -> ToolSpec {
         }
         #expect(accessibility["granted"]?.boolValue == false)
 
-        guard case let .object(outcome)? = result._meta?["computer-use-mcp/outcome"] else {
-            Issue.record("expected outcome metadata")
-            return
+        let outcome = try outcomeFields(in: result)
+        #expect(outcome["classification"]?.stringValue == "effect_not_verified")
+        #expect(outcome["failure_domain"]?.stringValue == "verification")
+    }
+
+    @Test func healthReportToolDoesNotClaimSuccessWhenCaptureProbeIsSkipped() async throws {
+        let result = try await healthReportImpl([:]) { probe in
+            #expect(probe == false)
+            return Self.mockReport(
+                accessibility: true,
+                screenRecording: true,
+                captureServiceStatus: .skipped
+            )
         }
-        #expect(outcome["classification"]?.stringValue == "success")
-        #expect(outcome["failure_domain"] == nil)
+
+        #expect(result.isError == false)
+        let outcome = try outcomeFields(in: result)
+        #expect(outcome["classification"]?.stringValue == "effect_not_verified")
+        #expect(outcome["failure_domain"]?.stringValue == "verification")
     }
 
     @Test func healthReportToolPassesCaptureProbeArgumentToFactory() async throws {
@@ -62,13 +86,16 @@ private func healthToolSpec(_ name: String) throws -> ToolSpec {
         }
 
         #expect(result.isError == false)
-        guard case let .object(report)? = result.structuredContent,
-            case let .object(captureService)? = report["captureService"]
-        else {
+        let report = try structuredReport(in: result)
+        guard case let .object(captureService)? = report["captureService"] else {
             Issue.record("expected captureService object")
             return
         }
         #expect(captureService["status"]?.stringValue == "responsive")
+
+        let outcome = try outcomeFields(in: result)
+        #expect(outcome["classification"]?.stringValue == "success")
+        #expect(outcome["failure_domain"] == nil)
     }
 
     @Test func recommendationStartsWithAccessibility() {
