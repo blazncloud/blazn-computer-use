@@ -17,6 +17,14 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BUNDLE_ID = "dev.computer-use-mcp.app"
 DEFAULT_APP_NAME = "Computer Use MCP"
 APP_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,79}$")
+VERSION_FILE = ROOT / "Sources" / "computer-use-mcp" / "Version.swift"
+
+
+def binary_version() -> str:
+    match = re.search(r'^let version = "([^"]+)"', VERSION_FILE.read_text(), re.MULTILINE)
+    if not match:
+        raise ValueError(f"could not find version in {VERSION_FILE}")
+    return match.group(1)
 
 
 def run(args: list[str], *, timeout: int = 120) -> subprocess.CompletedProcess[str]:
@@ -76,7 +84,7 @@ def build_bundle(
         "CFBundleInfoDictionaryVersion": "6.0",
         "CFBundleName": app_name,
         "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": "0.2.0",
+        "CFBundleShortVersionString": binary_version(),
         "CFBundleVersion": "1",
         "LSMinimumSystemVersion": "14.0",
         "LSUIElement": True,

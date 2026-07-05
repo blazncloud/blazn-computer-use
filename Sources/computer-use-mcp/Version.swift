@@ -1,7 +1,7 @@
 import Foundation
 
 // Single source of truth for the binary version.
-let version = "0.4.0"
+let version = "0.4.1"
 
 /// Modification time (epoch seconds) of the running executable, sent in the
 /// daemon handshake so a rebuilt binary retires a daemon running older code
