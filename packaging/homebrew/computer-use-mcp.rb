@@ -1,6 +1,6 @@
 # DRAFT — groundwork for a future Homebrew tap. NOT published or tapped yet.
 #
-# Filled in for the v0.4.0 release tarball (url/sha256/version below). The one
+# Filled in for the v0.4.1 release tarball (url/sha256/version below). The one
 # remaining step to make it installable: copy this file into a homebrew-tap repo
 # (e.g. minghinmatthewlam/homebrew-tap) so users can
 # `brew install minghinmatthewlam/tap/computer-use-mcp`. On each new release,
@@ -17,9 +17,9 @@ class ComputerUseMcp < Formula
   homepage "https://github.com/minghinmatthewlam/computer-use-mcp"
   license "MIT"
 
-  version "0.4.0"
-  url "https://github.com/minghinmatthewlam/computer-use-mcp/archive/refs/tags/v0.4.0.tar.gz"
-  sha256 "207ddbec27b62adcf26e0e81ecca4f078ae2f07bcce54724a9f4817479b6af2b"
+  version "0.4.1"
+  url "https://github.com/minghinmatthewlam/computer-use-mcp/archive/refs/tags/v0.4.1.tar.gz"
+  sha256 "f779fe77302980ee898a94dc4ba93b888cdfc2f9324a4d510784a575f7a3a279"
 
   depends_on :macos
   depends_on macos: :sonoma # macOS 14+
