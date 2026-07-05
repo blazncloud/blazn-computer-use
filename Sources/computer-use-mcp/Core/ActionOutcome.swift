@@ -12,6 +12,8 @@ import ApplicationServices
 import Foundation
 import MCP
 
+let actionOutcomeMetaKey = "computer-use-mcp/outcome"
+
 // MARK: - Classification and failure domain
 
 /// The verifier's verdict on whether an action's intended effect occurred.
@@ -644,6 +646,6 @@ func verifierToggleState(_ element: AXUIElement) -> Bool? {
 extension CallTool.Result {
     func withActionOutcome(_ outcome: ActionOutcome?) -> CallTool.Result {
         guard let outcome else { return self }
-        return mergingMetaField("computer-use-mcp/outcome", outcome.value)
+        return mergingMetaField(actionOutcomeMetaKey, outcome.value)
     }
 }

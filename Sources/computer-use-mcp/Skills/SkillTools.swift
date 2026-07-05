@@ -165,9 +165,22 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     // Locators resolve against the latest snapshot; make sure one exists.
     try await refreshSkillSnapshot(app: app)
 
+    var replayRecorder = ReplayVerdictRecorder(skill: skill, startAtStep: startAtStep)
     var summary: [String] =
         startAtStep > 1 ? ["(steps 1-\(startAtStep - 1) skipped via start_at_step)"] : []
-    func failure(step: Int, tool: String, reason: String) -> CallTool.Result {
+    func failure(
+        step: Int,
+        tool: String,
+        reason: String,
+        failureKind: ReplayFailureKind,
+        result: CallTool.Result? = nil
+    ) -> CallTool.Result {
+        replayRecorder.recordFailure(
+            step: step,
+            result: result,
+            reason: reason,
+            failureKind: failureKind
+        )
         var text = "Skill \"\(name)\" stopped at step \(step) of \(skill.steps.count) (\(tool)): \(reason)\n"
         text += summary.isEmpty
             ? "No earlier steps ran.\n" : "Steps already run:\n" + summary.joined(separator: "\n") + "\n"
@@ -176,7 +189,11 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
             + "\(skill.app) for current state; fix this step, re-save with save_skill "
             + "overwrite:true, then rerun with start_at_step: \(step) to continue without "
             + "redoing the earlier steps."
-        return .text(text, isError: true)
+        var failed = CallTool.Result.text(text, isError: true)
+        if let result {
+            failed._meta = result._meta
+        }
+        return failed.withReplayVerdict(replayRecorder.verdict)
     }
 
     var steps = skill.steps
@@ -189,14 +206,21 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         guard leftover.isEmpty else {
             return failure(
                 step: index + 1, tool: step.tool,
-                reason: "unresolved placeholders \(Set(leftover).sorted().map { "{{\($0)}}" }.joined(separator: ", ")) — pass them in params")
+                reason: "unresolved placeholders \(Set(leftover).sorted().map { "{{\($0)}}" }.joined(separator: ", ")) — pass them in params",
+                failureKind: .arguments
+            )
         }
         arguments["app"] = .string(skill.app)
         arguments["include_screenshot"] = .bool(false)
 
         if let locator = step.locator {
             guard let snapshot = await SnapshotStore.shared.load(forPid: app.pid) else {
-                return failure(step: index + 1, tool: step.tool, reason: "no app state available for locator resolution")
+                return failure(
+                    step: index + 1,
+                    tool: step.tool,
+                    reason: "no app state available for locator resolution",
+                    failureKind: .locator
+                )
             }
             switch resolveSkillLocator(locator, in: snapshot) {
             case .found(let element, let viaFallback):
@@ -208,13 +232,33 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
                     healedSteps.append(index + 1)
                 }
             case .failed(let why):
-                return failure(step: index + 1, tool: step.tool, reason: why)
+                return failure(
+                    step: index + 1,
+                    tool: step.tool,
+                    reason: why,
+                    failureKind: .locator
+                )
             }
         }
 
         let result = await dispatchTool(name: step.tool, arguments: arguments)
         if result.isError == true {
-            return failure(step: index + 1, tool: step.tool, reason: batchResultText(result))
+            return failure(
+                step: index + 1,
+                tool: step.tool,
+                reason: batchResultText(result),
+                failureKind: .toolError,
+                result: result
+            )
+        }
+        if let outcome = replayStepOutcome(from: result), outcome.classification != .success {
+            return failure(
+                step: index + 1,
+                tool: step.tool,
+                reason: outcome.summary ?? "step outcome was \(outcome.classification.rawValue)",
+                failureKind: .outcome,
+                result: result
+            )
         }
         if step.tool == "read_text" {
             extracts.append("— step \(index + 1):\n" + batchResultText(result))
@@ -236,10 +280,14 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
             if waitResult.isError == true {
                 return failure(
                     step: index + 1, tool: step.tool,
-                    reason: "the step ran but its expectation was not met — " + batchResultText(waitResult))
+                    reason: "the step ran but its expectation was not met — " + batchResultText(waitResult),
+                    failureKind: .expectation,
+                    result: result
+                )
             }
             lastResult = waitResult
         }
+        replayRecorder.recordSuccess(step: index + 1, result: result)
         summary.append("✓ step \(index + 1) \(step.tool)")
     }
 
@@ -264,7 +312,9 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         header += "\nExtracted:\n" + extracts.joined(separator: "\n") + "\n"
     }
     header += "\nFinal state below.\n\n"
-    guard let lastResult else { return .text(header) }
+    guard let lastResult else {
+        return CallTool.Result.text(header).withReplayVerdict(replayRecorder.verdict)
+    }
     var content = lastResult.content
     if case .text(let existing, let annotations, let meta)? = content.first {
         content[0] = .text(text: header + existing, annotations: annotations, _meta: meta)
@@ -272,6 +322,7 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         content.insert(.text(text: header, annotations: nil, _meta: nil), at: 0)
     }
     return CallTool.Result(content: content, isError: lastResult.isError, _meta: lastResult._meta)
+        .withReplayVerdict(replayRecorder.verdict)
 }
 
 /// Capture a fresh snapshot for locator resolution (mirrors find's capture:
