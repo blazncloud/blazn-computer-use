@@ -251,7 +251,19 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
                 result: result
             )
         }
-        if let outcome = replayStepOutcome(from: result), outcome.classification != .success {
+        if step.tool == "wait_for", replayExpectationTimedOut(result) {
+            return failure(
+                step: index + 1,
+                tool: step.tool,
+                reason: batchResultText(result),
+                failureKind: .expectation,
+                result: result
+            )
+        }
+
+        let outcome = replayStepOutcome(from: result)
+        let needsExpectationProof = outcome.map { $0.classification != .success } ?? false
+        if let outcome, replayOutcomeFailsBeforeExpectation(outcome, hasExpectation: step.expect != nil) {
             return failure(
                 step: index + 1,
                 tool: step.tool,
@@ -264,6 +276,7 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
             extracts.append("— step \(index + 1):\n" + batchResultText(result))
         }
         lastResult = result
+        var replaySuccessResult = result
 
         if let expect = step.expect {
             var waitArguments: [String: Value] = ["app": .string(skill.app)]
@@ -286,8 +299,11 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
                 )
             }
             lastResult = waitResult
+            if needsExpectationProof {
+                replaySuccessResult = waitResult
+            }
         }
-        replayRecorder.recordSuccess(step: index + 1, result: result)
+        replayRecorder.recordSuccess(step: index + 1, result: replaySuccessResult)
         summary.append("✓ step \(index + 1) \(step.tool)")
     }
 
@@ -327,6 +343,10 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
 func replayExpectationTimedOut(_ result: CallTool.Result) -> Bool {
     batchResultText(result).hasPrefix("TIMED OUT after ")
+}
+
+func replayOutcomeFailsBeforeExpectation(_ outcome: ReplayStepOutcome, hasExpectation: Bool) -> Bool {
+    outcome.classification == .unsupported || (outcome.classification != .success && !hasExpectation)
 }
 
 /// Capture a fresh snapshot for locator resolution (mirrors find's capture:
