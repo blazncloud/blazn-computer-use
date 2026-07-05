@@ -277,7 +277,7 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
             if expect.gone == true { waitArguments["gone"] = .bool(true) }
             if let timeout = expect.timeoutSeconds { waitArguments["timeout_seconds"] = .double(timeout) }
             let waitResult = await dispatchTool(name: "wait_for", arguments: waitArguments)
-            if waitResult.isError == true {
+            if waitResult.isError == true || replayExpectationTimedOut(waitResult) {
                 return failure(
                     step: index + 1, tool: step.tool,
                     reason: "the step ran but its expectation was not met — " + batchResultText(waitResult),
@@ -323,6 +323,10 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     }
     return CallTool.Result(content: content, isError: lastResult.isError, _meta: lastResult._meta)
         .withReplayVerdict(replayRecorder.verdict)
+}
+
+func replayExpectationTimedOut(_ result: CallTool.Result) -> Bool {
+    batchResultText(result).hasPrefix("TIMED OUT after ")
 }
 
 /// Capture a fresh snapshot for locator resolution (mirrors find's capture:

@@ -170,4 +170,12 @@ private func syntheticReplay(
         #expect(step.classification == nil)
         #expect(step.failureKind == .expectation)
     }
+
+    @Test func replayExpectationTimeoutRecognizesWaitForTimeoutText() {
+        let timeout = CallTool.Result.text("TIMED OUT after 1s waiting for label \"Done\". Current state below.")
+        let met = CallTool.Result.text("Condition met after 0.4s: label \"Done\" appeared.")
+
+        #expect(replayExpectationTimedOut(timeout) == true)
+        #expect(replayExpectationTimedOut(met) == false)
+    }
 }
