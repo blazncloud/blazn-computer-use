@@ -181,7 +181,20 @@ import Testing
         #expect(!outcome.webAXEchoRisk)
     }
 
-    @Test func webAXEchoIndependentCorroboratingDiffIsNotDowngraded() {
+    @Test func focusedWebAXTypeWindowChangeWithoutIndependentDiffIsDowngraded() {
+        var v = ActionVerification()
+        v.renderedTextChanged = true
+        v.targetInWebArea = true
+        v.independentElementChanged = false
+        let outcome = ActionVerifier.reduce(
+            family: .type, intent: .insertText("hello"), verification: v,
+            rereadFailed: false, dispatchSucceeded: true, deliveryTier: attrTier, hasTargetElement: false)
+        #expect(outcome.classification == .effectNotVerified)
+        #expect(outcome.failureDomain == .web)
+        #expect(outcome.webAXEchoRisk)
+    }
+
+    @Test func webAXEchoIndependentDiffStillDowngradesAttributeDelivery() {
         var v = ActionVerification()
         v.beforeValuePreview = ""
         v.afterValuePreview = "hello"
@@ -192,8 +205,9 @@ import Testing
         let outcome = ActionVerifier.reduce(
             family: .type, intent: .insertText("hello"), verification: v,
             rereadFailed: false, dispatchSucceeded: true, deliveryTier: attrTier, hasTargetElement: true)
-        #expect(outcome.classification == .success)
-        #expect(!outcome.webAXEchoRisk)
+        #expect(outcome.classification == .effectNotVerified)
+        #expect(outcome.failureDomain == .web)
+        #expect(outcome.webAXEchoRisk)
     }
 
     @Test func nonWebAXValueEchoIsNotDowngraded() {

@@ -225,16 +225,31 @@ struct TreeDiff {
     var isCompact: Bool { entryCount > 0 && entryCount * 2 <= totalElements }
 
     /// True when the post-state diff contains any changed/added/removed line
-    /// other than the acted target's own line. This is the corroboration needed
-    /// for web-value writes, where the target's AXValue can echo without DOM
-    /// observation.
+    /// other than the acted target's own line. Without a target line,
+    /// independence cannot be proven.
     func hasChangeIndependent(of target: SnapshotElement?) -> Bool {
-        let entries = changed + added + removed
-        guard let target else { return !entries.isEmpty }
+        hasChangeIndependent(in: changed + added + removed, of: target) { _ in true }
+    }
+
+    /// Text-entry web corroboration is stricter than "some sibling changed":
+    /// the independent line must carry the requested text in post-action
+    /// changed/added content, or unrelated timers/deletions could be mistaken
+    /// for proof that the write landed.
+    func hasChangeIndependent(of target: SnapshotElement?, matching text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        return hasChangeIndependent(in: changed + added, of: target) { line in
+            String(line).localizedCaseInsensitiveContains(text)
+        }
+    }
+
+    private func hasChangeIndependent(
+        in entries: [String], of target: SnapshotElement?, where lineMatches: (String.SubSequence) -> Bool
+    ) -> Bool {
+        guard let target else { return false }
         let targetPrefix = target.id + " "
         return entries.contains { entry in
             let body = entry.dropFirst(2)
-            return !body.hasPrefix(targetPrefix)
+            return !body.hasPrefix(targetPrefix) && lineMatches(body)
         }
     }
 }

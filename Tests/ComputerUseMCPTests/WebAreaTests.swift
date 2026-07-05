@@ -93,6 +93,32 @@ private let web0 = LocatorStep(role: "AXWebArea", indexOfRole: 0)
         let target = element(2, role: "AXTextField", path: [group0, LocatorStep(role: "AXTextField", indexOfRole: 0)])
         #expect(!targetIsInWebArea(nil, snapshotElement: target))
     }
+
+    @Test func diffWithoutTargetCannotProveIndependentChange() {
+        let diff = TreeDiff(changed: ["~ e1@s1 AXTextField value=hello"], added: [], removed: [], totalElements: 1)
+        #expect(!diff.hasChangeIndependent(of: nil))
+    }
+
+    @Test func diffAgainstTargetIgnoresOnlyTargetLine() {
+        let target = element(1, role: "AXTextField", path: [group0])
+        let targetOnly = TreeDiff(changed: ["~ e1@s1 AXTextField value=hello"], added: [], removed: [], totalElements: 1)
+        let sibling = TreeDiff(changed: ["~ e2@s1 AXStaticText value=hello"], added: [], removed: [], totalElements: 2)
+        #expect(!targetOnly.hasChangeIndependent(of: target))
+        #expect(sibling.hasChangeIndependent(of: target))
+    }
+
+    @Test func textMatchingDiffRequiresIndependentLineWithRequestedText() {
+        let target = element(1, role: "AXTextField", path: [group0])
+        let timer = TreeDiff(changed: ["~ e2@s1 AXStaticText value=12:34"], added: [], removed: [], totalElements: 2)
+        let echo = TreeDiff(changed: ["~ e1@s1 AXTextField value=hello"], added: [], removed: [], totalElements: 1)
+        let readout = TreeDiff(changed: ["~ e2@s1 AXStaticText value=hello"], added: [], removed: [], totalElements: 2)
+        let removed = TreeDiff(changed: [], added: [], removed: ["- e2@s1 AXStaticText value=hello"], totalElements: 1)
+        #expect(!timer.hasChangeIndependent(of: target, matching: "hello"))
+        #expect(!echo.hasChangeIndependent(of: target, matching: "hello"))
+        #expect(readout.hasChangeIndependent(of: target, matching: "hello"))
+        #expect(!removed.hasChangeIndependent(of: target, matching: "hello"))
+        #expect(!readout.hasChangeIndependent(of: target, matching: ""))
+    }
 }
 
 @Suite struct WebRendererDetectionTests {

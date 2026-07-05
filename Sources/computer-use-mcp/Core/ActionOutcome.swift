@@ -100,7 +100,8 @@ struct ActionVerification: Sendable {
     /// be an accessibility echo rather than renderer/DOM evidence.
     var targetInWebArea: Bool? = nil
     /// A post-state diff line changed somewhere other than the acted target.
-    /// This is independent corroboration that the renderer/UI observed work.
+    /// For web text writes this diagnostic bit is only true when that line
+    /// includes the requested text.
     var independentElementChanged: Bool? = nil
 
     // Derived: any target-local field moved.
@@ -366,6 +367,9 @@ extension ActionVerifier {
                 return .success("The typed text is present in the field.", v)
             }
             if windowChanged {
+                if let webEcho = webAXEchoDowngradeIfNeeded(verification: v, deliveryTier: deliveryTier) {
+                    return webEcho
+                }
                 return .success("The typed text is reflected in the UI.", v)
             }
             if v.afterValuePreview == nil {
@@ -509,17 +513,16 @@ extension ActionVerifier {
     ) -> ActionOutcome? {
         guard v.targetInWebArea == true else { return nil }
         guard deliveryTier == InputTier.accessibilityAttribute.rawValue else { return nil }
-        guard v.independentElementChanged != true else { return nil }
         var record = v
         record.notes.append(
-            "The only confirming signal was the target element's AX value echo; no independent web-content diff corroborated it."
+            "AX attribute delivery inside web content can echo local accessibility state without proving renderer/DOM observation."
         )
         return ActionOutcome(
             classification: .effectNotVerified,
             failureDomain: .web,
             summary:
-                "The target is inside web content. Accessibility echoed the written value back, but no independent "
-                + "web-content change confirmed that the renderer or DOM observed it.",
+                "The target is inside web content. Accessibility reported a change, but AX attribute delivery "
+                + "does not prove that the renderer or DOM observed it.",
             verification: record,
             webAXEchoRisk: true)
     }
@@ -572,6 +575,18 @@ struct ActionVerifier: Sendable {
         return .ambiguous(nil, "State verification was skipped (include_state=false).", record)
     }
 
+    private func independentElementChanged(in diff: TreeDiff?) -> Bool? {
+        guard let diff else { return nil }
+        switch (family, intent) {
+        case (.type, .insertText(let text)), (.setValue, .setText(let text)):
+            return diff.hasChangeIndependent(of: snapshotElement, matching: text)
+        case (.setValue, .setNumber):
+            return false
+        default:
+            return diff.hasChangeIndependent(of: snapshotElement)
+        }
+    }
+
     /// Re-resolve the target, read the after-state, and reduce to an outcome.
     /// A reread problem degrades the classification; it never throws.
     func finalize(
@@ -581,7 +596,7 @@ struct ActionVerifier: Sendable {
 
         var v = before
         v.renderedTextChanged = treeChanged
-        v.independentElementChanged = diff?.hasChangeIndependent(of: snapshotElement)
+        v.independentElementChanged = independentElementChanged(in: diff)
         if let beforeWindowTitle {
             v.windowTitleChanged = beforeWindowTitle != afterWindowTitle
         }
