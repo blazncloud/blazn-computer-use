@@ -144,7 +144,8 @@ private func pageClick(
 ) async throws -> CallTool.Result {
     if host == .wkWebView || host == .unsupported {
         return try await pageClickAXFallback(
-            app: app, window: window, selector: selector, args: args, focus: focus, host: host)
+            app: app, window: window, selector: selector, verifySelector: verifySelector,
+            args: args, focus: focus, host: host)
     }
 
     let before = try await pageProbe(selector: selector, verifySelector: verifySelector, app: app, window: window, cdpPort: cdpPort, targetURLContains: targetURLContains)
@@ -184,7 +185,8 @@ private func pageSetText(
 ) async throws -> CallTool.Result {
     if host == .wkWebView || host == .unsupported {
         return try await pageSetTextAXFallback(
-            app: app, window: window, selector: selector, text: text, args: args, focus: focus, host: host)
+            app: app, window: window, selector: selector, text: text, verifySelector: verifySelector,
+            args: args, focus: focus, host: host)
     }
 
     let before = try await pageDOMSnapshot(
@@ -212,12 +214,13 @@ private func pageClickAXFallback(
     app: ResolvedApp,
     window: TargetWindow,
     selector: String,
+    verifySelector: String,
     args: [String: Value],
     focus: FocusChangeTracker,
     host: PageHostType
 ) async throws -> CallTool.Result {
     let target = try findAXElement(selector: selector, in: window.element)
-    let before = axElementSignature(window.element)
+    let before = axFallbackReadbackSignature(selector: verifySelector, in: window.element)
     let point = axFrame(target).map { CGPoint(x: $0.midX, y: $0.midY) }
     let tier: InputTier
     var fallbackReasons: [FallbackReason] = []
@@ -240,7 +243,7 @@ private func pageClickAXFallback(
         await AgentCursor.shared.pulse(at: point, targetWindow: windowID(for: window.element))
     }
     try? await Task.sleep(for: .milliseconds(80))
-    let after = axElementSignature(window.element)
+    let after = axFallbackReadbackSignature(selector: verifySelector, in: window.element)
     let outcome = classifyPageOutcome(
         evidence: .axOnly, action: .click, beforeDOM: nil, afterDOM: nil,
         axChanged: before != after, deliveryTier: tier.rawValue, host: host)
@@ -257,12 +260,14 @@ private func pageSetTextAXFallback(
     window: TargetWindow,
     selector: String,
     text: String,
+    verifySelector: String,
     args: [String: Value],
     focus: FocusChangeTracker,
     host: PageHostType
 ) async throws -> CallTool.Result {
     let target = try findAXElement(selector: selector, in: window.element)
-    let before = verifierValuePreview(target)
+    let readbackTarget = (try? findAXElement(selector: verifySelector, in: window.element)) ?? target
+    let before = verifierValuePreview(readbackTarget)
     var settable = DarwinBoolean(false)
     guard
         AXUIElementIsAttributeSettable(target, kAXValueAttribute as CFString, &settable) == .success,
@@ -281,7 +286,7 @@ private func pageSetTextAXFallback(
     guard error == .success else {
         throw ToolError.failed("AX fallback set_value failed for \(selector) (\(axErrorDescription(error))).")
     }
-    let after = verifierValuePreview(target)
+    let after = verifierValuePreview(readbackTarget)
     let outcome = classifyPageOutcome(
         evidence: .axOnly, action: .setText, beforeDOM: nil, afterDOM: nil,
         axChanged: before != after, deliveryTier: InputTier.accessibilityAttribute.rawValue,
@@ -709,7 +714,7 @@ private struct CDPClient {
 
 private func findAXElement(selector: String, in root: AXUIElement) throws -> AXUIElement {
     let query = AXSelectorQuery(selector)
-    var stack = [root]
+    var stack = axWebSearchRoots(in: root)
     var visited = 0
     while let element = stack.popLast() {
         visited += 1
@@ -720,7 +725,12 @@ private func findAXElement(selector: String, in root: AXUIElement) throws -> AXU
     throw ToolError.failed("No AX fallback element matched selector \(selector).")
 }
 
-private struct AXSelectorQuery {
+private func axWebSearchRoots(in root: AXUIElement) -> [AXUIElement] {
+    let webAreas = axDescendants(of: root, limit: 5000).filter { axRole($0) == "AXWebArea" }
+    return webAreas.isEmpty ? [root] : Array(webAreas.reversed())
+}
+
+struct AXSelectorQuery {
     let raw: String
     let id: String?
     let text: String
@@ -743,12 +753,24 @@ private struct AXSelectorQuery {
     }
 
     func matches(_ element: AXUIElement) -> Bool {
-        if let roleHint, axRole(element) != roleHint { return false }
-        if let id, axString(element, "AXIdentifier") == id { return true }
+        matches(
+            AXSelectorFacts(
+                role: axRole(element),
+                label: clickableLabel(element),
+                value: axString(element, kAXValueAttribute),
+                axIdentifier: axString(element, "AXIdentifier"),
+                domIdentifier: axString(element, "AXDOMIdentifier")))
+    }
+
+    func matches(_ facts: AXSelectorFacts) -> Bool {
+        if let id, facts.domIdentifier == id { return true }
+        if let id, facts.axIdentifier == id { return true }
+        if let roleHint, facts.role != roleHint { return false }
         let haystack = [
-            clickableLabel(element),
-            axString(element, kAXValueAttribute),
-            axString(element, "AXIdentifier"),
+            facts.label,
+            facts.value,
+            facts.axIdentifier,
+            facts.domIdentifier,
         ].compactMap { $0?.lowercased() }.joined(separator: " ")
         if let id, haystack.contains(id.lowercased()) { return true }
         guard !text.isEmpty else { return false }
@@ -756,20 +778,45 @@ private struct AXSelectorQuery {
     }
 }
 
+struct AXSelectorFacts {
+    let role: String
+    let label: String?
+    let value: String?
+    let axIdentifier: String?
+    let domIdentifier: String?
+}
+
+private func axFallbackReadbackSignature(selector: String, in root: AXUIElement) -> String {
+    guard let target = try? findAXElement(selector: selector, in: root) else {
+        return axElementSignature(root)
+    }
+    return axElementSignature(target)
+}
+
 private func axElementSignature(_ root: AXUIElement) -> String {
     var lines: [String] = []
-    var stack = [root]
-    var visited = 0
-    while let element = stack.popLast() {
-        visited += 1
-        if visited > 1000 { break }
+    for element in [root] + axDescendants(of: root, limit: 1000) {
         lines.append(
-            [axRole(element), clickableLabel(element), axString(element, kAXValueAttribute)]
+            [
+                axRole(element),
+                clickableLabel(element),
+                axString(element, kAXValueAttribute),
+                axString(element, "AXDOMIdentifier"),
+            ]
                 .compactMap { $0 }
                 .joined(separator: ":"))
-        stack.append(contentsOf: axElements(element, kAXChildrenAttribute).reversed())
     }
     return lines.joined(separator: "\n")
+}
+
+private func axDescendants(of root: AXUIElement, limit: Int) -> [AXUIElement] {
+    var descendants: [AXUIElement] = []
+    var stack = Array(axElements(root, kAXChildrenAttribute).reversed())
+    while let element = stack.popLast(), descendants.count < limit {
+        descendants.append(element)
+        stack.append(contentsOf: axElements(element, kAXChildrenAttribute).reversed())
+    }
+    return descendants
 }
 
 func jsonString(_ value: String) -> String {

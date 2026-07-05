@@ -59,6 +59,36 @@ private struct MockPageJavaScriptExecutor: PageJavaScriptExecuting {
         #expect(pageHostType(for: app, frameworks: ["WebKit.framework"]) == .wkWebView)
     }
 
+    @Test func axSelectorMatchesWebKitDOMIdentifierForIDSelector() {
+        let query = AXSelectorQuery("#web-mutate-button")
+        let facts = AXSelectorFacts(
+            role: "AXButton", label: "Mutate DOM", value: nil,
+            axIdentifier: nil, domIdentifier: "web-mutate-button")
+        #expect(query.matches(facts))
+    }
+
+    @Test func axSelectorMatchesVerifySelectorDOMIdentifier() {
+        let query = AXSelectorQuery("#mutable")
+        let facts = AXSelectorFacts(
+            role: "AXStaticText", label: nil, value: "unmutated",
+            axIdentifier: nil, domIdentifier: "mutable")
+        #expect(query.matches(facts))
+    }
+
+    @Test func axSelectorKeepsAXIdentifierAndLabelHeuristicsAsFallbacks() {
+        let idQuery = AXSelectorQuery("#native-button")
+        let idFacts = AXSelectorFacts(
+            role: "AXButton", label: nil, value: nil,
+            axIdentifier: "native-button", domIdentifier: nil)
+        #expect(idQuery.matches(idFacts))
+
+        let labelQuery = AXSelectorQuery("#mutate-dom")
+        let labelFacts = AXSelectorFacts(
+            role: "AXButton", label: "Mutate DOM", value: nil,
+            axIdentifier: nil, domIdentifier: nil)
+        #expect(labelQuery.matches(labelFacts))
+    }
+
     @Test func domVerifiedMutationIsSuccess() {
         let before = PageDOMSnapshot(value: nil, text: "unmutated", pageSignature: "unmutated|")
         let after = PageDOMSnapshot(value: nil, text: "mutated", pageSignature: "mutated|")
