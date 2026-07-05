@@ -5,6 +5,7 @@
 //
 //   Tier 1  AX action (AXPress etc.)        — handled by callers, no event posted
 //   Tier 2  per-window NSEvent → CGEventPostToPid  — routed to a specific window
+//   Tier 2.5 SLEventPostToPid (SkyLight SPI) — FLAGGED prototype, default off
 //   Tier 3  CGEventPostToPid (no window affinity)  — delivered to the pid
 //   Tier 4  global cursor (CGWarp + session tap)   — GUARDED, opt-in, restores cursor
 //
@@ -34,6 +35,7 @@ enum InputTier: String {
     case accessibilityAction = "tier1-ax-action"
     case accessibilityAttribute = "tier1-ax-attribute"
     case perWindow = "tier2-per-window-nsevent"
+    case skyLight = "tier25-skylight-sleventpostto-pid"
     case perPid = "tier3-cgeventpostto-pid"
     case globalCursor = "tier4-global-cursor"
     case pasteboard = "pasteboard"
@@ -42,6 +44,7 @@ enum InputTier: String {
 }
 
 enum KeyDeliveryMode: String, Equatable {
+    case skyLight = "tier25-skylight-sleventpostto-pid"
     case perPid = "tier3-cgeventpostto-pid"
     case globalSessionTap = "tier4-global-session-tap"
 }
@@ -64,6 +67,12 @@ enum FallbackReason: String, Equatable, Sendable {
     /// NSEvent→CGEvent window bridging returned nil despite a resolvable
     /// window, so Tier 2 fell to the pid (Tier 3).
     case eventBridgeFailed = "event-bridge-failed"
+    /// The optional SkyLight Tier 2.5 rung was enabled, but the private
+    /// SLEventPostToPid symbol was absent or posting failed, so delivery fell
+    /// through to public per-pid CoreGraphics. This private SPI is dlopen'd and
+    /// env-gated because it may break across macOS releases and can be rejected
+    /// by notarization/App Review.
+    case skyLightUnavailable = "skylight-unavailable"
     /// The caller opted into the guarded global-cursor path (Tier 4),
     /// bypassing the background-safe tiers.
     case globalCursorRequested = "global-cursor-requested"
@@ -121,7 +130,9 @@ func perWindowFallbackReasons(context: DeliveryContext, bridgeSucceeded: Bool) -
 /// so a new tier is classified where it is defined.
 func isDroppableBackgroundDeliveryTier(_ rawTier: String) -> Bool {
     rawTier == InputTier.perWindow.rawValue
+        || rawTier == InputTier.skyLight.rawValue
         || rawTier == InputTier.perPid.rawValue
+        || rawTier == KeyDeliveryMode.skyLight.rawValue
         || rawTier == KeyDeliveryMode.perPid.rawValue
 }
 
@@ -184,37 +195,69 @@ func deliverClick(
         return event
     }
 
-    var outcome = DeliveryOutcome(tier: context.windowNumber != nil ? .perWindow : .perPid)
+    var pairs: [(down: CGEvent, up: CGEvent)] = []
     for clickState in 1...clickCount {
         guard let down = makeEvent(button.downType, clickState: clickState),
             let up = makeEvent(button.upType, clickState: clickState)
         else {
             throw ToolError.failed("Could not synthesize a click event.")
         }
-        outcome = postToTarget(down: down, up: up, at: point, context: context)
+        pairs.append((down, up))
     }
-    return outcome
-}
 
-/// Post a down/up pair to the target, preferring window-affined delivery.
-private func postToTarget(down: CGEvent, up: CGEvent, at point: CGPoint, context: DeliveryContext) -> DeliveryOutcome {
-    if let windowNumber = context.windowNumber, let frame = context.windowFrame,
-        let localDown = bridgedWindowEvent(from: down, point: point, windowNumber: windowNumber, windowFrame: frame),
-        let localUp = bridgedWindowEvent(from: up, point: point, windowNumber: windowNumber, windowFrame: frame)
-    {
-        localDown.postToPid(context.pid)
-        localUp.postToPid(context.pid)
+    if let windowNumber = context.windowNumber, let frame = context.windowFrame {
+        let bridgedPairs = pairs.compactMap { pair -> (down: CGEvent, up: CGEvent)? in
+            guard
+                let localDown = bridgedWindowEvent(from: pair.down, point: point, windowNumber: windowNumber, windowFrame: frame),
+                let localUp = bridgedWindowEvent(from: pair.up, point: point, windowNumber: windowNumber, windowFrame: frame)
+            else {
+                return nil
+            }
+            return (localDown, localUp)
+        }
+        if bridgedPairs.count == pairs.count {
+            for pair in bridgedPairs {
+                pair.down.postToPid(context.pid)
+                pair.up.postToPid(context.pid)
+            }
+            return DeliveryOutcome(
+                tier: .perWindow,
+                fallbackReasons: perWindowFallbackReasons(context: context, bridgeSucceeded: true)
+            )
+        }
+    }
+
+    let status = skyLightStatus(LiveSkyLightEventPosting.shared)
+    let postedSkyLight = postSkyLightMouseClick(
+        point: point, button: button, clickCount: clickCount, context: context)
+    if postedSkyLight {
         return DeliveryOutcome(
-            tier: .perWindow,
-            fallbackReasons: perWindowFallbackReasons(context: context, bridgeSucceeded: true)
+            tier: .skyLight,
+            fallbackReasons: syntheticFallbackReasons(context: context, bridgeSucceeded: false, skyLightStatus: .available)
         )
     }
-    down.postToPid(context.pid)
-    up.postToPid(context.pid)
+    let finalSkyLightStatus: SkyLightAttemptStatus = status == .available ? .unavailable : status
+
+    for pair in pairs {
+        pair.down.postToPid(context.pid)
+        pair.up.postToPid(context.pid)
+    }
     return DeliveryOutcome(
         tier: .perPid,
-        fallbackReasons: perWindowFallbackReasons(context: context, bridgeSucceeded: false)
+        fallbackReasons: syntheticFallbackReasons(context: context, bridgeSucceeded: false, skyLightStatus: finalSkyLightStatus)
     )
+}
+
+func syntheticFallbackReasons(
+    context: DeliveryContext,
+    bridgeSucceeded: Bool,
+    skyLightStatus: SkyLightAttemptStatus
+) -> [FallbackReason] {
+    var reasons = perWindowFallbackReasons(context: context, bridgeSucceeded: bridgeSucceeded)
+    if !bridgeSucceeded, skyLightStatus == .unavailable {
+        reasons.append(.skyLightUnavailable)
+    }
+    return reasons
 }
 
 /// Build a window-routed CGEvent by bridging an NSEvent carrying a windowNumber.
@@ -376,7 +419,12 @@ func unicodeTypingChunks(_ text: String) -> [[UniChar]] {
 @discardableResult
 func typeUnicodeText(_ text: String, context: DeliveryContext) throws -> InputTier {
     let source = CGEventSource(stateID: .privateState)
-    for var chunk in unicodeTypingChunks(text) {
+    var usedSkyLight = !text.isEmpty
+    for chunk in unicodeTypingChunks(text) {
+        if postSkyLightUnicodeKeyboard(chunk, pid: context.pid) {
+            continue
+        }
+        usedSkyLight = false
         guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
             let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
         else {
@@ -391,7 +439,7 @@ func typeUnicodeText(_ text: String, context: DeliveryContext) throws -> InputTi
         down.postToPid(context.pid)
         up.postToPid(context.pid)
     }
-    return .perPid
+    return usedSkyLight ? .skyLight : .perPid
 }
 
 func keyDeliveryMode(context: DeliveryContext, targetAppIsActive: Bool) throws -> KeyDeliveryMode {
@@ -422,6 +470,8 @@ func deliverKey(_ chord: KeyChord, context: DeliveryContext, targetAppIsActive: 
     if mode == .globalSessionTap {
         down.post(tap: .cgSessionEventTap)
         up.post(tap: .cgSessionEventTap)
+    } else if postSkyLightKey(chord, pid: context.pid) {
+        return .skyLight
     } else {
         down.postToPid(context.pid)
         up.postToPid(context.pid)

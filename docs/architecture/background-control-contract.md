@@ -26,6 +26,13 @@ guidance instead of silently switching to a foreground path.
 - `click`, `scroll`, and `drag` use element/coordinate resolution plus targeted
   delivery. Click has a real-cursor escape hatch; global cursor delivery
   requires both `allow_global_cursor` and `allow_focus_change`.
+- `COMPUTER_USE_MCP_SKYLIGHT=1` enables a flagged prototype click/key rung that
+  posts through private SkyLight `SLEventPostToPid` after per-window delivery is
+  unavailable and before public per-pid `CGEventPostToPid`. It is off by
+  default, `dlopen`/`dlsym` resolved at runtime, and still subject to the normal
+  verifier outcome contract. The SPI may break across macOS versions and may be
+  rejected by notarization or App Review, so release builds should treat it as
+  experimental.
 - `press_key` uses per-pid delivery by default. Its global keyboard escape hatch
   also requires `allow_focus_change` because shortcuts can change foreground
   focus even when the target app is already frontmost.
