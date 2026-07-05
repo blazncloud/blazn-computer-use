@@ -38,6 +38,7 @@ struct WebPane: NSViewRepresentable {
             Mutate DOM
           </button>
           <p id="mutable">unmutated</p>
+          <p><input id="web-text-field" type="text" placeholder="web text field" aria-label="web-text-field"></p>
           <article id="web-article">
             \(Array(1...40).map { "<p>Article paragraph \($0). Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>" }.joined(separator: "\n"))
           </article>
