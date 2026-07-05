@@ -552,6 +552,7 @@ let toolCatalog: [ToolSpec] = [
             ],
             required: ["app", "selector"]
         ),
+        annotations: destructiveAppActionAnnotations,
         handler: { args in try await page(args) }
     ),
     ToolSpec(
