@@ -20,6 +20,7 @@ struct ContentView: View {
 
                 HStack(alignment: .top, spacing: 16) {
                     RowListPane()
+                    ScrollProbePane()
                     webCard
                 }
             }
