@@ -30,7 +30,8 @@ actor AgentCursor {
     /// window, so occluders of the target also occlude the cursor.
     func glide(to point: CGPoint, targetWindow: CGWindowID? = nil) async {
         guard enabled else { return }
-        guard await send("move \(Int(point.x)) \(Int(point.y)) \(targetWindow ?? 0)\n", spawningIfNeeded: true) else { return }
+        guard let x = safeInt(point.x), let y = safeInt(point.y) else { return }
+        guard await send("move \(x) \(y) \(targetWindow ?? 0)\n", spawningIfNeeded: true) else { return }
         try? await Task.sleep(for: glideDuration)
     }
 
@@ -47,7 +48,8 @@ actor AgentCursor {
     /// the helper: a glide always precedes the actions that pulse.
     func pulse(at point: CGPoint, targetWindow: CGWindowID? = nil) async {
         guard enabled else { return }
-        _ = await send("pulse \(Int(point.x)) \(Int(point.y)) \(targetWindow ?? 0)\n", spawningIfNeeded: false)
+        guard let x = safeInt(point.x), let y = safeInt(point.y) else { return }
+        _ = await send("pulse \(x) \(y) \(targetWindow ?? 0)\n", spawningIfNeeded: false)
     }
 
     /// Switch the overlay's status pill to (or from) the recording state while

@@ -166,7 +166,7 @@ private func pageClick(
     let verifier = resolvedPageVerifier(outcome: outcome, tier: delivery.tier.rawValue)
     return try await stateResult(
         app: app, windowTitle: window.title,
-        note: "Clicked \(selector) via page DOM coordinates at screen (\(Int(point.x.rounded())),\(Int(point.y.rounded()))) [\(delivery.tier.rawValue)].",
+        note: "Clicked \(selector) via page DOM coordinates at screen (\(roundedIntegerDescription(point.x)),\(roundedIntegerDescription(point.y))) [\(delivery.tier.rawValue)].",
         screenshot: screenshotDetail(args),
         focusTelemetry: focus.finish(deliveryTier: delivery.tier.rawValue, fallbackReasons: delivery.fallbackReasons),
         verifier: verifier)
@@ -679,10 +679,10 @@ private func browserWindowTitleMatchAppleScript(_ title: String, windowFrame: CG
 
 private func browserWindowFramePreambleAppleScript(_ frame: CGRect) -> String {
     """
-      set targetLeft to \(Int(frame.minX.rounded()))
-      set targetTop to \(Int(frame.minY.rounded()))
-      set targetRight to \(Int(frame.maxX.rounded()))
-      set targetBottom to \(Int(frame.maxY.rounded()))
+      set targetLeft to \(roundedIntegerDescription(frame.minX))
+      set targetTop to \(roundedIntegerDescription(frame.minY))
+      set targetRight to \(roundedIntegerDescription(frame.maxX))
+      set targetBottom to \(roundedIntegerDescription(frame.maxY))
     """
 }
 

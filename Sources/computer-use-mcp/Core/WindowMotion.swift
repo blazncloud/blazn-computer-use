@@ -286,8 +286,8 @@ enum WindowMotion {
     // MARK: - Formatting
 
     static func frameDescription(_ rect: CGRect) -> String {
-        "(\(Int(rect.origin.x.rounded())),\(Int(rect.origin.y.rounded())) "
-            + "\(Int(rect.size.width.rounded()))x\(Int(rect.size.height.rounded())) pt)"
+        "(\(roundedIntegerDescription(rect.origin.x)),\(roundedIntegerDescription(rect.origin.y)) "
+            + "\(roundedIntegerDescription(rect.size.width))x\(roundedIntegerDescription(rect.size.height)) pt)"
     }
 }
 

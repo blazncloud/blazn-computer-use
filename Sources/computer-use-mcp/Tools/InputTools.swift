@@ -62,11 +62,20 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         // hit element, then a default page height.
         let viewport = (ranked.first ?? target.element)
             .flatMap { visibleViewport(of: $0, windowFrame: target.deliveryContext.windowFrame) }
+        func pageDelta(_ size: CGFloat) throws -> Int {
+            let raw = Double(size) * pages
+            guard raw.isFinite, abs(raw) <= Double(ArgumentBounds.maxScrollDelta), let delta = safeInt(raw) else {
+                throw ToolError.invalidArguments(
+                    "The requested scroll distance is outside the supported delta range."
+                )
+            }
+            return delta
+        }
         switch direction {
-        case "down": deltaY = Int(Double(viewport?.height ?? 400) * pages)
-        case "up": deltaY = -Int(Double(viewport?.height ?? 400) * pages)
-        case "right": deltaX = Int(Double(viewport?.width ?? 400) * pages)
-        case "left": deltaX = -Int(Double(viewport?.width ?? 400) * pages)
+        case "down": deltaY = try pageDelta(viewport?.height ?? 400)
+        case "up": deltaY = -(try pageDelta(viewport?.height ?? 400))
+        case "right": deltaX = try pageDelta(viewport?.width ?? 400)
+        case "left": deltaX = -(try pageDelta(viewport?.width ?? 400))
         default:
             throw ToolError.invalidArguments("direction must be up, down, left, or right.")
         }
@@ -271,8 +280,8 @@ func dragImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         beforeWindowTitle: snapshot.windowTitle)
     return try await stateResult(
         app: app, windowTitle: snapshot.windowTitle,
-        note: "Dragged from (\(Int(from.x.rounded())),\(Int(from.y.rounded()))) "
-            + "to (\(Int(to.x.rounded())),\(Int(to.y.rounded()))).",
+        note: "Dragged from (\(roundedIntegerDescription(from.x)),\(roundedIntegerDescription(from.y))) "
+            + "to (\(roundedIntegerDescription(to.x)),\(roundedIntegerDescription(to.y))).",
         screenshot: screenshotDetail(args),
         focusTelemetry: focus.finish(deliveryTier: tier.rawValue),
         verifier: verifier

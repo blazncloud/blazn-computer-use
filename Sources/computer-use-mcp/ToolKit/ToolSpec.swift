@@ -78,7 +78,11 @@ extension [String: Value] {
 
     func integer(_ key: String) -> Int? {
         if let int = self[key]?.intValue { return int }
-        if let double = self[key]?.doubleValue, double == double.rounded() { return Int(double) }
+        if let double = self[key]?.doubleValue, double.isFinite, double == double.rounded(),
+            double >= Double(Int.min), double <= Double(Int.max)
+        {
+            return safeInt(double)
+        }
         return nil
     }
 

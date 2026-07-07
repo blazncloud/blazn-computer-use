@@ -241,7 +241,7 @@ func axFrame(_ element: AXUIElement) -> CGRect? {
     guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
         AXValueGetValue(sizeValue as! AXValue, .cgSize, &size)
     else { return nil }
-    return CGRect(origin: position, size: size)
+    return sanitizedRect(CGRect(origin: position, size: size))
 }
 
 /// Copy a parameterized AX attribute (one that takes an input, e.g. a range).

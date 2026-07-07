@@ -38,12 +38,22 @@ func screenPoint(x: Double, y: Double, snapshot: AppSnapshot) throws -> CGPoint 
     else {
         throw ToolError.failed("The latest snapshot has no window element. Call get_app_state again.")
     }
+    let width = size.count > 0 ? size[0] : Double.nan
+    let height = size.count > 1 ? size[1] : Double.nan
     // Pixel coordinates are zero-indexed: width/height themselves are outside.
-    guard x >= 0, y >= 0, x < size[0], y < size[1] else {
+    guard x.isFinite, y.isFinite, width.isFinite, height.isFinite,
+        x >= 0, y >= 0, x < width, y < height
+    else {
         throw ToolError.invalidArguments(
-            "Coordinate (\(Int(x)), \(Int(y))) is outside the \(Int(size[0]))x\(Int(size[1])) "
+            "Coordinate (\(integerDescription(x)), \(integerDescription(y))) is outside the "
+                + "\(integerDescription(width))x\(integerDescription(height)) "
                 + "screenshot. Coordinates are pixels in the latest get_app_state screenshot."
         )
+    }
+    guard snapshot.windowOrigin.count >= 2, snapshot.windowOrigin[0].isFinite, snapshot.windowOrigin[1].isFinite,
+        snapshot.pixelsPerPoint.isFinite, snapshot.pixelsPerPoint > 0
+    else {
+        throw ToolError.failed("The latest snapshot has invalid window geometry. Call get_app_state again.")
     }
     return snapshot.screenPoint(fromScreenshotX: x, y: y)
 }

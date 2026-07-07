@@ -1,8 +1,49 @@
+import CoreGraphics
 import Testing
 
 @testable import computer_use_mcp
 
 @Suite struct TreeBuilderTests {
+    @Test func nonFiniteFramesAreTreatedAsAbsentInTreeBuild() {
+        let invalidFrames = [
+            CGRect(x: CGFloat.nan, y: 10, width: 100, height: 50),
+            CGRect(x: 10, y: CGFloat.infinity, width: 100, height: 50),
+            CGRect(x: 10, y: 10, width: -CGFloat.infinity, height: 50),
+        ]
+
+        for (index, frame) in invalidFrames.enumerated() {
+            let node = MinimalTreeNode(role: "AXButton", label: "Invalid \(index)", frame: frame)
+            let built = buildMinimalTree(node)
+
+            #expect(built.elements.count == 1)
+            #expect(built.elements[0].frame == [0, 0, 0, 0])
+            #expect(!built.text.contains("("))
+            #expect(built.text.contains("Invalid \(index)"))
+        }
+    }
+
+    @Test func describeLineSafelyFormatsNonFiniteFrameValues() {
+        let facts = NodeFacts(
+            role: "AXButton", label: "Bad frame", identifier: nil, value: nil,
+            selectedText: nil, enabled: nil, focused: nil, selected: nil,
+            actions: [], frame: nil)
+
+        let line = describeLine(facts, id: "e0@s1", frame: [.nan, .infinity, -.infinity, 42], depth: 0)
+
+        #expect(line.contains("(?,?,?,42)"))
+        #expect(line.contains("Bad frame"))
+    }
+
+    @Test func nonFiniteWindowOriginOrScaleDropsFrame() {
+        let node = MinimalTreeNode(role: "AXButton", label: "Scaled", frame: CGRect(x: 10, y: 20, width: 30, height: 40))
+
+        let badOrigin = buildMinimalTree(node, windowOrigin: CGPoint(x: CGFloat.nan, y: 0))
+        let badScale = buildMinimalTree(node, pixelsPerPoint: Double.infinity)
+
+        #expect(badOrigin.elements[0].frame == [0, 0, 0, 0])
+        #expect(badScale.elements[0].frame == [0, 0, 0, 0])
+    }
+
     @Test func unlabeledActionlessGroupIsWrapper() {
         #expect(isStructuralWrapper(role: "AXGroup", label: nil, value: nil, focused: false, actions: []))
         // ShowMenu and ScrollToVisible are universal web-element noise, not signal.
@@ -35,6 +76,44 @@ import Testing
             #expect(!isStructuralWrapper(role: role, label: nil, value: nil, focused: false, actions: []))
         }
     }
+}
+
+private final class MinimalTreeNode {
+    let role: String
+    let label: String?
+    let frame: CGRect?
+
+    init(role: String, label: String? = nil, frame: CGRect? = nil) {
+        self.role = role
+        self.label = label
+        self.frame = frame
+    }
+}
+
+private func buildMinimalTree(
+    _ node: MinimalTreeNode,
+    windowOrigin: CGPoint = .zero,
+    pixelsPerPoint: Double = 1
+) -> BuiltTree {
+    buildTreeCore(
+        root: node,
+        accessors: TreeNodeAccessors<MinimalTreeNode>(
+            facts: { node in
+                NodeFacts(
+                    role: node.role, label: node.label, identifier: nil, value: nil,
+                    selectedText: nil, enabled: nil, focused: nil, selected: nil,
+                    actions: [], frame: node.frame)
+            },
+            role: { $0.role },
+            frame: { $0.frame },
+            children: { _ in [] },
+            visibleCollectionChildren: { _ in nil },
+            collectionTotal: { _ in nil },
+            equals: { $0 === $1 }
+        ),
+        windowOrigin: windowOrigin, pixelsPerPoint: pixelsPerPoint, generation: "s1",
+        pathPrefix: [], maxElements: defaultMaxTreeElements,
+        skeleton: false, windowCollections: true)
 }
 
 @Suite struct RoleDescriptionFallbackTests {

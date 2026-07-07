@@ -210,13 +210,16 @@ func buildTreeCore<Node>(
     var elements: [SnapshotElement] = []
 
     func pixelFrame(_ frame: CGRect?) -> [Double]? {
-        guard let frame else { return nil }
-        return [
+        guard let frame = frame.flatMap(sanitizedRect), sanitizedPoint(windowOrigin) != nil,
+            pixelsPerPoint.isFinite
+        else { return nil }
+        let pixels = [
             ((frame.origin.x - windowOrigin.x) * pixelsPerPoint).rounded(),
             ((frame.origin.y - windowOrigin.y) * pixelsPerPoint).rounded(),
             (frame.width * pixelsPerPoint).rounded(),
             (frame.height * pixelsPerPoint).rounded(),
         ]
+        return pixels.allSatisfy(\.isFinite) ? pixels : nil
     }
 
     var depthTruncated = false
@@ -442,7 +445,7 @@ func displayableIdentifier(_ identifier: String?) -> String? {
     return String(identifier.prefix(40)) + "…"
 }
 
-private func describeLine(_ facts: NodeFacts, id: String, frame: [Double]?, depth: Int) -> String {
+func describeLine(_ facts: NodeFacts, id: String, frame: [Double]?, depth: Int) -> String {
     var parts: [String] = ["\(id) \(facts.role)"]
 
     if let label = facts.label, !label.isEmpty {
@@ -452,8 +455,9 @@ private func describeLine(_ facts: NodeFacts, id: String, frame: [Double]?, dept
         // locator identity (and the skills built on it) must not change.
         parts.append("id=\"\(clean(identifier))\"")
     }
-    if let frame {
-        parts.append("(\(Int(frame[0])),\(Int(frame[1])),\(Int(frame[2])),\(Int(frame[3])))")
+    if let frame, frame.count >= 4 {
+        let coordinates = frame.prefix(4).map(integerDescription).joined(separator: ",")
+        parts.append("(\(coordinates))")
     }
     if let value = facts.value, !value.isEmpty {
         parts.append("value=\"\(clean(truncate(value)))\"")

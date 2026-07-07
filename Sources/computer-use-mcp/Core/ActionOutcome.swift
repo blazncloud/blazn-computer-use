@@ -505,7 +505,7 @@ extension ActionVerifier {
     }
 
     private static func frameString(_ pair: (Double, Double)) -> String {
-        "\(Int(pair.0.rounded()))x\(Int(pair.1.rounded()))"
+        "\(roundedIntegerDescription(pair.0))x\(roundedIntegerDescription(pair.1))"
     }
 
     private static func webAXEchoDowngradeIfNeeded(

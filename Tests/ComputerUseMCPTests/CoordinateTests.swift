@@ -34,6 +34,25 @@ private func makeSnapshot(
         #expect(throws: (any Error).self) { _ = try screenPoint(x: 9999, y: 10, snapshot: snapshot) }
     }
 
+    @Test func boundsRejectNonFiniteCoordinatesAndSnapshotSize() {
+        let snapshot = makeSnapshot()
+        #expect(throws: (any Error).self) { _ = try screenPoint(x: .nan, y: 10, snapshot: snapshot) }
+        #expect(throws: (any Error).self) { _ = try screenPoint(x: .infinity, y: 10, snapshot: snapshot) }
+        #expect(throws: (any Error).self) { _ = try screenPoint(x: -.infinity, y: 10, snapshot: snapshot) }
+
+        let badSize = makeSnapshot(windowSize: [.nan, 816])
+        #expect(throws: (any Error).self) { _ = try screenPoint(x: 10, y: 10, snapshot: badSize) }
+    }
+
+    @Test func safeIntRejectsNonFiniteAndUnrepresentableValues() {
+        #expect(safeInt(Double.nan) == nil)
+        #expect(safeInt(Double.infinity) == nil)
+        #expect(safeInt(-Double.infinity) == nil)
+        #expect(safeInt(Double(Int.max)) == nil)
+        #expect(safeInt(Double(Int.min)) == Int.min)
+        #expect(safeInt(42.0) == 42)
+    }
+
     @Test func boundsAcceptInterior() throws {
         let snapshot = makeSnapshot()
         let point = try screenPoint(x: 459, y: 815, snapshot: snapshot)
@@ -75,6 +94,11 @@ private func makeSnapshot(
         #expect(top == [0, 0, 500, 80])
         let bottom = pixelBox(normalized: CGRect(x: 0.5, y: 0, width: 0.25, height: 0.5), width: 1000, height: 800)
         #expect(bottom == [500, 400, 250, 400])
+    }
+
+    @Test func visionBoxFallsBackToZeroForNonFiniteInput() {
+        let box = pixelBox(normalized: CGRect(x: CGFloat.nan, y: 0, width: CGFloat.infinity, height: 0.5), width: 1000, height: 800)
+        #expect(box == [0, 400, 0, 400])
     }
 
     @Test func locatorRoundTrip() throws {

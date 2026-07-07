@@ -129,9 +129,15 @@ private func captureWindowUnbounded(
     let nativeHeight = filter.contentRect.height * scale
     let downscale = min(1.0, detail.maxDimension / max(nativeWidth, nativeHeight))
 
+    guard let captureWidth = safeInt(nativeWidth * downscale), let captureHeight = safeInt(nativeHeight * downscale),
+        captureWidth > 0, captureHeight > 0
+    else {
+        throw ToolError.failed("Window screenshot dimensions are not finite.")
+    }
+
     let configuration = SCStreamConfiguration()
-    configuration.width = Int(nativeWidth * downscale)
-    configuration.height = Int(nativeHeight * downscale)
+    configuration.width = captureWidth
+    configuration.height = captureHeight
     configuration.scalesToFit = true
     configuration.showsCursor = false
     configuration.captureResolution = .best

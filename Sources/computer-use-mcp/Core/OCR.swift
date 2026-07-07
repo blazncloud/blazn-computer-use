@@ -36,9 +36,9 @@ func recognizeText(inPNG pngData: Data, pixelWidth: Int, pixelHeight: Int) async
 /// top-left pixel coordinates.
 func pixelBox(normalized: CGRect, width: Int, height: Int) -> [Int] {
     [
-        Int((normalized.minX * Double(width)).rounded()),
-        Int(((1 - normalized.maxY) * Double(height)).rounded()),
-        Int((normalized.width * Double(width)).rounded()),
-        Int((normalized.height * Double(height)).rounded()),
+        safeRoundedInt(normalized.minX * Double(width)) ?? 0,
+        safeRoundedInt((1 - normalized.maxY) * Double(height)) ?? 0,
+        safeRoundedInt(normalized.width * Double(width)) ?? 0,
+        safeRoundedInt(normalized.height * Double(height)) ?? 0,
     ]
 }
