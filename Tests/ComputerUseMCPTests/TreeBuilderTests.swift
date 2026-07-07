@@ -44,6 +44,19 @@ import Testing
         #expect(badScale.elements[0].frame == [0, 0, 0, 0])
     }
 
+    @Test func exactBudgetCompleteTreeIsNotPartial() {
+        let node = MinimalTreeNode(
+            role: "AXWindow", label: "Window",
+            children: [MinimalTreeNode(role: "AXButton", label: "Done")]
+        )
+
+        let built = buildMinimalTree(node, maxElements: 2)
+
+        #expect(built.elements.count == 2)
+        #expect(built.isPartial == false)
+        #expect(!built.text.contains("tree truncated"))
+    }
+
     @Test func unlabeledActionlessGroupIsWrapper() {
         #expect(isStructuralWrapper(role: "AXGroup", label: nil, value: nil, focused: false, actions: []))
         // ShowMenu and ScrollToVisible are universal web-element noise, not signal.
@@ -82,18 +95,21 @@ private final class MinimalTreeNode {
     let role: String
     let label: String?
     let frame: CGRect?
+    let children: [MinimalTreeNode]
 
-    init(role: String, label: String? = nil, frame: CGRect? = nil) {
+    init(role: String, label: String? = nil, frame: CGRect? = nil, children: [MinimalTreeNode] = []) {
         self.role = role
         self.label = label
         self.frame = frame
+        self.children = children
     }
 }
 
 private func buildMinimalTree(
     _ node: MinimalTreeNode,
     windowOrigin: CGPoint = .zero,
-    pixelsPerPoint: Double = 1
+    pixelsPerPoint: Double = 1,
+    maxElements: Int = defaultMaxTreeElements
 ) -> BuiltTree {
     buildTreeCore(
         root: node,
@@ -106,13 +122,13 @@ private func buildMinimalTree(
             },
             role: { $0.role },
             frame: { $0.frame },
-            children: { _ in [] },
+            children: { $0.children },
             visibleCollectionChildren: { _ in nil },
             collectionTotal: { _ in nil },
             equals: { $0 === $1 }
         ),
         windowOrigin: windowOrigin, pixelsPerPoint: pixelsPerPoint, generation: "s1",
-        pathPrefix: [], maxElements: defaultMaxTreeElements,
+        pathPrefix: [], maxElements: maxElements,
         skeleton: false, windowCollections: true)
 }
 
