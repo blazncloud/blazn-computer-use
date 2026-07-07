@@ -37,17 +37,10 @@ struct PointTarget {
 }
 
 func resolvePointTarget(_ args: [String: Value], app: ResolvedApp, allowGlobalCursor: Bool = false) async throws -> PointTarget {
-    // Window + windowNumber for delivery (best-effort; nil disables Tier 2).
-    let snapshot = await SnapshotStore.shared.load(forPid: app.pid)
-    let window = try? targetWindow(for: app, title: snapshot?.windowTitle)
-    let windowNumber = window.flatMap { windowID(for: $0.element) }
-    let context = DeliveryContext(
-        pid: app.pid, windowNumber: windowNumber,
-        windowFrame: window?.frame, allowGlobalCursor: allowGlobalCursor
-    )
-
     if let elementID = args.string("element_id") {
         let target = try await resolveTarget(app: app, elementID: elementID)
+        let window = try? targetWindow(for: app, title: target.snapshot.windowTitle)
+        let context = pointDeliveryContext(app: app, window: window, allowGlobalCursor: allowGlobalCursor)
         let point = axFrame(target.element).map { CGPoint(x: $0.midX, y: $0.midY) }
         return PointTarget(
             element: target.element, snapshotElement: target.snapshotElement, point: point,
@@ -56,6 +49,9 @@ func resolvePointTarget(_ args: [String: Value], app: ResolvedApp, allowGlobalCu
     }
 
     if let x = args.number("x"), let y = args.number("y") {
+        let snapshot = await SnapshotStore.shared.load(forPid: app.pid)
+        let window = try? targetWindow(for: app, title: snapshot?.windowTitle)
+        let context = pointDeliveryContext(app: app, window: window, allowGlobalCursor: allowGlobalCursor)
         guard let snapshot else {
             throw ToolError.failed("Call get_app_state for \(app.name) before using coordinates.")
         }
@@ -68,4 +64,13 @@ func resolvePointTarget(_ args: [String: Value], app: ResolvedApp, allowGlobalCu
     }
 
     throw ToolError.invalidArguments("Provide element_id, or x and y screenshot coordinates.")
+}
+
+private func pointDeliveryContext(
+    app: ResolvedApp, window: TargetWindow?, allowGlobalCursor: Bool
+) -> DeliveryContext {
+    DeliveryContext(
+        pid: app.pid, windowNumber: window.flatMap { windowID(for: $0.element) },
+        windowFrame: window?.frame, allowGlobalCursor: allowGlobalCursor
+    )
 }

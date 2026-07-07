@@ -55,6 +55,10 @@ struct AppSnapshot: Codable {
     /// True when the element list covers a scoped subtree rather than the
     /// whole window; scoped snapshots are never diffed against.
     var scoped: Bool? = nil
+    /// True when a whole-window capture omitted known-live elements because
+    /// of truncation, skeleton depth, or collection windowing. Partial
+    /// snapshots must not invalidate ids they did not observe.
+    var partial: Bool? = nil
     let elements: [SnapshotElement]
 
     func element(withID id: String) -> SnapshotElement? {
@@ -78,6 +82,8 @@ actor SnapshotStore {
 
     private var cache: [pid_t: AppSnapshot] = [:]
     private var counters: [pid_t: Int] = [:]
+    private var history: [pid_t: [AppSnapshot]] = [:]
+    private let maxHistoryPerPid = 32
 
     private static var directory: URL {
         // Caches, not tmp: snapshot files must survive periodic temp cleaning
@@ -89,6 +95,10 @@ actor SnapshotStore {
 
     private static func url(forPid pid: pid_t) -> URL {
         directory.appendingPathComponent("snapshot-\(pid).json")
+    }
+
+    private static func historicalURL(forPid pid: pid_t, generation: String) -> URL {
+        directory.appendingPathComponent("snapshot-\(pid)-\(generation).json")
     }
 
     /// Allocate the next generation, build the tree with it, and persist —
@@ -111,6 +121,8 @@ actor SnapshotStore {
         // file, and two servers must never issue the same generation tag for
         // the same pid. One decode serves both the counter and the diff base.
         let disk = loadFromDisk(pid)
+        if let disk { remember(disk) }
+        _ = loadHistory(forPid: pid)
         let diskGeneration = disk.map(Self.parseGeneration) ?? 0
         let next = max(counters[pid] ?? 0, diskGeneration) + 1
         counters[pid] = next
@@ -118,20 +130,44 @@ actor SnapshotStore {
         var tree = buildTree(generation)
         let fingerprint = treeFingerprint(tree.text)
 
-        let previous = cache[pid] ?? disk
+        let previous = bestBaseline(
+            forPid: pid,
+            bundleIdentifier: bundleIdentifier,
+            windowTitle: windowTitle,
+            windowOrigin: windowOrigin,
+            windowSize: windowSize,
+            pixelsPerPoint: pixelsPerPoint,
+            scoped: scoped
+        )
         if let previous,
+            !tree.isPartial,
+            previous.partial != true,
             previous.treeFingerprint == fingerprint,
             previous.windowTitle == windowTitle,
             previous.windowOrigin == [windowOrigin.x, windowOrigin.y],
-            previous.pixelsPerPoint == pixelsPerPoint
+            previous.windowSize == windowSize,
+            previous.bundleIdentifier == bundleIdentifier,
+            previous.pixelsPerPoint == pixelsPerPoint,
+            (previous.scoped == true) == scoped
         {
-            cache[pid] = previous
-            return (previous, tree, true, nil)
+            let committedTree = Self.committedTree(from: previous, matching: tree)
+            var committedSnapshot = previous
+            if committedSnapshot.treeText == nil {
+                committedSnapshot.treeText = committedTree.text
+            }
+            cache[pid] = committedSnapshot
+            remember(committedSnapshot)
+            persist(committedSnapshot)
+            return (committedSnapshot, committedTree, true, nil)
         }
 
         var diff: TreeDiff?
-        if let previous, !scoped, previous.scoped != true,
+        if let previous, !scoped, !tree.isPartial,
+            previous.scoped != true, previous.partial != true,
+            previous.bundleIdentifier == bundleIdentifier,
             previous.windowTitle == windowTitle,
+            previous.windowOrigin == [windowOrigin.x, windowOrigin.y],
+            previous.windowSize == windowSize,
             previous.pixelsPerPoint == pixelsPerPoint,
             let stabilized = stabilizeTree(tree, against: previous)
         {
@@ -144,9 +180,10 @@ actor SnapshotStore {
             windowOrigin: [windowOrigin.x, windowOrigin.y], pixelsPerPoint: pixelsPerPoint,
             windowSize: windowSize, createdAt: createdAt, generation: generation,
             treeFingerprint: fingerprint, treeText: tree.text, scoped: scoped,
-            elements: tree.elements
+            partial: tree.isPartial, elements: tree.elements
         )
         cache[pid] = snapshot
+        remember(snapshot)
         persist(snapshot)
         return (snapshot, tree, false, diff)
     }
@@ -156,12 +193,113 @@ actor SnapshotStore {
         guard let disk = loadFromDisk(pid) else { return nil }
         cache[pid] = disk
         counters[pid] = max(counters[pid] ?? 0, Self.parseGeneration(disk))
+        remember(disk)
         return disk
+    }
+
+    func resolveElementSnapshot(forPid pid: pid_t, elementID: String) -> (snapshot: AppSnapshot, element: SnapshotElement, isLatest: Bool)? {
+        let latest = load(forPid: pid)
+        if let latest, let element = latest.element(withID: elementID) {
+            return (latest, element, true)
+        }
+        let snapshots = loadHistory(forPid: pid)
+        for snapshot in snapshots.reversed() {
+            if snapshot.generation == latest?.generation { continue }
+            if let latest, snapshot.bundleIdentifier != latest.bundleIdentifier { continue }
+            if let element = snapshot.element(withID: elementID),
+                let current = Self.currentEquivalentSnapshotElement(
+                    to: element, from: snapshot, among: snapshots)
+            {
+                return (current.snapshot, current.element, false)
+            }
+        }
+        return nil
+    }
+
+    func resetForTesting(pid: pid_t) {
+        clearMemoryForTesting(pid: pid)
+        try? FileManager.default.removeItem(at: Self.url(forPid: pid))
+        for url in historicalSnapshotURLs(forPid: pid) {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    func clearMemoryForTesting(pid: pid_t) {
+        cache.removeValue(forKey: pid)
+        counters.removeValue(forKey: pid)
+        history.removeValue(forKey: pid)
+    }
+
+    private func remember(_ snapshot: AppSnapshot) {
+        var snapshots = history[snapshot.pid] ?? []
+        if let existingIndex = snapshots.firstIndex(where: { $0.generation == snapshot.generation }) {
+            var merged = snapshot
+            let existing = snapshots[existingIndex]
+            if merged.treeFingerprint == nil { merged.treeFingerprint = existing.treeFingerprint }
+            if merged.treeText == nil { merged.treeText = existing.treeText }
+            if merged.scoped == nil { merged.scoped = existing.scoped }
+            if merged.partial == nil { merged.partial = existing.partial }
+            snapshots[existingIndex] = merged
+        } else {
+            snapshots.append(snapshot)
+        }
+        if snapshots.count > maxHistoryPerPid {
+            snapshots.removeFirst(snapshots.count - maxHistoryPerPid)
+        }
+        history[snapshot.pid] = snapshots
+    }
+
+    private func bestBaseline(
+        forPid pid: pid_t,
+        bundleIdentifier: String,
+        windowTitle: String?,
+        windowOrigin: CGPoint,
+        windowSize: [Double]?,
+        pixelsPerPoint: Double,
+        scoped: Bool
+    ) -> AppSnapshot? {
+        let candidates = history[pid] ?? []
+        return candidates
+            .filter {
+                $0.bundleIdentifier == bundleIdentifier
+                    && $0.windowTitle == windowTitle
+                    && $0.windowOrigin == [windowOrigin.x, windowOrigin.y]
+                    && $0.windowSize == windowSize
+                    && $0.pixelsPerPoint == pixelsPerPoint
+                    && ($0.scoped == true) == scoped
+                    && $0.partial != true
+            }
+            .max { Self.parseGeneration($0) < Self.parseGeneration($1) }
     }
 
     private func loadFromDisk(_ pid: pid_t) -> AppSnapshot? {
         guard let data = try? Data(contentsOf: Self.url(forPid: pid)) else { return nil }
         return try? JSONDecoder().decode(AppSnapshot.self, from: data)
+    }
+
+    private func loadHistory(forPid pid: pid_t) -> [AppSnapshot] {
+        let diskSnapshots = historicalSnapshotURLs(forPid: pid).compactMap { url -> AppSnapshot? in
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return try? JSONDecoder().decode(AppSnapshot.self, from: data)
+        }
+        for snapshot in diskSnapshots {
+            remember(snapshot)
+            counters[pid] = max(counters[pid] ?? 0, Self.parseGeneration(snapshot))
+        }
+        return history[pid] ?? []
+    }
+
+    private func historicalSnapshotURLs(forPid pid: pid_t) -> [URL] {
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: Self.directory, includingPropertiesForKeys: nil
+        ) else { return [] }
+        let prefix = "snapshot-\(pid)-s"
+        return entries.filter { url in
+            url.lastPathComponent.hasPrefix(prefix) && url.pathExtension == "json"
+        }.sorted { lhs, rhs in
+            Self.generation(fromHistoricalFilename: lhs.lastPathComponent, pid: pid)
+                < Self.generation(fromHistoricalFilename: rhs.lastPathComponent, pid: pid)
+        }
     }
 
     private func persist(_ snapshot: AppSnapshot) {
@@ -172,12 +310,28 @@ actor SnapshotStore {
             try FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
             let data = try JSONEncoder().encode(snapshot)
             try data.write(to: Self.url(forPid: snapshot.pid), options: .atomic)
+            try persistHistoricalData(for: snapshot)
         } catch {
             FileHandle.standardError.write(
                 Data("[computer-use-mcp] snapshot persist failed for pid \(snapshot.pid): \(error)\n".utf8)
             )
         }
+        pruneSnapshotHistory(forPid: snapshot.pid)
         pruneStaleFiles()
+    }
+
+    private func persistHistoricalData(for snapshot: AppSnapshot) throws {
+        var historical = snapshot
+        // Historical files only exist so ids returned by a peer process can
+        // resolve after another session advances the canonical snapshot. Keep
+        // the locator metadata, but do not retain rendered outline text with
+        // AX values/selected text for every prior generation.
+        historical.treeText = nil
+        let historicalData = try JSONEncoder().encode(historical)
+        try historicalData.write(
+            to: Self.historicalURL(forPid: snapshot.pid, generation: snapshot.generation),
+            options: .atomic
+        )
     }
 
     /// Best-effort: drop snapshot files older than an hour so the temp dir
@@ -195,8 +349,83 @@ actor SnapshotStore {
         }
     }
 
+    private func pruneSnapshotHistory(forPid pid: pid_t) {
+        let urls = historicalSnapshotURLs(forPid: pid)
+        guard urls.count > maxHistoryPerPid else { return }
+        for url in urls.prefix(urls.count - maxHistoryPerPid) {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
     private static func parseGeneration(_ snapshot: AppSnapshot) -> Int {
         Int(snapshot.generation.dropFirst()) ?? 0
+    }
+
+    private static func generation(fromHistoricalFilename filename: String, pid: pid_t) -> Int {
+        let prefix = "snapshot-\(pid)-s"
+        guard filename.hasPrefix(prefix), filename.hasSuffix(".json") else { return 0 }
+        let start = filename.index(filename.startIndex, offsetBy: prefix.count)
+        let end = filename.index(filename.endIndex, offsetBy: -".json".count)
+        return Int(filename[start..<end]) ?? 0
+    }
+
+    private static func currentEquivalentSnapshotElement(
+        to element: SnapshotElement, from candidate: AppSnapshot, among snapshots: [AppSnapshot]
+    ) -> (snapshot: AppSnapshot, element: SnapshotElement)? {
+        let candidateGeneration = parseGeneration(candidate)
+        var current = (snapshot: candidate, element: element)
+        for newer in snapshots where parseGeneration(newer) > candidateGeneration {
+            guard sameWindowLineage(candidate, newer) else { continue }
+            if let sameID = newer.element(withID: element.id) {
+                current = (newer, sameID)
+                continue
+            }
+            if let samePath = snapshotElement(atPath: element.path, in: newer) {
+                guard snapshotElement(samePath, matchesIdentityOf: element) else { return nil }
+                let stableIDElement = SnapshotElement(
+                    id: element.id, role: samePath.role, label: samePath.label,
+                    path: samePath.path, frame: samePath.frame)
+                current = (newer, stableIDElement)
+                continue
+            }
+            guard newer.scoped != true, newer.partial != true else { continue }
+            guard let candidateFingerprint = candidate.treeFingerprint,
+                let newerFingerprint = newer.treeFingerprint,
+                candidateFingerprint == newerFingerprint
+            else { return nil }
+        }
+        return current
+    }
+
+    private static func sameWindowLineage(_ lhs: AppSnapshot, _ rhs: AppSnapshot) -> Bool {
+        lhs.bundleIdentifier == rhs.bundleIdentifier
+            && lhs.windowTitle == rhs.windowTitle
+            && lhs.windowOrigin == rhs.windowOrigin
+            && lhs.windowSize == rhs.windowSize
+            && lhs.pixelsPerPoint == rhs.pixelsPerPoint
+            && (lhs.scoped == true || rhs.scoped != true)
+    }
+
+    private static func snapshotElement(atPath path: [LocatorStep], in snapshot: AppSnapshot) -> SnapshotElement? {
+        snapshot.elements.first { $0.path == path }
+    }
+
+    private static func snapshotElement(_ lhs: SnapshotElement, matchesIdentityOf rhs: SnapshotElement) -> Bool {
+        lhs.role == rhs.role && lhs.label == rhs.label
+    }
+
+    private static func committedTree(from snapshot: AppSnapshot, matching freshTree: BuiltTree) -> BuiltTree {
+        guard let text = snapshot.treeText else {
+            var lines = freshTree.text.components(separatedBy: "\n")
+            for index in freshTree.elements.indices where index < snapshot.elements.count && index < lines.count {
+                lines[index] = lines[index].replacingOccurrences(
+                    of: freshTree.elements[index].id, with: snapshot.elements[index].id)
+            }
+            return BuiltTree(
+                text: lines.joined(separator: "\n"), elements: snapshot.elements,
+                isPartial: snapshot.partial == true)
+        }
+        return BuiltTree(text: text, elements: snapshot.elements, isPartial: snapshot.partial == true)
     }
 }
 
@@ -340,7 +569,7 @@ func stabilizeTree(_ tree: BuiltTree, against previous: AppSnapshot) -> (tree: B
         return "- \(leftover.element.id) \(leftover.element.role)\(label) is gone"
     }
 
-    let stabilized = BuiltTree(text: newLines.joined(separator: "\n"), elements: elements)
+    let stabilized = BuiltTree(text: newLines.joined(separator: "\n"), elements: elements, isPartial: tree.isPartial)
     return (stabilized, TreeDiff(changed: changed, added: added, removed: removed, totalElements: elements.count))
 }
 

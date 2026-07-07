@@ -12,6 +12,13 @@ import Foundation
 struct BuiltTree {
     let text: String
     let elements: [SnapshotElement]
+    let isPartial: Bool
+
+    init(text: String, elements: [SnapshotElement], isPartial: Bool = false) {
+        self.text = text
+        self.elements = elements
+        self.isPartial = isPartial
+    }
 }
 
 let defaultMaxTreeElements = 500
@@ -223,9 +230,14 @@ func buildTreeCore<Node>(
     }
 
     var depthTruncated = false
+    var budgetTruncated = false
+    var coveragePartial = false
 
     func visit(_ element: Node, depth: Int, rawDepth: Int, path: [LocatorStep]) {
-        guard elements.count < maxNodes else { return }
+        guard elements.count < maxNodes else {
+            budgetTruncated = true
+            return
+        }
         guard depth <= maxDepth, rawDepth <= maxRawDepth else {
             depthTruncated = true
             return
@@ -258,6 +270,7 @@ func buildTreeCore<Node>(
         // Skeleton overview: a container past the shallow depth is kept as a
         // drill target (children_count) but not expanded.
         if skeleton, depth >= skeletonMaxDepth, !children.isEmpty {
+            coveragePartial = true
             if let lineIndex {
                 let total = accessors.collectionTotal(element) ?? children.count
                 lines[lineIndex] += " children_count=\(total)"
@@ -278,6 +291,9 @@ func buildTreeCore<Node>(
         let scanLimit =
             window?.scanLimit
             ?? (windowCollections ? min(children.count, maxChildrenPerNode) : children.count)
+        if scanLimit < children.count {
+            coveragePartial = true
+        }
 
         var roleCounts: [String: Int] = [:]
         for childIndex in 0..<children.count {
@@ -293,7 +309,10 @@ func buildTreeCore<Node>(
             visit(
                 child, depth: wrapper ? depth : depth + 1, rawDepth: rawDepth + 1,
                 path: path + [LocatorStep(role: childRole, indexOfRole: indexOfRole)])
-            if elements.count >= maxNodes { break }
+            if elements.count >= maxNodes {
+                if childIndex + 1 < scanLimit { budgetTruncated = true }
+                break
+            }
         }
 
         // Annotate the container's own line rather than emitting a standalone
@@ -301,6 +320,7 @@ func buildTreeCore<Node>(
         // stabilizeTree (Snapshot.swift) relies on to carry ids across a
         // re-snapshot.
         if let window, window.offscreen > 0, let lineIndex {
+            coveragePartial = true
             lines[lineIndex] +=
                 " …\(window.offscreen) more \(window.itemNoun) off-screen; scroll the list and "
                 + "re-read to load them, or use find to jump to a specific one"
@@ -309,7 +329,8 @@ func buildTreeCore<Node>(
 
     visit(root, depth: 0, rawDepth: 0, path: pathPrefix)
 
-    if elements.count >= maxNodes {
+    if budgetTruncated {
+        coveragePartial = true
         lines.append(
             "… tree truncated at \(maxNodes) elements. Call get_app_state with scope_element_id "
                 + "set to a container id to expand just that subtree, or raise max_elements."
@@ -321,7 +342,7 @@ func buildTreeCore<Node>(
                 + "scope_element_id set to the deepest visible container to expand further."
         )
     }
-    return BuiltTree(text: lines.joined(separator: "\n"), elements: elements)
+    return BuiltTree(text: lines.joined(separator: "\n"), elements: elements, isPartial: coveragePartial || depthTruncated)
 }
 
 // MARK: - Live accessibility-backed accessors
