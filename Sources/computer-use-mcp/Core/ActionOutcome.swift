@@ -93,6 +93,9 @@ struct ActionVerification: Sendable {
     var windowTitleChanged: Bool? = nil
     var windowFrameChanged: Bool? = nil
     var scrollPositionChanged: Bool? = nil
+    /// Scroll only: visible rows/children, element positions, or edge content
+    /// changed in the scroll container after delivery.
+    var scrollContentChanged: Bool? = nil
     /// Scroll only: the container was already pinned at the boundary in the
     /// requested direction, so "no movement" is expected, not a dropped event.
     var scrollAtExtent: Bool? = nil
@@ -138,6 +141,7 @@ struct ActionVerification: Sendable {
         put("window_title_changed", windowTitleChanged)
         put("window_frame_changed", windowFrameChanged)
         put("scroll_position_changed", scrollPositionChanged)
+        put("scroll_content_changed", scrollContentChanged)
         put("scroll_at_extent", scrollAtExtent)
         put("target_in_web_area", targetInWebArea)
         put("independent_element_changed", independentElementChanged)
@@ -412,7 +416,7 @@ extension ActionVerifier {
                 .verification, "The value did not change to the requested value; the app may have rejected it.", v)
 
         case .scroll:
-            if v.scrollPositionChanged == true || v.renderedTextChanged == true {
+            if v.scrollPositionChanged == true || v.scrollContentChanged == true {
                 return .success("The content scrolled.", v)
             }
             if v.scrollAtExtent == true {
@@ -420,14 +424,16 @@ extension ActionVerifier {
                 record.notes.append("Already scrolled to the extent in the requested direction.")
                 return .success("Already at the end of the scrollable content.", record)
             }
-            if v.scrollPositionChanged == nil && v.renderedTextChanged == nil {
+            if v.scrollPositionChanged == nil && v.scrollContentChanged == nil {
                 return .ambiguous(.targeting, "Could not observe whether the content scrolled.", v)
             }
+            let summary =
+                "Wheel events were delivered but no content movement was observed; the target may not accept "
+                + "background scroll. Try PageDown/PageUp keys or an element ScrollUpByPage/ScrollDownByPage action."
             if droppable {
-                return .effectNotVerified(
-                    .transport, "The content did not scroll; the scroll event may have been dropped.", v)
+                return .effectNotVerified(.transport, summary, v)
             }
-            return .effectNotVerified(.verification, "The content did not scroll.", v)
+            return .effectNotVerified(.verification, summary, v)
 
         case .window:
             // manage_window classifies via ActionVerifier.windowOutcome (numeric
@@ -598,6 +604,16 @@ struct ActionVerifier: Sendable {
         var v = before
         v.renderedTextChanged = treeChanged
         v.independentElementChanged = independentElementChanged(in: diff)
+        if family == .scroll {
+            if let changed = scrollRelevantChange(in: diff), v.scrollContentChanged != true {
+                v.scrollContentChanged = changed
+            } else if !treeChanged, v.scrollContentChanged == nil {
+                v.scrollContentChanged = false
+            }
+            if treeChanged, v.scrollPositionChanged != true, v.scrollContentChanged != true {
+                v.notes.append("The window tree changed, but no scroll-specific movement signal changed.")
+            }
+        }
         if let beforeWindowTitle {
             v.windowTitleChanged = beforeWindowTitle != afterWindowTitle
         }

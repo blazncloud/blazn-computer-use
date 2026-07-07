@@ -127,4 +127,20 @@ private func newTree() -> BuiltTree {
         previous.treeText = nil
         #expect(stabilizeTree(newTree(), against: previous) == nil)
     }
+
+    @Test func scrollRelevantDiffRecognizesViewportRowsChanging() {
+        let diff = TreeDiff(
+            changed: [],
+            added: ["+ e5@s2 AXRow \"Row 025\" (10,120,250,24)"],
+            removed: ["- e4@s1 AXRow \"Row 001\" is gone"],
+            totalElements: 20)
+        #expect(scrollRelevantChange(in: diff) == true)
+    }
+
+    @Test func scrollRelevantDiffRejectsUnrelatedTextChurn() {
+        let diff = TreeDiff(
+            changed: ["~ e3@s1 AXStaticText \"clock\" (10,10,80,20) value=12:34"],
+            added: [], removed: [], totalElements: 8)
+        #expect(scrollRelevantChange(in: diff) == false)
+    }
 }

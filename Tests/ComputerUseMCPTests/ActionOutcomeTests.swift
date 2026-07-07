@@ -320,6 +320,28 @@ import Testing
         #expect(outcome.classification == .success)
     }
 
+    @Test func scrollVisibleContentMovementIsSuccess() {
+        var v = ActionVerification()
+        v.scrollPositionChanged = false
+        v.scrollContentChanged = true
+        let outcome = ActionVerifier.reduce(
+            family: .scroll, intent: .scrollContent, verification: v,
+            rereadFailed: false, dispatchSucceeded: true, deliveryTier: droppableTier, hasTargetElement: false)
+        #expect(outcome.classification == .success)
+    }
+
+    @Test func scrollUnrelatedWindowChangeIsNotSuccess() {
+        var v = ActionVerification()
+        v.renderedTextChanged = true
+        v.scrollPositionChanged = false
+        v.scrollContentChanged = false
+        let outcome = ActionVerifier.reduce(
+            family: .scroll, intent: .scrollContent, verification: v,
+            rereadFailed: false, dispatchSucceeded: true, deliveryTier: droppableTier, hasTargetElement: false)
+        #expect(outcome.classification == .effectNotVerified)
+        #expect(outcome.failureDomain == .transport)
+    }
+
     @Test func scrollAtExtentIsSuccess() {
         var v = ActionVerification()
         v.scrollPositionChanged = false
@@ -341,6 +363,8 @@ import Testing
             rereadFailed: false, dispatchSucceeded: true, deliveryTier: droppableTier, hasTargetElement: false)
         #expect(outcome.classification == .effectNotVerified)
         #expect(outcome.failureDomain == .transport)
+        #expect(outcome.summary.contains("no content movement was observed"))
+        #expect(outcome.summary.contains("PageDown/PageUp"))
     }
 
     // MARK: manage_window

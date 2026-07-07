@@ -113,6 +113,7 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
                 + "(\(ranked.count) scrollable candidate\(ranked.count == 1 ? "" : "s") on the ancestor chain).")
     }
     let beforeOffset = container.flatMap(scrollOffsetSignature)
+    let beforeMovement = scrollMovementFingerprint(container: container, target: target.element)
 
     await AgentCursor.shared.glide(to: point, targetWindow: target.deliveryContext.windowNumber)
 
@@ -123,8 +124,9 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     // the wheel — the same chain philosophy as the click tier 1.
     if let direction {
         let pageCount = max(1, Int((args.number("pages") ?? 1).rounded()))
-        func tier1Success(via: String) async throws -> CallTool.Result {
-            before.scrollPositionChanged = true
+        func tier1Success(via: String, positionChanged: Bool = false, contentChanged: Bool = true) async throws -> CallTool.Result {
+            if positionChanged { before.scrollPositionChanged = true }
+            if contentChanged { before.scrollContentChanged = true }
             before.notes.append("Scrolled via \(via) (tier 1).")
             let verifier = ActionVerifier(
                 family: .scroll, intent: .scrollContent,
@@ -170,7 +172,9 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
                 // scrolled via the container's own id, whose frame never moves.
                 let after = (axAttribute(bar, kAXValueAttribute) as? NSNumber)?.doubleValue ?? current
                 if ok, abs(after - current) > 1e-4 {
-                    return try await tier1Success(via: "setting the container's scroll-bar position")
+                    return try await tier1Success(
+                        via: "setting the container's scroll-bar position",
+                        positionChanged: true, contentChanged: false)
                 }
                 if !fallbackReasons.contains(.scrollActionUnverified) {
                     fallbackReasons.append(.scrollActionUnverified)
@@ -192,7 +196,9 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
                 performed = AXUIElementPerformAction(actionContainer, action as CFString) == .success
             }
             try? await Task.sleep(for: .milliseconds(80))
-            let moved = scrollMovementFingerprint(container: actionContainer, target: target.element) != fingerprint
+            let moved = scrollMovementChanged(
+                before: fingerprint,
+                after: scrollMovementFingerprint(container: actionContainer, target: target.element)) == true
             if performed, moved {
                 return try await tier1Success(via: "the container's \(action) action")
             }
@@ -211,7 +217,9 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
             let fingerprint = scrollMovementFingerprint(container: container, target: target.element)
             let performed = AXUIElementPerformAction(reveal, "AXScrollToVisible" as CFString) == .success
             try? await Task.sleep(for: .milliseconds(80))
-            let moved = scrollMovementFingerprint(container: container, target: target.element) != fingerprint
+            let moved = scrollMovementChanged(
+                before: fingerprint,
+                after: scrollMovementFingerprint(container: container, target: target.element)) == true
             if performed, moved {
                 return try await tier1Success(via: "revealing an off-screen element (AXScrollToVisible)")
             }
@@ -227,6 +235,12 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
     if let container, let beforeOffset, let afterOffset = scrollOffsetSignature(container) {
         before.scrollPositionChanged = beforeOffset != afterOffset
+    }
+    if let moved = scrollMovementChanged(
+        before: beforeMovement,
+        after: scrollMovementFingerprint(container: container, target: target.element))
+    {
+        before.scrollContentChanged = moved
     }
 
     let verifier = ActionVerifier(

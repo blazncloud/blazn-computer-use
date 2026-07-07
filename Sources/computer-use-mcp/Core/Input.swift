@@ -327,6 +327,28 @@ func deliverScroll(at point: CGPoint, deltaX: Int, deltaY: Int, context: Deliver
     let stepCount = max(1, max(abs(deltaX), abs(deltaY)) / 40)
     var emittedX = 0
     var emittedY = 0
+    func makeEvent(wheelX: Int, wheelY: Int, phase: CGScrollPhase) -> CGEvent? {
+        guard
+            let event = CGEvent(
+                scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
+                wheel1: Int32(wheelY), wheel2: Int32(wheelX), wheel3: 0
+            )
+        else { return nil }
+        event.location = point
+        event.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: Int64(wheelY))
+        event.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: Int64(wheelX))
+        event.setIntegerValueField(.scrollWheelEventFixedPtDeltaAxis1, value: Int64(wheelY * 65_536))
+        event.setIntegerValueField(.scrollWheelEventFixedPtDeltaAxis2, value: Int64(wheelX * 65_536))
+        event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+        event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: Int64(CGMomentumScrollPhase.none.rawValue))
+        event.setIntegerValueField(.scrollWheelEventScrollCount, value: 1)
+        event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        if let windowNumber = context.windowNumber {
+            event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(windowNumber))
+            event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(windowNumber))
+        }
+        return event
+    }
     for step in 1...stepCount {
         let targetX = Int((Double(deltaX) * Double(step) / Double(stepCount)).rounded())
         let targetY = Int((Double(deltaY) * Double(step) / Double(stepCount)).rounded())
@@ -335,15 +357,10 @@ func deliverScroll(at point: CGPoint, deltaX: Int, deltaY: Int, context: Deliver
         emittedX = targetX
         emittedY = targetY
         // Positive delta_y scrolls content up; wheel1 up is positive, so negate.
-        guard
-            let event = CGEvent(
-                scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
-                wheel1: Int32(-stepY), wheel2: Int32(stepX), wheel3: 0
-            )
-        else { continue }
-        event.location = point
-        event.postToPid(context.pid)
+        let phase: CGScrollPhase = step == 1 ? .began : .changed
+        makeEvent(wheelX: stepX, wheelY: -stepY, phase: phase)?.postToPid(context.pid)
     }
+    makeEvent(wheelX: 0, wheelY: 0, phase: .ended)?.postToPid(context.pid)
     return .perPid
 }
 

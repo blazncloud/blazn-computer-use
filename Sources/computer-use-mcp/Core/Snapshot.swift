@@ -254,6 +254,30 @@ struct TreeDiff {
     }
 }
 
+/// Scroll-specific evidence from a post-action tree diff. A scroll verifier must
+/// not treat arbitrary whole-window churn as success: movement is corroborated
+/// only when the diff shows rows/children/text entering/leaving the viewport or
+/// a surviving element's frame moving within the tree.
+func scrollRelevantChange(in diff: TreeDiff?) -> Bool? {
+    guard let diff else { return nil }
+    let entries = diff.changed + diff.added + diff.removed
+    guard !entries.isEmpty else { return false }
+    return entries.contains(where: isScrollRelevantDiffEntry)
+}
+
+private func isScrollRelevantDiffEntry(_ entry: String) -> Bool {
+    let line = String(entry.dropFirst(2))
+    if line.contains("AXRow") || line.contains("AXCell") || line.contains("AXList")
+        || line.contains("AXTable") || line.contains("AXOutline") || line.contains("AXWebArea")
+    {
+        return true
+    }
+    if line.contains("AXStaticText") || line.contains("AXTextField") || line.contains("AXTextArea") {
+        return entry.hasPrefix("+ ") || entry.hasPrefix("- ")
+    }
+    return false
+}
+
 /// Carry element ids forward across a UI change and compute the diff.
 ///
 /// An element that still resolves to the same locator path with the same role

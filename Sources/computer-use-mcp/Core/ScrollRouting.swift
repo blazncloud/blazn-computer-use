@@ -136,19 +136,74 @@ func scrollPageAction(for direction: String) -> String? {
     }
 }
 
-/// A movement fingerprint combining three signals, because no single one covers
-/// every scroll surface:
+/// A movement fingerprint combining scroll-specific signals, because no single
+/// one covers every scroll surface:
 ///   - the container's scroll-bar fills (native scroll areas);
+///   - the container's visible descendants / AXVisibleRows slice (SwiftUI,
+///     AppKit collections, and web content whose rows/text slide through a
+///     fixed viewport);
 ///   - the target element's on-screen origin (a web paragraph slides up);
 ///   - the target element's value (a virtualized list reuses the same AX element
 ///     at a fixed frame, so only its value changes — "Row 001" → "Row 025").
-/// Compared before/after an action to decide if anything moved. All-"-" means
-/// nothing was readable and movement cannot be confirmed.
+/// Compared before/after an action to decide if anything scroll-relevant moved.
+/// All-"-" means nothing was readable and movement cannot be confirmed.
 func scrollMovementFingerprint(container: AXUIElement?, target: AXUIElement?) -> String {
     let offset = container.flatMap(scrollOffsetSignature) ?? "-"
+    let visible = container.flatMap(scrollVisibleContentSignature) ?? "-"
     let origin = target.flatMap(axFrame).map { "\(Int($0.origin.x.rounded())),\(Int($0.origin.y.rounded()))" } ?? "-"
     let value = target.flatMap { axString($0, kAXValueAttribute) } ?? "-"
-    return "\(offset)|\(origin)|\(value)"
+    return "\(offset)|\(visible)|\(origin)|\(value)"
+}
+
+func scrollMovementChanged(before: String, after: String) -> Bool? {
+    guard before.split(separator: "|").contains(where: { $0 != "-" })
+        || after.split(separator: "|").contains(where: { $0 != "-" })
+    else { return nil }
+    return before != after
+}
+
+/// Signature of the scroll container's currently visible content. Prefer the
+/// app's own AXVisibleRows / AXVisibleChildren slice when exposed; otherwise
+/// sample visible descendants under the container. This gives the verifier a
+/// scroll-specific post-state diff instead of treating any whole-window churn
+/// as proof that scrolling happened.
+func scrollVisibleContentSignature(_ container: AXUIElement) -> String? {
+    for attribute in ["AXVisibleRows", "AXVisibleChildren"] {
+        let visible = axElements(container, attribute)
+        if let signature = scrollElementsSignature(visible) { return signature }
+    }
+
+    guard let viewport = visibleViewport(of: container, windowFrame: nil) else { return nil }
+    var sample: [AXUIElement] = []
+    func walk(_ element: AXUIElement, depth: Int) {
+        guard depth <= 4, sample.count < 60 else { return }
+        let role = axRole(element)
+        if role != "AXScrollBar", role != "AXValueIndicator", role != "AXIncrementor",
+            let frame = axFrame(element), frame.intersects(viewport)
+        {
+            sample.append(element)
+        }
+        for child in axElements(element, kAXChildrenAttribute) { walk(child, depth: depth + 1) }
+    }
+    for child in axElements(container, kAXChildrenAttribute) { walk(child, depth: 0) }
+    return scrollElementsSignature(sample)
+}
+
+private func scrollElementsSignature(_ elements: [AXUIElement]) -> String? {
+    let pieces = elements.prefix(60).compactMap { element -> String? in
+        let role = axRole(element)
+        guard role != "AXScrollBar", role != "AXValueIndicator", role != "AXIncrementor" else { return nil }
+        let frame = axFrame(element).map {
+            "\(Int($0.origin.x.rounded())),\(Int($0.origin.y.rounded())),\(Int($0.width.rounded())),\(Int($0.height.rounded()))"
+        } ?? "?"
+        let text = axString(element, kAXTitleAttribute)
+            ?? axString(element, kAXDescriptionAttribute)
+            ?? axString(element, kAXValueAttribute)
+            ?? ""
+        return "\(role):\(text):\(frame)"
+    }
+    guard !pieces.isEmpty else { return nil }
+    return pieces.joined(separator: ";")
 }
 
 /// New scroll-bar value (0…1) after scrolling `pages` in a direction, from the
