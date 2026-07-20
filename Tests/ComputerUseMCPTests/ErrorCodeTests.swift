@@ -66,6 +66,34 @@ import Testing
         #expect(toolErrorCode(forMessage: "Some entirely novel failure.") == nil)
     }
 
+    @Test func daemonDenialMessagesMapToStructuredCodes() {
+        #expect(
+            toolErrorCode(forMessage:
+                "Another agent session is mid-task in Safari (lease expires in 3s). Retry shortly, "
+                    + "or work in a different app to avoid interleaving with it.")
+                == .appLeaseHeld)
+        #expect(toolErrorCode(forMessage: "Unauthorized daemon request.") == .daemonUnauthorized)
+        #expect(
+            toolErrorCode(forMessage: "Shutdown refused: requester build is not newer than this daemon.")
+                == .daemonUnauthorized)
+    }
+
+    @Test func daemonDenialCodedResultsPrefixAndAttachMeta() {
+        let lease = codedErrorResult(
+            "Another agent session is mid-task in Notes.", code: .appLeaseHeld
+        )
+        #expect(text(of: lease).hasPrefix("[APP_LEASE_HELD] "))
+        #expect(lease.isError == true)
+
+        let unauthorized = codedErrorResult("Unauthorized daemon request.", code: .daemonUnauthorized)
+        #expect(text(of: unauthorized).hasPrefix("[DAEMON_UNAUTHORIZED] "))
+        guard case let .object(fields)? = unauthorized._meta?["computer-use-mcp/error"] else {
+            Issue.record("expected computer-use-mcp/error meta object")
+            return
+        }
+        #expect(fields["code"]?.stringValue == "DAEMON_UNAUTHORIZED")
+    }
+
     @Test func earlierRuleWinsWhenSeveralCouldMatch() {
         // "is stale" is the specific, actionable signal even though a stale
         // message also mentions an element id.

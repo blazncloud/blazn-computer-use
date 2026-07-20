@@ -23,6 +23,8 @@ enum ToolErrorCode: String, Sendable, CaseIterable {
     case elementNotFound = "ELEMENT_NOT_FOUND"
     case notSettable = "NOT_SETTABLE"
     case offscreenTarget = "OFFSCREEN_TARGET"
+    case appLeaseHeld = "APP_LEASE_HELD"
+    case daemonUnauthorized = "DAEMON_UNAUTHORIZED"
 
     /// One-line, agent-directed next step for this failure class.
     var recovery: String {
@@ -47,6 +49,10 @@ enum ToolErrorCode: String, Sendable, CaseIterable {
             return "The element takes no direct value; use click or type_text, or target an editable field."
         case .offscreenTarget:
             return "The element has no on-screen frame; scroll it into view or target a visible element."
+        case .appLeaseHeld:
+            return "Wait for the other agent session's app lease to expire, or target a different app."
+        case .daemonUnauthorized:
+            return "Reconnect with a current CLI that can authenticate to the local engine daemon."
         }
     }
 }
@@ -75,6 +81,9 @@ private let errorCodeRules: [(fragment: String, code: ToolErrorCode)] = [
     ("matches multiple", .ambiguousTarget),
     ("is ambiguous", .ambiguousTarget),
     ("confirmation required", .confirmationRequired),
+    ("another agent session is mid-task", .appLeaseHeld),
+    ("unauthorized daemon request", .daemonUnauthorized),
+    ("shutdown refused: requester build", .daemonUnauthorized),
 ]
 
 /// Classify an error message into a code, or nil when nothing matches (the
