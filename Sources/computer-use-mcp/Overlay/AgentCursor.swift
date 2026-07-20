@@ -5,7 +5,8 @@
 // spatial action the server tells the singleton helper to glide to the target
 // and waits the animation duration — the animate-then-act choreography. If no
 // helper is alive, one is spawned; if another session's helper already is,
-// it is reused, so any number of concurrent agent sessions share one cursor.
+// it is reused. Each daemon connection gets its own visually distinct cursor
+// (color + short session label) so concurrent agents are distinguishable.
 // The overlay is purely cosmetic; it never moves the real cursor, and a
 // dead/failed helper never blocks or fails the action.
 
@@ -31,7 +32,10 @@ actor AgentCursor {
     func glide(to point: CGPoint, targetWindow: CGWindowID? = nil) async {
         guard enabled else { return }
         guard let x = safeInt(point.x), let y = safeInt(point.y) else { return }
-        guard await send("move \(x) \(y) \(targetWindow ?? 0)\n", spawningIfNeeded: true) else { return }
+        let session = currentSessionID()
+        guard await send(
+            "move \(x) \(y) \(targetWindow ?? 0) \(session)\n", spawningIfNeeded: true
+        ) else { return }
         try? await Task.sleep(for: glideDuration)
     }
 
@@ -49,7 +53,10 @@ actor AgentCursor {
     func pulse(at point: CGPoint, targetWindow: CGWindowID? = nil) async {
         guard enabled else { return }
         guard let x = safeInt(point.x), let y = safeInt(point.y) else { return }
-        _ = await send("pulse \(x) \(y) \(targetWindow ?? 0)\n", spawningIfNeeded: false)
+        let session = currentSessionID()
+        _ = await send(
+            "pulse \(x) \(y) \(targetWindow ?? 0) \(session)\n", spawningIfNeeded: false
+        )
     }
 
     /// Switch the overlay's status pill to (or from) the recording state while
@@ -58,6 +65,20 @@ actor AgentCursor {
     func setRecording(_ on: Bool) async {
         guard enabled else { return }
         _ = await send("record \(on ? "on" : "off")\n", spawningIfNeeded: on)
+    }
+
+    /// Remove this connection's cursor when the daemon session disconnects.
+    /// Never spawns the helper and never fails the caller.
+    func dropSession(_ session: Int32) async {
+        guard enabled else { return }
+        _ = await send("drop \(session)\n", spawningIfNeeded: false)
+    }
+
+    private func currentSessionID() -> String {
+        if let session = DaemonSessionContext.sessionID {
+            return String(session)
+        }
+        return overlayDefaultSessionID
     }
 
     private func send(_ command: String, spawningIfNeeded: Bool) async -> Bool {

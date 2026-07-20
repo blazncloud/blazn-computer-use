@@ -2,19 +2,23 @@
 //
 // The MCP server is a headless async stdio process with no AppKit run loop, so
 // the cosmetic cursor lives here, in its own process. This helper runs an
-// .accessory NSApplication (no Dock icon, never frontmost) and glides a cursor
-// glyph toward target points it reads from a shared FIFO ("move <globalX>
-// <globalY>\n", top-left screen coordinates; "ping\n" keep-alives). It is a
-// singleton — one cursor serves every concurrently running server process —
-// and it never moves the real system cursor.
+// .accessory NSApplication (no Dock icon, never frontmost) and glides per-session
+// cursor glyphs toward target points it reads from a shared FIFO. Commands:
+//   move/pulse <x> <y> [<win> [<session>]]
+//   drop <session>
+//   ping
+//   record on|off
+// Coordinates are global top-left screen space. The helper is a singleton (one
+// process serves every concurrently running server) with one visually distinct
+// cursor per session, and it never moves the real system cursor.
 //
 // One click-through borderless panel per display: with "Displays have separate
 // Spaces" (the macOS default) a window is clipped to a single screen, so one
 // panel — even sized to the union of all displays — can never draw on the
-// others. The cursor position is modeled once in AppKit global coordinates and
-// mirrored into every panel; each panel clips to its own screen, so the glyph
-// appears on whichever display contains it (including straddling a boundary
-// mid-glide).
+// others. Each session's cursor position is modeled in AppKit global coordinates
+// and mirrored into every panel; each panel clips to its own screen, so the
+// glyph appears on whichever display contains it (including straddling a
+// boundary mid-glide).
 
 import AppKit
 import QuartzCore
@@ -56,13 +60,45 @@ private func prepareOverlayFifo() {
     mkfifo(path, 0o600)  // EEXIST is fine: the FIFO persists across helpers
 }
 
+/// Per-session cursor state: color, label, layers, glide animation, and target.
+@MainActor
+private final class SessionCursor {
+    let sessionID: String
+    let color: NSColor
+    let label: String
+    var layers: [CALayer] = []
+    var labelLayers: [CATextLayer] = []
+    var visible = false
+    var animating = false
+    var fadeWork: DispatchWorkItem?
+    var currentPoint = CGPoint.zero
+    var startPoint = CGPoint.zero
+    var targetPoint = CGPoint.zero
+    var startTime: CFTimeInterval = 0
+    /// Per-glide, scaled with distance: short hops stay snappy, long crossings
+    /// stay smooth instead of teleporting.
+    var duration: CFTimeInterval = 0.22
+    var currentTarget: CGWindowID?
+
+    init(sessionID: String) {
+        self.sessionID = sessionID
+        let components = overlaySessionColorComponents(for: sessionID)
+        self.color = NSColor(
+            calibratedRed: components.red,
+            green: components.green,
+            blue: components.blue,
+            alpha: 1
+        )
+        self.label = overlaySessionLabel(for: sessionID)
+    }
+}
+
 @MainActor
 private final class OverlayController: NSObject, NSApplicationDelegate {
     /// The cursor glyph and click pulses live on their own panel per display so
     /// they can be dropped below a target's occluders (see applyTargetWindow)
     /// without dragging the always-on-top status chip down with them.
     private var cursorPanels: [NSPanel] = []
-    private var cursorLayers: [CALayer] = []
     private var displayLink: CADisplayLink?
 
     /// "Agent working" pill on every display, on a separate panel pinned at the
@@ -76,30 +112,12 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
     private var recording = false
     private let chipEnabled = Config.bool("status_chip") != false
 
-    private var visible = false
-    private var animating = false
-    /// Pending idle fade-out, postponed by any glide or keep-alive ping. The
-    /// server pings on every tool call, so the cursor stays up for a whole
-    /// multi-step task (clicks, key presses, perception, model thinking in
-    /// between) and fades only once the agent has actually gone quiet.
-    private var fadeWork: DispatchWorkItem?
+    /// One cursor per session id (color + short label).
+    private var sessions: [String: SessionCursor] = [:]
     private let idleFadeDelay: TimeInterval = Config.double("cursor_idle_fade") ?? 12
     /// Last command of any kind, for the idle self-exit.
     private var lastCommand = Date()
-    /// Cursor position in AppKit global coordinates (bottom-left origin at the
-    /// primary screen) — the one space all screen frames share.
-    private var currentPoint = CGPoint.zero
-    private var startPoint = CGPoint.zero
-    private var targetPoint = CGPoint.zero
-    private var startTime: CFTimeInterval = 0
-    /// Per-glide, scaled with distance: short hops stay snappy, long crossings
-    /// stay smooth instead of teleporting.
-    private var duration: CFTimeInterval = 0.22
 
-    /// The window the cursor is currently z-ordered above (nil = floating above
-    /// everything at `panelIdleLevel`). Tracked so a panel is only re-ordered
-    /// when the target actually changes.
-    private var currentTarget: CGWindowID?
     /// App name shown in the status chip when the target is not frontmost;
     /// nil renders the default "Agent working".
     private var backgroundTarget: String?
@@ -114,8 +132,7 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
     private let topmostMode = Config.bool("cursor_topmost") == true
 
     func start() {
-        guard let primary = NSScreen.screens.first else { exit(0) }
-        currentPoint = CGPoint(x: primary.frame.midX, y: primary.frame.midY)
+        guard NSScreen.screens.first != nil else { exit(0) }
         buildPanels()
         NotificationCenter.default.addObserver(
             self, selector: #selector(screensChanged),
@@ -150,16 +167,9 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
     private func buildPanels() {
         for screen in NSScreen.screens {
             let cursorPanel = makeClickThroughPanel(screen: screen)
-            let layer = CALayer()
-            layer.contents = cursorGlyph()
-            layer.contentsScale = screen.backingScaleFactor
-            layer.bounds = CGRect(x: 0, y: 0, width: 32, height: 32)
-            layer.anchorPoint = CGPoint(x: 0.0625, y: 0.9375)  // arrow tip at (2,30)
-            layer.opacity = visible ? 1 : 0
-            cursorPanel.contentView?.layer?.addSublayer(layer)
+            // Empty host: glyphs attach per session via attachLayers.
             cursorPanel.orderFrontRegardless()
             cursorPanels.append(cursorPanel)
-            cursorLayers.append(layer)
 
             if chipEnabled {
                 let chipPanel = makeClickThroughPanel(screen: screen)
@@ -171,37 +181,126 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
                 chipLayers.append(chip)
             }
         }
-        syncLayers()
+        for session in sessions.values {
+            attachLayers(for: session)
+            syncLayers(for: session)
+        }
     }
 
     @objc private func screensChanged() {
         displayLink?.invalidate()
         displayLink = nil
-        animating = false
+        for session in sessions.values {
+            session.animating = false
+            for layer in session.layers {
+                layer.removeFromSuperlayer()
+            }
+            for layer in session.labelLayers {
+                layer.removeFromSuperlayer()
+            }
+            session.layers.removeAll()
+            session.labelLayers.removeAll()
+        }
         for panel in cursorPanels + chipPanels { panel.orderOut(nil) }
         cursorPanels.removeAll()
         chipPanels.removeAll()
-        cursorLayers.removeAll()
         chipLayers.removeAll()
         buildPanels()
-        // Panels were rebuilt at the idle level; restore the target z-order.
-        if let currentTarget {
-            self.currentTarget = nil
-            applyTargetWindow(currentTarget)
+        // Panels were rebuilt at the idle level; restore the latest target z-order.
+        if let session = sessions.values.first(where: { $0.currentTarget != nil }) {
+            let target = session.currentTarget
+            session.currentTarget = nil
+            applyTargetWindow(target, for: session)
         }
         refreshChipText()
     }
 
-    /// Mirror the global cursor position into every cursor panel's local space;
-    /// each panel clips to its own screen, so the glyph shows where it belongs.
-    private func syncLayers() {
+    /// Look up or create the cursor for `sessionID`, attaching layers on first use.
+    private func sessionCursor(_ sessionID: String) -> SessionCursor {
+        if let existing = sessions[sessionID] { return existing }
+        let session = SessionCursor(sessionID: sessionID)
+        if let primary = NSScreen.screens.first {
+            session.currentPoint = CGPoint(x: primary.frame.midX, y: primary.frame.midY)
+        }
+        sessions[sessionID] = session
+        attachLayers(for: session)
+        syncLayers(for: session)
+        return session
+    }
+
+    /// Add a glyph + short label layer to every cursor panel for this session.
+    private func attachLayers(for session: SessionCursor) {
+        for layer in session.layers {
+            layer.removeFromSuperlayer()
+        }
+        for layer in session.labelLayers {
+            layer.removeFromSuperlayer()
+        }
+        session.layers.removeAll()
+        session.labelLayers.removeAll()
+
+        let opacity: Float = session.visible ? 1 : 0
+        for panel in cursorPanels {
+            let glyph = CALayer()
+            glyph.contents = cursorGlyph(color: session.color)
+            glyph.contentsScale = panel.backingScaleFactor
+            glyph.bounds = CGRect(x: 0, y: 0, width: 32, height: 32)
+            glyph.anchorPoint = CGPoint(x: 0.0625, y: 0.9375)  // arrow tip at (2,30)
+            glyph.opacity = opacity
+            panel.contentView?.layer?.addSublayer(glyph)
+            session.layers.append(glyph)
+
+            let label = CATextLayer()
+            label.string = session.label
+            label.font = NSFont.systemFont(ofSize: 9, weight: .semibold)
+            label.fontSize = 9
+            label.foregroundColor = NSColor.white.cgColor
+            label.backgroundColor = session.color.withAlphaComponent(0.9).cgColor
+            label.cornerRadius = 3
+            label.alignmentMode = .center
+            label.contentsScale = panel.backingScaleFactor
+            label.bounds = CGRect(x: 0, y: 0, width: 22, height: 12)
+            label.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+            label.opacity = opacity
+            // CATextLayer draws upside-down unless flipped for AppKit's bottom-up space.
+            label.isWrapped = false
+            panel.contentView?.layer?.addSublayer(label)
+            session.labelLayers.append(label)
+        }
+    }
+
+    /// Remove one session's cursor (layers + state) when its connection drops.
+    private func dropSession(_ sessionID: String) {
+        guard let session = sessions.removeValue(forKey: sessionID) else { return }
+        session.fadeWork?.cancel()
+        session.fadeWork = nil
+        session.animating = false
+        for layer in session.layers {
+            layer.removeFromSuperlayer()
+        }
+        for layer in session.labelLayers {
+            layer.removeFromSuperlayer()
+        }
+        resetTargetWindowIfNeeded()
+        ensureDisplayLink()
+    }
+
+    /// Mirror a session's global cursor position into every cursor panel's local
+    /// space; each panel clips to its own screen, so the glyph shows where it belongs.
+    private func syncLayers(for session: SessionCursor) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for (index, panel) in cursorPanels.enumerated() {
-            cursorLayers[index].position = CGPoint(
-                x: currentPoint.x - panel.frame.origin.x,
-                y: currentPoint.y - panel.frame.origin.y
+            guard index < session.layers.count else { continue }
+            let pos = CGPoint(
+                x: session.currentPoint.x - panel.frame.origin.x,
+                y: session.currentPoint.y - panel.frame.origin.y
             )
+            session.layers[index].position = pos
+            if index < session.labelLayers.count {
+                // Small tag just to the right of the arrow tip.
+                session.labelLayers[index].position = CGPoint(x: pos.x + 20, y: pos.y - 6)
+            }
         }
         CATransaction.commit()
     }
@@ -246,39 +345,29 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
 
     private nonisolated static func handle(command line: String) {
         overlayDebug("recv: \(line)")
-        let parts = line.split(separator: " ")
-        if parts.first == "ping" {
-            DispatchQueue.main.async {
-                (NSApp.delegate as? OverlayController)?.noteActivity()
+        guard let command = OverlayCommand.parse(line) else { return }
+        DispatchQueue.main.async {
+            let controller = NSApp.delegate as? OverlayController
+            switch command {
+            case .ping:
+                controller?.noteActivity()
+            case .record(let on):
+                controller?.setRecording(on)
+            case .drop(let session):
+                controller?.dropSession(session)
+            case .move(let x, let y, let window, let session):
+                controller?.beginGlide(
+                    toGlobalTopLeft: CGPoint(x: x, y: y),
+                    targetWindow: window.map { CGWindowID($0) },
+                    sessionID: session
+                )
+            case .pulse(let x, let y, let window, let session):
+                controller?.showPulse(
+                    atGlobalTopLeft: CGPoint(x: x, y: y),
+                    targetWindow: window.map { CGWindowID($0) },
+                    sessionID: session
+                )
             }
-            return
-        }
-        if parts.first == "record", parts.count == 2 {
-            let on = parts[1] == "on"
-            DispatchQueue.main.async {
-                (NSApp.delegate as? OverlayController)?.setRecording(on)
-            }
-            return
-        }
-        // "move <x> <y> [<win>]" / "pulse <x> <y> [<win>]". The optional 4th
-        // token is the target window's CGWindowID; the cursor is z-ordered just
-        // above it (0 or absent → no target, cursor floats above everything).
-        guard parts.count == 3 || parts.count == 4,
-            let x = Double(parts[1]), let y = Double(parts[2])
-        else { return }
-        let point = CGPoint(x: x, y: y)
-        let target: CGWindowID? = parts.count == 4 ? CGWindowID(parts[3]).flatMap { $0 == 0 ? nil : $0 } : nil
-        switch parts.first {
-        case "move":
-            DispatchQueue.main.async {
-                (NSApp.delegate as? OverlayController)?.beginGlide(toGlobalTopLeft: point, targetWindow: target)
-            }
-        case "pulse":
-            DispatchQueue.main.async {
-                (NSApp.delegate as? OverlayController)?.showPulse(atGlobalTopLeft: point, targetWindow: target)
-            }
-        default:
-            break
         }
     }
 
@@ -300,22 +389,66 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
 
     // MARK: animation
 
-    fileprivate func beginGlide(toGlobalTopLeft point: CGPoint, targetWindow: CGWindowID?) {
+    fileprivate func beginGlide(
+        toGlobalTopLeft point: CGPoint, targetWindow: CGWindowID?, sessionID: String
+    ) {
+        let session = sessionCursor(sessionID)
         lastCommand = Date()
-        applyTargetWindow(targetWindow)
+        applyTargetWindow(targetWindow, for: session)
         showChip()
-        targetPoint = appKitPoint(fromGlobalTopLeft: point)
-        startPoint = currentPoint
-        startTime = CACurrentMediaTime()
-        let distance = hypot(targetPoint.x - startPoint.x, targetPoint.y - startPoint.y)
-        duration = min(0.32, max(0.12, distance / 2400))
-        animating = true
-        overlayDebug("beginGlide cg=\(point) appkit=\(targetPoint) from=\(startPoint)")
-        fadeWork?.cancel()
-        fadeWork = nil
-        visible = true
-        setOpacity(1, of: cursorLayers, animationDuration: nil)
+        session.targetPoint = appKitPoint(fromGlobalTopLeft: point)
+        session.startPoint = session.currentPoint
+        session.startTime = CACurrentMediaTime()
+        let distance = hypot(
+            session.targetPoint.x - session.startPoint.x,
+            session.targetPoint.y - session.startPoint.y
+        )
+        session.duration = min(0.32, max(0.12, distance / 2400))
+        session.animating = true
+        overlayDebug(
+            "beginGlide session=\(sessionID) cg=\(point) appkit=\(session.targetPoint) from=\(session.startPoint)"
+        )
+        session.fadeWork?.cancel()
+        session.fadeWork = nil
+        session.visible = true
+        let allLayers: [CALayer] = session.layers + session.labelLayers
+        setOpacity(1, of: allLayers, animationDuration: nil)
 
+        ensureDisplayLink()
+    }
+
+    @objc private func tick() {
+        let now = CACurrentMediaTime()
+        var anyAnimating = false
+        for session in sessions.values where session.animating {
+            anyAnimating = true
+            let elapsed = now - session.startTime
+            let progress = min(1, elapsed / session.duration)
+            let eased = easeOutCubic(progress)
+            session.currentPoint = CGPoint(
+                x: session.startPoint.x + (session.targetPoint.x - session.startPoint.x) * eased,
+                y: session.startPoint.y + (session.targetPoint.y - session.startPoint.y) * eased
+            )
+            syncLayers(for: session)
+
+            if progress >= 1 {
+                session.animating = false
+                overlayDebug("glide done session=\(session.sessionID) at \(session.currentPoint)")
+                scheduleIdleFade(for: session)
+            }
+        }
+        if !anyAnimating {
+            displayLink?.isPaused = true  // stop per-frame wakeups while idle
+        }
+    }
+
+    /// Start or resume the display link when any session is animating; pause when none are.
+    private func ensureDisplayLink() {
+        let anyAnimating = sessions.values.contains(where: \.animating)
+        guard anyAnimating else {
+            displayLink?.isPaused = true
+            return
+        }
         if displayLink == nil, let view = cursorPanels.first?.contentView {
             let link = view.displayLink(target: self, selector: #selector(tick))
             link.add(to: .main, forMode: .common)
@@ -324,49 +457,35 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         displayLink?.isPaused = false
     }
 
-    @objc private func tick() {
-        guard animating else { return }
-        let elapsed = CACurrentMediaTime() - startTime
-        let progress = min(1, elapsed / duration)
-        let eased = easeOutCubic(progress)
-        currentPoint = CGPoint(
-            x: startPoint.x + (targetPoint.x - startPoint.x) * eased,
-            y: startPoint.y + (targetPoint.y - startPoint.y) * eased
-        )
-        syncLayers()
-
-        if progress >= 1 {
-            animating = false
-            displayLink?.isPaused = true  // stop per-frame wakeups while idle
-            overlayDebug("glide done at \(currentPoint)")
-            scheduleIdleFade()
-        }
-    }
-
     /// Keep-alive ping from any server: postpone the idle fade (if a fade is
     /// pending) and the idle self-exit. Perception-only work never summons the
     /// cursor, but it does show the status chip — the agent IS working.
     fileprivate func noteActivity() {
         lastCommand = Date()
         showChip()
-        guard visible, fadeWork != nil else { return }
-        fadeWork?.cancel()
-        scheduleIdleFade()
+        for session in sessions.values {
+            guard session.visible, session.fadeWork != nil else { continue }
+            session.fadeWork?.cancel()
+            scheduleIdleFade(for: session)
+        }
     }
 
-    /// Fade the cursor away after a quiet period so it does not sit on the
-    /// last target forever; the next glide restores it instantly.
-    private func scheduleIdleFade() {
+    /// Fade one session's cursor away after a quiet period so it does not sit
+    /// on the last target forever; the next glide restores it instantly.
+    private func scheduleIdleFade(for session: SessionCursor) {
+        let sessionID = session.sessionID
         let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.animating else { return }
-            self.visible = false
-            self.setOpacity(0, of: self.cursorLayers, animationDuration: 0.4)
-            // No target to shadow while the cursor is hidden: return the panels
+            guard let self, let session = self.sessions[sessionID], !session.animating else { return }
+            session.visible = false
+            let allLayers: [CALayer] = session.layers + session.labelLayers
+            self.setOpacity(0, of: allLayers, animationDuration: 0.4)
+            session.currentTarget = nil
+            // No target to shadow while every cursor is hidden: return the panels
             // to the idle level so the next glide starts from a known state.
-            self.resetTargetWindow()
-            overlayDebug("idle fade")
+            self.resetTargetWindowIfNeeded()
+            overlayDebug("idle fade session=\(sessionID)")
         }
-        fadeWork = work
+        session.fadeWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + idleFadeDelay, execute: work)
     }
 
@@ -405,13 +524,16 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
     /// the target was plainly visible (the #18 regression); "prefer visible" is
     /// the safe default, and clipping is scoped to genuine occlusion (proven by
     /// the occlusion self-test).
-    private func applyTargetWindow(_ id: CGWindowID?) {
+    ///
+    /// Panels are shared across sessions, so the most recent apply wins z-order.
+    private func applyTargetWindow(_ id: CGWindowID?, for session: SessionCursor) {
         guard let id, let info = windowInfo(for: id) else {
-            resetTargetWindow()
+            session.currentTarget = nil
+            resetTargetWindowIfNeeded()
             return
         }
-        let sameTarget = id == currentTarget
-        currentTarget = id
+        let sameTarget = id == session.currentTarget
+        session.currentTarget = id
 
         let center = appKitPoint(fromGlobalTopLeft: CGPoint(x: info.bounds.midX, y: info.bounds.midY))
         let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
@@ -463,11 +585,17 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         return nil
     }
 
-    /// Return every cursor panel to the idle level above all windows and drop
-    /// the target-affinity (idle fade, session end, target window gone).
-    private func resetTargetWindow() {
-        guard currentTarget != nil || backgroundTarget != nil else { return }
-        currentTarget = nil
+    /// Return cursor panels to the idle level when no session still shadows a
+    /// target (idle fade, session drop, target window gone). If another session
+    /// still has a target, re-apply that affinity instead.
+    private func resetTargetWindowIfNeeded() {
+        if let remaining = sessions.values.first(where: { $0.currentTarget != nil }) {
+            // Re-apply (window gone → apply clears it and recurses once).
+            applyTargetWindow(remaining.currentTarget, for: remaining)
+            return
+        }
+        guard backgroundTarget != nil || cursorPanels.contains(where: { $0.level != panelIdleLevel })
+        else { return }
         backgroundTarget = nil
         for panel in cursorPanels where panel.level != panelIdleLevel {
             panel.level = panelIdleLevel
@@ -495,9 +623,12 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
 
     /// Expanding ring at the point an action just landed — the visual "the
     /// click happened", distinct from the cursor arriving.
-    fileprivate func showPulse(atGlobalTopLeft point: CGPoint, targetWindow: CGWindowID?) {
+    fileprivate func showPulse(
+        atGlobalTopLeft point: CGPoint, targetWindow: CGWindowID?, sessionID: String
+    ) {
+        let session = sessionCursor(sessionID)
         lastCommand = Date()
-        applyTargetWindow(targetWindow)
+        applyTargetWindow(targetWindow, for: session)
         showChip()
         // Pulses ride the cursor panels, so they clip against the target's
         // occluders exactly as the glyph does.
@@ -515,7 +646,7 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
                 transform: nil
             )
             ring.fillColor = nil
-            ring.strokeColor = NSColor.systemBlue.cgColor
+            ring.strokeColor = session.color.cgColor
             ring.lineWidth = 3
             ring.contentsScale = panel.backingScaleFactor
             ring.position = local
@@ -651,15 +782,16 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
 
     // MARK: glyph
 
-    private func cursorGlyph() -> CGImage? {
+    private func cursorGlyph(color: NSColor) -> CGImage? {
         // Rendered at 2x so it stays crisp on Retina displays (each layer's
         // contentsScale maps it back to 32pt).
         let scale: CGFloat = 2
         let image = NSImage(size: NSSize(width: 32 * scale, height: 32 * scale))
         image.lockFocus()
         NSGraphicsContext.current?.cgContext.scaleBy(x: scale, y: scale)
-        // The classic macOS arrow-with-tail silhouette, in blue with a white
-        // outline: reads as a real mouse but is clearly the agent's. Tip at (2,30).
+        // The classic macOS arrow-with-tail silhouette, in the session color
+        // with a white outline: reads as a real mouse but is clearly the agent's.
+        // Tip at (2,30).
         let arrow = NSBezierPath()
         arrow.move(to: NSPoint(x: 2.0, y: 30.0))    // tip
         arrow.line(to: NSPoint(x: 2.0, y: 4.5))     // left edge straight down
@@ -669,7 +801,7 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         arrow.line(to: NSPoint(x: 12.1, y: 11.1))   // tail inner
         arrow.line(to: NSPoint(x: 19.6, y: 11.1))   // right wing
         arrow.close()
-        NSColor.systemBlue.setFill()
+        color.setFill()
         arrow.fill()
         NSColor.white.setStroke()
         arrow.lineWidth = 1.7
