@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>computer-use-mcp — Architecture Guide</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232d; --edge:#2b333d;
+    --ink:#e6edf3; --dim:#9aa7b4; --faint:#6b7684;
+    --accent:#5aa9ff; --accent2:#7ee0c0; --warn:#ffcf6b; --danger:#ff7b7b;
+    --tier1:#7ee0c0; --tier2:#5aa9ff; --tier3:#c99bff; --tier4:#ff7b7b;
+    --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    font-size:15px;line-height:1.62;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:var(--mono);font-size:.86em;background:#20262f;border:1px solid var(--edge);
+    padding:1px 5px;border-radius:5px;color:#d7e2ee;white-space:nowrap}
+  h2 code,h3 code,h4 code{font-size:.8em}
+  .layout{display:grid;grid-template-columns:262px 1fr;max-width:1280px;margin:0 auto}
+  /* sidebar */
+  nav{position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;
+    padding:26px 18px 60px;border-right:1px solid var(--edge);background:#0b0e12}
+  nav .brand{font-weight:700;font-size:16px;letter-spacing:.2px;margin-bottom:2px}
+  nav .brand span{color:var(--accent)}
+  nav .sub{color:var(--faint);font-size:12px;margin-bottom:20px}
+  nav a{display:block;color:var(--dim);padding:5px 10px;border-radius:7px;font-size:13.5px;
+    border-left:2px solid transparent}
+  nav a:hover{background:var(--panel);color:var(--ink);text-decoration:none}
+  nav .grp{color:var(--faint);font-size:11px;text-transform:uppercase;letter-spacing:.8px;
+    margin:18px 10px 6px;font-weight:600}
+  main{padding:44px 52px 120px;min-width:0}
+  header.hero{margin-bottom:14px}
+  header.hero h1{font-size:30px;margin:0 0 6px;letter-spacing:-.4px}
+  header.hero .tag{color:var(--dim);font-size:16px;max-width:70ch}
+  .pills{margin:16px 0 6px;display:flex;flex-wrap:wrap;gap:7px}
+  .pill{font-size:11.5px;background:var(--panel);border:1px solid var(--edge);color:var(--dim);
+    padding:3px 9px;border-radius:20px}
+  section{margin:46px 0;scroll-margin-top:20px}
+  section>h2{font-size:22px;margin:0 0 6px;padding-bottom:8px;border-bottom:1px solid var(--edge);
+    letter-spacing:-.2px}
+  section>h2 .n{color:var(--faint);font-weight:400;margin-right:10px;font-size:16px}
+  h3{font-size:17px;margin:28px 0 8px;color:#f0f4f8}
+  h4{font-size:14px;margin:20px 0 6px;color:var(--accent2);text-transform:uppercase;letter-spacing:.5px}
+  p{margin:10px 0}
+  .lead{color:var(--dim);font-size:15.5px}
+  ul,ol{margin:10px 0;padding-left:22px}
+  li{margin:5px 0}
+  .card{background:var(--panel);border:1px solid var(--edge);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .card.tight{padding:14px 16px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+  @media(max-width:900px){.grid2,.grid3{grid-template-columns:1fr}.layout{grid-template-columns:1fr}nav{display:none}main{padding:28px}}
+  .callout{border-left:3px solid var(--accent);background:#12202f;padding:12px 16px;border-radius:0 10px 10px 0;margin:16px 0}
+  .callout.key{border-color:var(--accent2);background:#10201b}
+  .callout.warn{border-color:var(--warn);background:#241f10}
+  .callout .lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--accent);display:block;margin-bottom:3px}
+  .callout.key .lbl{color:var(--accent2)}.callout.warn .lbl{color:var(--warn)}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:13.5px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--edge);vertical-align:top}
+  th{color:var(--faint);font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;font-weight:600}
+  tr:hover td{background:#12171e}
+  .mono{font-family:var(--mono)}
+  .fp{font-family:var(--mono);font-size:11.5px;color:var(--faint)}
+  pre{background:#0b0e13;border:1px solid var(--edge);border-radius:10px;padding:15px 17px;overflow-x:auto;
+    font-family:var(--mono);font-size:12.5px;line-height:1.55;margin:14px 0}
+  pre .c{color:var(--faint)}.pre .k{color:var(--accent)}
+  .kv{color:var(--accent2)}.kn{color:var(--warn)}
+  /* diagram */
+  .diagram{background:linear-gradient(180deg,#10151c,#0d1218);border:1px solid var(--edge);
+    border-radius:14px;padding:26px 22px;margin:18px 0}
+  .box{border:1px solid var(--edge);border-radius:10px;padding:12px 14px;background:var(--panel2)}
+  .box .t{font-weight:600;font-size:13.5px}
+  .box .d{color:var(--dim);font-size:12px;margin-top:3px}
+  .row{display:flex;gap:14px;align-items:stretch;justify-content:center;flex-wrap:wrap}
+  .arrow{text-align:center;color:var(--faint);font-size:20px;margin:8px 0;letter-spacing:2px}
+  .clients{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+  .client{font-size:12px;background:#1a2430;border:1px solid var(--edge);padding:5px 11px;border-radius:8px;color:var(--dim)}
+  .accentbox{border-color:var(--accent);box-shadow:0 0 0 1px rgba(90,169,255,.15)}
+  .daemonbox{border-color:var(--accent2);box-shadow:0 0 0 1px rgba(126,224,192,.18);background:#10201b}
+  /* ladder */
+  .ladder{display:flex;flex-direction:column;gap:0;margin:16px 0}
+  .rung{display:grid;grid-template-columns:132px 1fr;gap:0;border:1px solid var(--edge);border-bottom:none;overflow:hidden}
+  .rung:first-child{border-radius:10px 10px 0 0}
+  .rung:last-child{border-radius:0 0 10px 10px;border-bottom:1px solid var(--edge)}
+  .rung .lv{padding:12px 14px;font-weight:700;font-size:13px;display:flex;align-items:center;gap:8px}
+  .rung .bd{padding:12px 14px;font-size:13px;color:var(--dim);border-left:1px solid var(--edge);background:var(--panel)}
+  .rung.t1 .lv{background:rgba(126,224,192,.10);color:var(--tier1)}
+  .rung.t2 .lv{background:rgba(90,169,255,.10);color:var(--tier2)}
+  .rung.t25 .lv{background:rgba(201,155,255,.08);color:var(--tier3)}
+  .rung.t3 .lv{background:rgba(201,155,255,.12);color:var(--tier3)}
+  .rung.t4 .lv{background:rgba(255,123,123,.10);color:var(--tier4)}
+  .dot{width:8px;height:8px;border-radius:50%;flex:none}
+  .toollist{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:6px;margin:10px 0}
+  .tchip{font-family:var(--mono);font-size:11.5px;padding:5px 8px;border-radius:6px;border:1px solid var(--edge);background:var(--panel)}
+  .tchip.mut{border-color:#3a2b2b;background:#1e1615;color:#ffb3a0}
+  .tchip.ro{border-color:#26333a;background:#141b1e;color:#9fd8c8}
+  .legend{display:flex;gap:16px;font-size:12px;color:var(--dim);margin:8px 0}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:11px;height:11px;border-radius:3px;display:inline-block}
+  footer{color:var(--faint);font-size:12.5px;border-top:1px solid var(--edge);padding-top:18px;margin-top:60px}
+  .num{color:var(--accent);font-weight:700}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav>
+  <div class="brand"><span>computer</span>-use-mcp</div>
+  <div class="sub">Architecture guide · v0.4.1</div>
+  <div class="grp">Orientation</div>
+  <a href="#what">1 · What it is</a>
+  <a href="#bigidea">2 · The big idea</a>
+  <a href="#processes">3 · Process model</a>
+  <a href="#request">4 · A request's journey</a>
+  <div class="grp">Core mechanics</div>
+  <a href="#perception">5 · Perception & snapshots</a>
+  <a href="#ladder">6 · Dispatch ladder</a>
+  <a href="#outcome">7 · Verifier-first outcomes</a>
+  <a href="#gates">8 · Safety gates</a>
+  <a href="#overlay">9 · Agent cursor overlay</a>
+  <a href="#skills">10 · Skills & batch</a>
+  <div class="grp">Reference</div>
+  <a href="#tools">11 · Tool catalog</a>
+  <a href="#map">12 · Source map</a>
+  <a href="#contracts">13 · The contracts</a>
+  <a href="#mental">14 · Mental model recap</a>
+</nav>
+
+<main>
+<header class="hero">
+  <h1>computer-use-mcp</h1>
+  <div class="tag">A single signed Swift binary that turns your Mac into a standard <strong>MCP server</strong> — so any agent (Claude Code, Cursor, Codex, your own) can <em>see and operate your apps in the background</em>, without hijacking your cursor or stealing focus.</div>
+  <div class="pills">
+    <span class="pill">Swift 6 · macOS 14+</span>
+    <span class="pill">MCP over stdio</span>
+    <span class="pill">Accessibility + ScreenCaptureKit + CoreGraphics</span>
+    <span class="pill">Shared per-user daemon</span>
+    <span class="pill">~13k LOC</span>
+    <span class="pill">30 tools</span>
+  </div>
+</header>
+
+<p class="lead">This doc is a map, not a tour of every line. It gives you the shape of the system and the load-bearing ideas, with <span class="fp">file:path</span> anchors so you can dive where you want. Read §1–4 first for the skeleton; the rest is depth on each moving part.</p>
+
+<!-- 1 -->
+<section id="what">
+  <h2><span class="n">01</span>What it is</h2>
+  <p>Most "computer use" runs against a sandboxed VM or a remote framebuffer: the agent gets one composited pixel stream and a virtual mouse. This project is different — it's a <strong>local, trusted, in-session driver</strong>. Because it runs on your real Mac as you, it can reach <em>below the pixels</em>:</p>
+  <div class="grid2">
+    <div class="card tight"><h4>Accessibility (AX)</h4>Semantic tree of every window: roles, labels, values, actions, focused element, settable attributes. This is how it "reads" UIs precisely instead of guessing from pixels.</div>
+    <div class="card tight"><h4>ScreenCaptureKit</h4>Captures <em>one specific window</em> — even occluded or on another Space — without foregrounding it. Not a whole-display stream.</div>
+    <div class="card tight"><h4>CoreGraphics event posting</h4>Posts mouse/key events <em>to a process or window</em> (<code>CGEventPostToPid</code>) instead of always moving a global pointer.</div>
+    <div class="card tight"><h4>A shared local daemon</h4>One engine process per user coordinates capture, input, the cursor overlay, and app leases across every concurrent agent session.</div>
+  </div>
+  <div class="callout"><span class="lbl">The trade</span>It's more capable than a VM driver, but correctness now depends on macOS TCC grants (Accessibility + Screen Recording), the target app's AX/event behaviour, and an unlocked desktop. The whole design is about being <em>honest</em> about that seam rather than faking success.</div>
+</section>
+
+<!-- 2 -->
+<section id="bigidea">
+  <h2><span class="n">02</span>The big idea: two operators, no focus fight</h2>
+  <p>The central promise — the thing every subsystem exists to protect — is <strong>background control</strong>. You keep typing in your foreground app while an agent drives a <em>different</em> app that may be occluded behind other windows. The agent's synthetic clicks and keystrokes never move your real cursor and never steal keyboard focus.</p>
+  <p>Three principles fall out of that promise, and they're the lens for everything below:</p>
+  <div class="grid3">
+    <div class="card tight"><h4>Background-safe by default</h4>Every mutating tool tries the path that <em>doesn't</em> touch the real cursor or foreground first. Focus-changing paths exist but need explicit opt-in (<code>allow_focus_change</code>, <code>allow_global_cursor</code>).</div>
+    <div class="card tight"><h4>Never lie about success</h4>Background event delivery has no OS "it landed" signal. So the server observes the effect and reports a verdict — it will not claim success it can't see.</div>
+    <div class="card tight"><h4>Yield to the human</h4>If you're actively working in the same app, mutating tools pause with a recoverable error rather than interleaving synthetic events with your real ones.</div>
+  </div>
+</section>
+
+<!-- 3 -->
+<section id="processes">
+  <h2><span class="n">03</span>Process model</h2>
+  <p>One binary, launched as different subcommands (see <span class="fp">main.swift</span>). Understanding the three-process split is the single most important thing about this codebase.</p>
+
+  <div class="diagram">
+    <div class="clients">
+      <span class="client">Claude Code</span><span class="client">Cursor</span><span class="client">Codex CLI</span><span class="client">Gemini CLI</span><span class="client">your agent</span>
+    </div>
+    <div class="arrow">│ spawn one <code>serve</code> each, talk MCP over stdio</div>
+    <div class="row">
+      <div class="box accentbox" style="flex:1">
+        <div class="t">serve &nbsp;<span class="fp">(N of them — one per client)</span></div>
+        <div class="d">A <strong>thin stdio shim</strong>. Lists tools, forwards every <code>CallTool</code> to the daemon over a Unix socket. Holds no engine state. <span class="fp">Serve.swift · Dispatch.swift</span></div>
+      </div>
+    </div>
+    <div class="arrow">│ Unix domain socket · 0700 dir · same-UID peer check · bearer token</div>
+    <div class="row">
+      <div class="box daemonbox" style="flex:2">
+        <div class="t">daemon &nbsp;<span class="fp">(exactly one per user — flock singleton)</span></div>
+        <div class="d">The <strong>engine</strong>. Owns Accessibility, ScreenCaptureKit, input delivery, snapshots, app leases. All sessions funnel through here, so two agents <em>cannot</em> collide on shared system services. Idle-exits after 30 min → next session spawns a fresh one (also picks up binary updates). <span class="fp">Daemon/DaemonServer.swift</span></div>
+      </div>
+    </div>
+    <div class="arrow">│ writes target points to a FIFO</div>
+    <div class="row">
+      <div class="box" style="flex:1">
+        <div class="t">overlay &nbsp;<span class="fp">(one singleton helper)</span></div>
+        <div class="d">Cosmetic <strong>agent cursor</strong>. A separate <code>.accessory</code> AppKit process (the server has no run loop). Draws a glyph gliding to targets across all displays. Never moves the real cursor. <span class="fp">Overlay/OverlayHelper.swift</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Why a shared daemon?</h3>
+  <ul>
+    <li><strong>No collisions by construction.</strong> Capture, AX, and input are single-owner. Multiple agents can't stomp each other's screenshots or event streams.</li>
+    <li><strong>Cross-process element ids.</strong> Snapshots persist to disk, so an <code>element_id</code> minted in one process resolves in another (serve, the <code>call</code> harness, or a restarted server).</li>
+    <li><strong>App leases.</strong> The daemon serializes action tools against the same resolved pid for a short window — two sessions can't interleave actions in one app. Perception is never blocked. <span class="fp">Daemon/AppLeases.swift</span></li>
+  </ul>
+  <div class="callout warn"><span class="lbl">Fail-closed rule</span>If the daemon is unreachable, <strong>read-only</strong> tools may fall back to running in-process, but <strong>mutating</strong> tools refuse rather than bypass lease + safety arbitration — unless you explicitly set <code>no_daemon</code>. See the branch in <span class="fp">Dispatch.swift:20</span>.</div>
+
+  <p>Other subcommands are operational: <code>doctor</code> (permission check/prompt), <code>health_report</code> (identity + permissions + capture + daemon diagnostics), <code>call</code> (invoke one tool from the shell — the dev/self-test harness), <code>version</code>.</p>
+</section>
+
+<!-- 4 -->
+<section id="request">
+  <h2><span class="n">04</span>A request's journey</h2>
+  <p>Every entry point (serve, daemon, call) converges on <strong>one dispatch funnel</strong>, <span class="fp">dispatchTool()</span> in <span class="fp">Dispatch.swift</span>. That single funnel is why guarantees are uniform — nothing reaches a handler without passing the same gates.</p>
+  <pre><span class="c">// client → serve → daemon → dispatchTool()</span>
+<span class="c">1.</span> catalog lookup            <span class="c">// unknown tool → error</span>
+<span class="c">2.</span> RateLimiter.acquire()     <span class="c">// optional global throttle (off by default)</span>
+<span class="c">3.</span> SleepAssertion.noteActivity()  <span class="c">// keep the Mac awake while calls flow</span>
+<span class="c">4.</span> preflightRefusal():
+      ├─ <span class="kv">screen-lock pause</span>     <span class="c">// mutating tools pause when locked</span>
+      ├─ <span class="kv">interference yield</span>    <span class="c">// yield if the human is active in this app</span>
+      └─ <span class="kv">URL policy</span>            <span class="c">// browser deny/confirm patterns</span>
+<span class="c">5.</span> spec.handler(arguments)   <span class="c">// the actual tool logic</span>
+<span class="c">6.</span> log + Telemetry.record    <span class="c">// per-call stderr line + counters</span></pre>
+  <p>At the daemon level there are two <em>more</em> gates in front of this: <strong>peer auth</strong> (same-UID + bearer token, <span class="fp">DaemonServer.swift:239</span>) and <strong>app-lease check</strong> before dispatch. The result comes back carrying <code>_meta</code> blocks — <code>focus</code> telemetry and the <code>outcome</code> verdict (§7) — that generic MCP clients can read to detect regressions.</p>
+</section>
+
+<!-- 5 -->
+<section id="perception">
+  <h2><span class="n">05</span>Perception &amp; snapshots — the locator engine</h2>
+  <p>How the agent "sees". <code>get_app_state</code> is the canonical surface: it returns <strong>one window's AX tree + a ScreenCaptureKit screenshot</strong>, with every element boxed in the screenshot's pixel space. <span class="fp">Tools/Perception.swift · Core/Screenshot.swift</span></p>
+
+  <h3>The stale-reference problem, solved with locators</h3>
+  <p>Raw AX element references go stale the instant an app relayouts. So a snapshot never hands out a raw reference — it hands out an <code>element_id</code> (<code>e12</code>) backed by a stored <strong>locator</strong>: the path of <span class="mono">(role, index-among-same-role-siblings)</span> steps from the window root. Before any action, the id's locator is <em>re-resolved against the live tree</em>. <span class="fp">Core/Snapshot.swift</span></p>
+  <div class="callout key"><span class="lbl">The id-survival contract</span>Ids are generation-tagged (<code>e12@s3</code>), but validity is <em>membership in the latest snapshot</em>, not a generation match. An element that survives a UI change keeps its id — so ids you captured before the change keep working. An id fails only when its element didn't survive, and the error tells you to fetch fresh state. Re-resolution also means an id <em>never silently operates a different control</em>.</div>
+
+  <h3>Three coordinate spaces (name which one, always)</h3>
+  <table>
+    <tr><th>Space</th><th>Used by</th><th>Origin / units</th></tr>
+    <tr><td><span class="kv">Screenshot pixels</span></td><td>state boxes, OCR boxes, <code>click</code>/<code>scroll</code>/<code>drag</code> coords</td><td>Top-left of latest window screenshot, pixels</td></tr>
+    <tr><td><span class="kv">Global screen points</span></td><td>AX frames, internal delivery, <code>manage_window move</code></td><td>macOS global display space, top-left, points</td></tr>
+    <tr><td><span class="kv">Window-local points</span></td><td>window-routed synthetic events (internal bridge)</td><td>Bottom-left AppKit window coords</td></tr>
+  </table>
+  <p>Coordinate actions <em>require</em> a prior snapshot (it carries window origin, scale, pixel bounds). Out-of-bounds coordinates are rejected, not clipped. <span class="fp">Core/HitTest.swift</span></p>
+
+  <h3>Cheap loops: diffs, not re-sends</h3>
+  <p>After a mutating action, the result returns <em>reduced</em> fresh state. If the tree didn't change, it says "existing ids remain valid" instead of resending. If it did, it returns a compact <strong>diff</strong> — changed (<span class="mono">~</span>), appeared (<span class="mono">+</span>), disappeared (<span class="mono">−</span>) — falling back to the full tree only when &gt;50% churned. Fallbacks for sparse UIs: <code>find</code> (walks a deeper tree, up to 5000 elements, no new screenshot), <code>read_text</code> (long AX values), and <code>ocr:true</code> (Vision OCR boxes when AX is thin). <span class="fp">Core/TreeBuilder.swift · Core/OCR.swift</span></p>
+</section>
+
+<!-- 6 -->
+<section id="ladder">
+  <h2><span class="n">06</span>The dispatch ladder — how it acts without stealing focus</h2>
+  <p>This is the heart of the background guarantee. For any click/scroll/key, the server tries delivery paths <strong>AX-first, event-last</strong>, and — critically — <strong>never auto-escalates past tier 3</strong>, because macOS gives no reliable "event landed" signal. <span class="fp">Core/Input.swift</span></p>
+
+  <div class="ladder">
+    <div class="rung t1"><div class="lv"><span class="dot" style="background:var(--tier1)"></span>Tier 1 · AX</div><div class="bd"><strong>AXPress, AXShowMenu, set value, select text, menu/window attributes.</strong> Precise, semantic, posts <em>no</em> event at all. Fails loudly when unsupported (disabled control, no settable value).</div></div>
+    <div class="rung t2"><div class="lv"><span class="dot" style="background:var(--tier2)"></span>Tier 2 · per-window</div><div class="bd">When the AX window maps to a <code>CGWindowID</code>, bridge an <code>NSEvent</code> with that <code>windowNumber</code> and <code>CGEventPostToPid</code>. Routed to a specific window, no cursor movement.</div></div>
+    <div class="rung t25"><div class="lv"><span class="dot" style="background:var(--tier3)"></span>Tier 2.5 · SkyLight</div><div class="bd"><em>Flagged prototype, off by default.</em> Private <code>SLEventPostToPid</code> SPI, <code>dlopen</code>-resolved at runtime. May break across macOS versions / notarization. <code>COMPUTER_USE_MCP_SKYLIGHT=1</code>.</div></div>
+    <div class="rung t3"><div class="lv"><span class="dot" style="background:var(--tier3)"></span>Tier 3 · per-pid</div><div class="bd">No window id available → <code>CGEventPostToPid</code> to the process directly. Still background, still no cursor movement. App-dependent: apps needing real key-focus may drop it.</div></div>
+    <div class="rung t4"><div class="lv"><span class="dot" style="background:var(--tier4)"></span>Tier 4 · global</div><div class="bd"><strong>Explicit escape hatch only.</strong> Real cursor warp + session tap. Clicks need <code>allow_global_cursor:true</code>; keyboard additionally needs the app already foreground. Restores the cursor afterward.</div></div>
+  </div>
+
+  <div class="callout"><span class="lbl">Why no auto-escalation</span>Tiers 2–3 have no success signal. Rather than silently take over your session, a tier-2/3 delivery that produced <em>no visible UI change</em> appends a <strong>dropped-event hint</strong> naming the explicit retry (<code>allow_global_cursor:true</code> + <code>allow_focus_change:true</code>). The caller decides. AX-tier actions fail loudly and get no hint.</div>
+</section>
+
+<!-- 7 -->
+<section id="outcome">
+  <h2><span class="n">07</span>Verifier-first outcomes</h2>
+  <p>The design pivot that makes background control trustworthy: move mutating tools from <em>"success = the AX call didn't throw"</em> to <em>"success = the effect was observed."</em> <span class="fp">Core/ActionOutcome.swift · docs/outcome-contract.md</span></p>
+  <p>Every mutating tool snapshots the target element's fields <em>before</em> dispatch, re-reads them (plus the whole-window change bit) <em>after</em>, diffs the fields that matter for that action family, and reduces to a four-value verdict carried in a <code>computer-use-mcp/outcome</code> <code>_meta</code> block:</p>
+  <table>
+    <tr><th>Verdict</th><th>Meaning</th></tr>
+    <tr><td><span class="kv">success</span></td><td>Effect observed — or the target was already in the requested state (idempotent no-op counts).</td></tr>
+    <tr><td><span class="kn">effect_not_verified</span></td><td>Dispatched cleanly but <em>no confirming effect seen</em> — the exact case old contracts wrongly called success.</td></tr>
+    <tr><td><span class="kn">verifier_ambiguous</span></td><td>Couldn't read enough state to judge. Never a hard error — it may well have worked.</td></tr>
+    <tr><td class="mono">unsupported</td><td>The target can't perform this action at all (disabled, no settable value). Retrying won't help.</td></tr>
+  </table>
+  <p>Note <code>isError</code> is left unchanged — a verified no-effect is not a throw, it's data. This composes with the <code>focus</code> telemetry block (<code>focus_changed</code>, <code>delivery_tier</code>, <code>ui_changed</code>, frontmost before/after) from <span class="fp">Core/FocusTelemetry.swift</span>. A generic client treating <code>focus_changed:true</code> + <code>focus_change_allowed:false</code> as a regression is the intended contract.</p>
+</section>
+
+<!-- 8 -->
+<section id="gates">
+  <h2><span class="n">08</span>Safety gates the agent can't bypass</h2>
+  <p>These run server-side inside the funnel — no tool argument disables them casually. <span class="fp">Core/SafetyPolicy.swift · InterferenceGuard.swift · URLPolicy.swift · SessionPower.swift</span></p>
+  <div class="grid2">
+    <div class="card tight"><h4>Interference yield</h4>If real HID input was seen within <code>interference_idle_seconds</code> (default 1s) <em>and</em> the target app is the one you're in — or the action uses the global cursor/keyboard — the call returns a recoverable yield error. Read from CGEventSource HID state, which the server's own synthetic per-pid/window events <em>don't</em> update, so the agent can't trip its own guard.</div>
+    <div class="card tight"><h4>Browser URL policy</h4>Before a mutating action on a known browser, it reads the current page URL from AX. <code>url_deny</code> substrings block outright (<code>confirm</code> can't override); <code>url_confirm</code> + built-in payment-page defaults require per-action <code>confirm</code>. Unreadable URL fails closed only if you configured patterns.</div>
+    <div class="card tight"><h4>Screen lock &amp; sleep</h4>A prevent-idle-sleep assertion is held while calls flow (released after a quiet period) so long tasks don't die to sleep. When the screen is actually <em>locked</em>, mutating tools pause with a recoverable error; read-only perception stays live. No auto-unlock — that's your call.</div>
+    <div class="card tight"><h4>Confirmation gating</h4>Destructive labels, confirmation-listed apps, secure password fields, risky URL schemes, and destructive window actions all require <code>confirm:true</code>. The caller reads the reason and retries deliberately.</div>
+  </div>
+</section>
+
+<!-- 9 -->
+<section id="overlay">
+  <h2><span class="n">09</span>The agent cursor overlay</h2>
+  <p>Purely cosmetic, but it's what makes background control <em>legible</em> to a watching human: you can see where the agent is working without it touching your real pointer. <span class="fp">Overlay/OverlayHelper.swift · AgentCursor.swift</span></p>
+  <ul>
+    <li><strong>Separate process</strong> because the MCP server is a headless async stdio process with no AppKit run loop. The helper runs an <code>.accessory</code> NSApplication — no Dock icon, never frontmost.</li>
+    <li><strong>Singleton</strong> — one cursor serves every concurrent server process. Reads target points from a shared FIFO (<code>move &lt;globalX&gt; &lt;globalY&gt;</code>, <code>ping</code> keep-alives) and glides a glyph toward them.</li>
+    <li><strong>Multi-display correct.</strong> One click-through borderless panel <em>per display</em> (because "Displays have separate Spaces" clips a window to one screen). The cursor position is modeled once in AppKit global coords and mirrored into every panel; each clips to its own screen, so the glyph appears on whichever display holds it — even straddling a boundary mid-glide.</li>
+  </ul>
+  <div class="callout warn"><span class="lbl">Verification gotcha</span>A plain <code>screencapture</code> shell-out <em>cannot see</em> this overlay. To prove the cursor renders, capture via ScreenCaptureKit through the real server.</div>
+</section>
+
+<!-- 10 -->
+<section id="skills">
+  <h2><span class="n">10</span>Skills &amp; batch — teach once, replay with no model</h2>
+  <div class="grid2">
+    <div class="card">
+      <h4>batch</h4>
+      <p>Up to 10 app-scoped actions (plus <code>wait_for</code>) against <em>one</em> app in a single round-trip. Every step passes the normal funnel and per-step gates. All steps validated before any runs; execution stops at the first failure and reports which already ran. Intermediate steps skip state for speed; the final step returns fresh state. Can't nest itself or <code>run_skill</code>. <span class="fp">Tools/BatchTool.swift</span></p>
+    </div>
+    <div class="card">
+      <h4>Skills (record → replay)</h4>
+      <p><code>save_skill</code> freezes a performed task into <strong>durable locators</strong> (role + label + tree path). <code>run_skill</code> re-resolves each anchor against the live tree — exact path first, unique role+label as the layout-shift fallback — and replays through the same per-step gates <em>with no model in the loop</em>. <code>{{param}}</code> placeholders substitute into string args; steps may assert with <code>expect</code>. A step that won't resolve stops the run and names it. <span class="fp">Skills/Skill.swift · SkillStore.swift · SkillTools.swift · Recorder.swift · ReplayVerdict.swift</span></p>
+    </div>
+  </div>
+  <p>Both are just deterministic re-drivers of the underlying tools: neither grants an escalation its steps couldn't request individually. Skills persist as validated JSON under Application Support; <code>record_skill_start</code>/<code>stop</code> capture a demonstration live.</p>
+</section>
+
+<!-- 11 -->
+<section id="tools">
+  <h2><span class="n">11</span>Tool catalog — 30 tools</h2>
+  <p>Schemas + model-facing descriptions live in <span class="fp">Tools/Catalog.swift</span>; handlers in the sibling <span class="fp">Tools/*.swift</span>. Mutating tools (red) pass the full gate stack and fail closed without a daemon; read-only tools (green) can fall back in-process.</p>
+  <div class="legend">
+    <span><span class="sw" style="background:#1e1615;border:1px solid #3a2b2b"></span> mutating — gated, needs daemon</span>
+    <span><span class="sw" style="background:#141b1e;border:1px solid #26333a"></span> read-only — perception, never blocked</span>
+  </div>
+  <h4>Perception (read-only)</h4>
+  <div class="toollist">
+    <span class="tchip ro">get_app_state</span><span class="tchip ro">find</span><span class="tchip ro">read_text</span><span class="tchip ro">list_apps</span><span class="tchip ro">list_windows</span><span class="tchip ro">read_clipboard</span><span class="tchip ro">wait_for</span><span class="tchip ro">get_skill</span><span class="tchip ro">list_skills</span><span class="tchip ro">health_report</span>
+  </div>
+  <h4>Interaction (mutating)</h4>
+  <div class="toollist">
+    <span class="tchip mut">click</span><span class="tchip mut">type_text</span><span class="tchip mut">set_value</span><span class="tchip mut">press_key</span><span class="tchip mut">scroll</span><span class="tchip mut">drag</span><span class="tchip mut">select_text</span><span class="tchip mut">click_menu_item</span><span class="tchip mut">perform_secondary_action</span><span class="tchip mut">page</span><span class="tchip mut">write_clipboard</span>
+  </div>
+  <h4>Apps, windows &amp; navigation (mutating)</h4>
+  <div class="toollist">
+    <span class="tchip mut">open_app</span><span class="tchip mut">open_url</span><span class="tchip mut">manage_window</span>
+  </div>
+  <h4>Orchestration &amp; skills (mutating)</h4>
+  <div class="toollist">
+    <span class="tchip mut">batch</span><span class="tchip mut">run_skill</span><span class="tchip mut">save_skill</span><span class="tchip mut">delete_skill</span><span class="tchip mut">record_skill_start</span><span class="tchip mut">record_skill_stop</span>
+  </div>
+  <p class="fp" style="margin-top:14px">Exact mutating set: click, type_text, set_value, press_key, scroll, drag, select_text, click_menu_item, perform_secondary_action, page, write_clipboard, open_app, open_url, manage_window, save_skill, delete_skill, record_skill_start, record_skill_stop, run_skill, batch — see <span class="fp">ToolKit/ToolSpec.swift:23</span> (<code>mutatingToolNames</code>).</p>
+</section>
+
+<!-- 12 -->
+<section id="map">
+  <h2><span class="n">12</span>Source map — where to look</h2>
+  <p>Everything is under <span class="fp">Sources/computer-use-mcp/</span>. Four layers:</p>
+  <table>
+    <tr><th>Layer</th><th>Files</th><th>What lives here</th></tr>
+    <tr><td><strong>Entry / wiring</strong></td><td class="fp">main.swift · Serve.swift · Dispatch.swift · Call.swift · Doctor.swift · HealthReport.swift · Version.swift</td><td>Subcommand routing, the shared dispatch funnel, rate limiter, per-call logging.</td></tr>
+    <tr><td><strong>ToolKit</strong></td><td class="fp">ToolKit/ToolSpec.swift · Schema.swift</td><td>Tool-spec type, mutating-tool set, typed argument accessors, JSON schema helpers.</td></tr>
+    <tr><td><strong>Tools</strong> <span class="fp">(the public surface)</span></td><td class="fp">Tools/Catalog.swift · Perception.swift · ClickTool.swift · InputTools.swift · TextTools.swift · SystemTools.swift · PageTool.swift · BatchTool.swift · FindTool.swift · Handlers.swift · HealthReportTool.swift</td><td>Schemas + handlers for all 30 tools. <span class="fp">Catalog.swift</span> (818 loc) and <span class="fp">PageTool.swift</span> (977 loc) are the big ones.</td></tr>
+    <tr><td><strong>Core</strong> <span class="fp">(the engine)</span></td><td class="fp">Core/Snapshot.swift · TreeBuilder.swift · AX.swift · Input.swift · SkyLightInput.swift · Screenshot.swift · HitTest.swift · ActionOutcome.swift · FocusTelemetry.swift · InterferenceGuard.swift · URLPolicy.swift · SafetyPolicy.swift · SessionPower.swift · Window.swift · WindowMotion.swift · ScrollRouting.swift · AppResolver.swift · Target.swift · Keymap.swift · OCR.swift · TextExtraction.swift · GeometrySanitization.swift · Telemetry.swift · Config.swift · CrossProcessLock.swift · ErrorCodes.swift · ActionChains.swift · PointTarget.swift</td><td>Perception, the dispatch ladder, verification, safety, coordinate math, telemetry. This is the real substance of the project.</td></tr>
+    <tr><td><strong>Daemon</strong></td><td class="fp">Daemon/DaemonServer.swift · DaemonClient.swift · DaemonProtocol.swift · AppLeases.swift</td><td>Socket server, auth handshake, framing/limits, per-app leases.</td></tr>
+    <tr><td><strong>Overlay</strong></td><td class="fp">Overlay/OverlayHelper.swift · AgentCursor.swift · OverlayTransport.swift</td><td>The cosmetic agent-cursor helper process + FIFO transport.</td></tr>
+    <tr><td><strong>Skills</strong></td><td class="fp">Skills/SkillStore.swift · SkillTools.swift · Recorder.swift · Skill.swift · ReplayVerdict.swift</td><td>Teach/replay: persistence, validation, templating, locator anchoring.</td></tr>
+  </table>
+  <p>Plus: <span class="fp">Sources/ComputerUseFixture/</span> — a deterministic AppKit GUI fixture with stable AX identifiers, for the end-to-end "truth suite"; <span class="fp">Tests/ComputerUseMCPTests/</span>; <span class="fp">scripts/</span> (live/CI eval harnesses like <code>live_background_eval.py</code>); <span class="fp">docs/</span> (the contracts below); <span class="fp">packaging/homebrew/</span>.</p>
+</section>
+
+<!-- 13 -->
+<section id="contracts">
+  <h2><span class="n">13</span>The contracts — read these next</h2>
+  <p>This repo is unusually spec-driven: the behaviour is written down as <em>contracts</em> that tests, tool docs, and evals all reference. If you read nothing else after this page, read these two.</p>
+  <div class="grid2">
+    <div class="card"><h4><a href="architecture/modality-contract.md">Modality Contract</a></h4>The production bible. A surface-by-surface matrix (observation, capture scope, element identity, dispatch ladder, leases, safety) with default contract + escape hatch + failure language for each. Every claim ends with a source anchor.</div>
+    <div class="card"><h4><a href="architecture/background-control-contract.md">Background Control Contract</a></h4>The three delivery modes (background-safe / best-effort / focus-mutating), the focus-telemetry JSON shape, the yield-to-human rule, and the deterministic eval recipe.</div>
+  </div>
+  <div class="grid3" style="margin-top:14px">
+    <div class="card tight"><h4><a href="outcome-contract.md">Outcome Contract</a></h4>The verifier design + per-tool "trap matrix" behind §7.</div>
+    <div class="card tight"><h4><a href="TESTING.md">TESTING.md</a></h4>The three verification tiers and the hosted-CI-vs-live-GUI safety boundary.</div>
+    <div class="card tight"><h4><a href="fixture-app.md">Fixture App</a></h4>The deterministic GUI used as the source of truth for background-control checks.</div>
+  </div>
+</section>
+
+<!-- 14 -->
+<section id="mental">
+  <h2><span class="n">14</span>Mental model recap</h2>
+  <ol>
+    <li><strong>One binary, three roles.</strong> N thin <code>serve</code> shims → one <code>daemon</code> engine → one <code>overlay</code> cursor. The daemon owning all shared state is why concurrent agents can't collide.</li>
+    <li><strong>One funnel.</strong> Every call — from any entry point — passes the same gates in <code>dispatchTool</code>. Uniform guarantees come from that single chokepoint.</li>
+    <li><strong>See below the pixels.</strong> AX tree for semantics + ScreenCaptureKit for one window + ids backed by re-resolvable locators. Ids survive UI changes; actions never silently hit the wrong control.</li>
+    <li><strong>Act AX-first, event-last, never auto-escalate.</strong> The ladder protects your cursor and focus by default; global takeover is always an explicit opt-in.</li>
+    <li><strong>Never lie.</strong> Background delivery has no OS success signal, so the server <em>verifies the effect</em> and reports a four-value verdict + focus telemetry instead of claiming success.</li>
+    <li><strong>Yield to the human.</strong> Interference guard, screen-lock pause, URL policy, confirmation gating — all server-side, all recoverable errors, none the agent can casually disable.</li>
+  </ol>
+  <div class="callout key"><span class="lbl">Where to poke next</span>Tell me a thread you want to pull — e.g. "walk me through a <code>click</code> end to end", "how does locator re-resolution actually work in <span class="fp">Snapshot.swift</span>", "show me the daemon auth handshake", or "how does <code>page</code> decide Chromium vs WKWebView" — and we'll go deep from here.</div>
+</section>
+
+<footer>
+  Generated for <span class="mono">computer-use-mcp</span> @ <span class="mono">c5f05de</span> · v0.4.1 · macOS 14+ · Swift 6.
+  Source of truth is always the code + <span class="fp">docs/architecture/*.md</span>; this page is a map, kept deliberately short.
+</footer>
+</main>
+</div>
+</body>
+</html>

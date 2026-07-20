@@ -13,6 +13,50 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 Nothing yet.
 
+## [0.4.1] — 2026-07-07
+
+Reliability hardening on top of the 0.4.0 verifier-first surface: honest scroll
+and replay outcomes, safer geometry, snapshot generation lifecycle fixes, and a
+web-focused `page` tool. Version identity stays in
+`Sources/computer-use-mcp/Version.swift` (`0.4.1`); the app bundle reads that
+same source of truth.
+
+### Added
+
+- **`page` tool.** CSS-selector click and text entry for web surfaces, with
+  Chromium/WKWebView paths, `#id` resolution via `AXDOMIdentifier` in the AX
+  fallback, destructive-action annotations, and MCP tool annotations on every
+  catalog entry (including exposing `health_report` as a tool).
+- **Env-gated SkyLight input rung.** Opt-in tier-2.5 delivery via
+  `COMPUTER_USE_MCP_SKYLIGHT=1` (`SLEventPostToPid`), with hardened posting
+  success checks.
+- **Structured `run_skill` replay verdicts.** Per-step replay outcomes in
+  `_meta`, with expectation-transition proof, timed-out expectation failures,
+  and honest missing-outcome handling.
+- **Fixture web pane input** (`#web-text-field`) and an inert scroll probe for
+  truth-suite coverage of web entry and non-moving scroll containers.
+
+### Changed
+
+- **App-bundle version reading** from `Version.swift` (single source of truth);
+  Homebrew formula filled for the v0.4.1 tarball.
+- **Scroll outcomes require movement evidence** — a non-moving container no
+  longer reports a verified success.
+- **Replay expectations** are honored before classifying outcome failure;
+  corroborated web AX success restored after echo false-success detection.
+- Bounded retry for WKWebView cold-start web-area materialization; web AX-echo
+  false success downgraded to `effect_not_verified`.
+
+### Fixed
+
+- **Snapshot generation lifecycle** (and matching unit regressions) so stale or
+  raced generations cannot poison later captures.
+- **Non-finite geometry conversion crashes** when AX or window frames yield NaN /
+  infinite values.
+- **Health-report outcome honesty** restored for success paths that were
+  incorrectly classified.
+- Hardened `page` tool verification and targeting.
+
 ## [0.4.0] — 2026-07-03
 
 Verifier-first reliability and large-tree perception. Certified by a live
@@ -176,7 +220,8 @@ First working end-to-end computer-use MCP server.
   gates enforced independent of the calling agent.
 - Config file + env-var configuration, per-call logging, optional rate limit.
 
-[Unreleased]: https://github.com/minghinmatthewlam/computer-use-mcp/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/minghinmatthewlam/computer-use-mcp/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/minghinmatthewlam/computer-use-mcp/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/minghinmatthewlam/computer-use-mcp/releases/tag/v0.4.0
 [0.3.0]: https://github.com/minghinmatthewlam/computer-use-mcp/releases/tag/v0.3.0
 </content>

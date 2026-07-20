@@ -1,7 +1,7 @@
 # computer-use-mcp
 
 [![CI](https://github.com/minghinmatthewlam/computer-use-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/minghinmatthewlam/computer-use-mcp/actions/workflows/ci.yml)
-![version](https://img.shields.io/badge/version-v0.3.0-blue)
+![version](https://img.shields.io/badge/version-v0.4.1-blue)
 ![platform](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey)
 ![Swift](https://img.shields.io/badge/Swift-6.0-orange)
 ![license](https://img.shields.io/badge/license-MIT-green)
@@ -314,6 +314,10 @@ flowchart LR
   AX & SCK & LADDER & OVERLAY -->|drive / observe| APPS["Target macOS apps<br/>(foreground or occluded)"]
 ```
 
+A longer walkthrough of the process model, dispatch ladder, outcomes, and
+source map lives in
+[docs/architecture-overview.html](docs/architecture-overview.html).
+
 ## Tools
 
 **Perceive** `get_app_state` (with `scope_element_id`/`max_elements` for huge
@@ -327,7 +331,7 @@ selector web interaction with DOM verification where available) · `batch` (a
 short action sequence in one round-trip, stopping at the first failure)
 
 **System** `open_app` · `open_url` · `manage_window` · `read_clipboard` ·
-`write_clipboard`
+`write_clipboard` · `health_report`
 
 **Skills** `save_skill` · `run_skill` · `list_skills` · `get_skill` ·
 `delete_skill` · `record_skill_start` · `record_skill_stop` — teach/replay:
@@ -443,21 +447,28 @@ key in `~/.config/computer-use-mcp.json` (env wins):
 | --- | --- |
 | `cursor` / `COMPUTER_USE_MCP_CURSOR=0` | Hide the animated agent-cursor overlay (on by default; set 0 for headless/CI). |
 | `cursor_idle_fade` | Seconds of quiet before the agent cursor fades (default 12). |
-| `status_chip` / `COMPUTER_USE_MCP_STATUS_CHIP=0` | Hide the "Agent working" pill shown on the primary display during activity (on by default). |
+| `cursor_topmost` / `COMPUTER_USE_MCP_CURSOR_TOPMOST=1` | Keep the agent cursor unconditionally above every window (escape hatch from target-relative z-order). |
+| `status_chip` / `COMPUTER_USE_MCP_STATUS_CHIP=0` | Hide the "Agent working" pill shown on every display during activity (on by default). |
 | `no_safety` / `COMPUTER_USE_MCP_NO_SAFETY=1` | Disable the safety policy entirely. |
 | `confirm_apps` | Apps (name or bundle id) where every action needs `confirm`. |
 | `destructive` | Extra destructive label substrings to gate. |
 | `url_deny` | URL substrings where browser actions are blocked outright (`confirm` does not override). |
 | `url_confirm` | Extra URL substrings where browser actions need `confirm` (defaults cover payment pages). |
 | `ax_timeout` | Per-call accessibility timeout in seconds (default 2). |
+| `ax_element_timeout` | Per-element AX messaging timeout during tree traversal (default 0.25s). |
+| `viewport_probe_timeout` | Tighter AX timeout for dense-collection viewport frame probes (default 0.05s). |
+| `read_text_visible_threshold` | Character count above which `read_text` auto-switches to the visible-range path (default 50000). |
 | `no_daemon` / `COMPUTER_USE_MCP_NO_DAEMON=1` | Run the engine in-process instead of through the shared daemon. |
 | `no_app_lease` | Disable per-app session arbitration. |
 | `app_lease_seconds` | How long an app stays leased to a session after its last action (default 10). |
 | `no_interference_yield` | Disable yielding to real user input (yield is on by default). |
 | `interference_idle_seconds` | Hardware quiet time required before acting in the app the user is working in, or via the global cursor (default 1; 0 disables). |
 | `no_sleep_assertion` | Do not hold a prevent-idle-sleep assertion while tool calls are flowing. |
+| `no_telemetry` / `COMPUTER_USE_MCP_NO_TELEMETRY=1` | Disable funnel/telemetry recording. |
+| `show_meta` / `COMPUTER_USE_MCP_SHOW_META=1` | Dump `_meta` (focus / delivery / outcome) on `call` harness output. |
 | `log` / `COMPUTER_USE_MCP_LOG=1` | Per-tool-call stderr log lines (name, ok/error, duration). |
 | `max_actions_per_sec` | Optional global throttle on tool calls (off by default). |
+| `COMPUTER_USE_MCP_SKYLIGHT=1` | Env-only: enable the opt-in SkyLight `SLEventPostToPid` input rung (not a config-file key). |
 
 ## Comparison
 
