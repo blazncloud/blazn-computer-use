@@ -31,6 +31,7 @@ func runDaemon() async -> Never {
     }
 
     let listenFD = bindDaemonSocket()
+    DaemonState.shared.setListenFD(listenFD)
     daemonLog("daemon \(version) listening (pid \(ProcessInfo.processInfo.processIdentifier))")
 
     // Accept loop on its own thread (accept(2) blocks); each connection gets
@@ -39,7 +40,10 @@ func runDaemon() async -> Never {
     let thread = Thread {
         while true {
             let connectionFD = accept(listenFD, nil, nil)
-            if connectionFD < 0 { continue }
+            if connectionFD < 0 {
+                if DaemonState.shared.isDraining { return }
+                continue
+            }
             guard isTrustedPeer(connectionFD) else {
                 daemonLog("rejected daemon connection from untrusted peer")
                 close(connectionFD)
@@ -52,12 +56,19 @@ func runDaemon() async -> Never {
             }
             DaemonState.shared.connectionOpened()
             Thread.detachNewThread {
+                let connectionTasks = DaemonConnectionTasks()
                 defer {
-                    Task { await AppLeases.shared.dropLeases(session: connectionFD) }
+                    connectionTasks.cancelAll()
+                    Task {
+                        await AppLeases.shared.dropLeases(session: connectionFD)
+                        await AgentCursor.shared.dropSession(connectionFD)
+                    }
                     DaemonState.shared.connectionClosed()
                     daemonConnectionLimiter.close()
                 }
-                serveConnection(fd: connectionFD, authToken: authToken)
+                serveConnection(
+                    fd: connectionFD, authToken: authToken, connectionTasks: connectionTasks
+                )
             }
         }
     }
@@ -108,7 +119,7 @@ private func isTrustedPeer(_ fd: Int32) -> Bool {
     return uid == geteuid()
 }
 
-private func serveConnection(fd: Int32, authToken: String) {
+private func serveConnection(fd: Int32, authToken: String, connectionTasks: DaemonConnectionTasks) {
     defer { close(fd) }
     let authenticationDeadline = Date().addingTimeInterval(
         TimeInterval(DaemonProtocolLimits.authenticationTimeoutSeconds)
@@ -142,7 +153,8 @@ private func serveConnection(fd: Int32, authToken: String) {
                         fd: fd,
                         writeLock: writeLock,
                         authToken: authToken,
-                        authorization: authorization
+                        authorization: authorization,
+                        connectionTasks: connectionTasks
                     )
                     if !wasAuthenticated && authorization.isAuthenticated {
                         clearReadTimeout(fd)
@@ -209,6 +221,35 @@ final class DaemonConnectionAuthorization: @unchecked Sendable {
     }
 }
 
+/// Per-connection in-flight tool Tasks. Cancelled when the client disconnects
+/// so mutating input work observes Task.isCancelled and stops.
+final class DaemonConnectionTasks: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tasks: [Int: Task<Void, Never>] = [:]
+
+    func add(_ task: Task<Void, Never>, id: Int) {
+        lock.lock()
+        tasks[id] = task
+        lock.unlock()
+    }
+
+    func remove(id: Int) {
+        lock.lock()
+        tasks[id] = nil
+        lock.unlock()
+    }
+
+    func cancelAll() {
+        lock.lock()
+        let active = Array(tasks.values)
+        tasks.removeAll()
+        lock.unlock()
+        for task in active {
+            task.cancel()
+        }
+    }
+}
+
 private enum DaemonConnectionAction: Equatable {
     case keepOpen
     case close
@@ -219,7 +260,8 @@ private func handle(
     fd: Int32,
     writeLock: NSLock,
     authToken: String,
-    authorization: DaemonConnectionAuthorization
+    authorization: DaemonConnectionAuthorization,
+    connectionTasks: DaemonConnectionTasks
 ) -> DaemonConnectionAction {
     func respond(_ response: DaemonResponse) {
         writeLock.lock()
@@ -228,7 +270,11 @@ private func handle(
     }
 
     func unauthorized() -> DaemonConnectionAction {
-        respond(DaemonResponse.from(.text("Unauthorized daemon request.", isError: true), id: request.id))
+        respond(
+            DaemonResponse.from(
+                codedErrorResult("Unauthorized daemon request.", code: .daemonUnauthorized),
+                id: request.id
+            ))
         if authorization.recordUnauthenticatedFailure(maxFailures: DaemonProtocolLimits.maxUnauthenticatedFailures) {
             daemonLog("closing daemon connection after unauthenticated request budget was exhausted")
             return .close
@@ -255,26 +301,62 @@ private func handle(
         else {
             return unauthorized()
         }
-        daemonLog("shutdown requested (version handover)")
+        guard daemonAllowsShutdown(
+            requesterBuildStamp: request.buildStamp, daemonBuildStamp: executableBuildStamp
+        ) else {
+            daemonLog(
+                "shutdown refused: requester buildStamp \(request.buildStamp ?? 0) is not newer than \(executableBuildStamp)"
+            )
+            respond(
+                DaemonResponse.from(
+                    codedErrorResult(
+                        "Shutdown refused: requester build is not newer than this daemon.",
+                        code: .daemonUnauthorized
+                    ),
+                    id: request.id
+                ))
+            return .keepOpen
+        }
+        daemonLog("shutdown requested by newer client (version handover)")
         respond(DaemonResponse(id: request.id))
-        exit(0)
+        requestDaemonDrainAndExit()
+        return .close
     default:
         guard authorization.isAuthenticated else {
             return unauthorized()
         }
         DaemonState.shared.noteActivity()
-        Task {
-            if let denial = await AppLeases.shared.check(
-                tool: request.method, arguments: request.arguments ?? [:], session: fd
-            ) {
-                respond(DaemonResponse.from(.text(denial, isError: true), id: request.id))
-                return
+        let session = fd
+        let task = Task {
+            defer { connectionTasks.remove(id: request.id) }
+            await DaemonSessionContext.$sessionID.withValue(session) {
+                if let denial = await AppLeases.shared.check(
+                    tool: request.method, arguments: request.arguments ?? [:], session: session
+                ) {
+                    respond(
+                        DaemonResponse.from(
+                            codedErrorResult(denial, code: .appLeaseHeld), id: request.id
+                        ))
+                    return
+                }
+                let result = await dispatchTool(name: request.method, arguments: request.arguments ?? [:])
+                respond(DaemonResponse.from(result, id: request.id))
+                DaemonState.shared.noteActivity()
             }
-            let result = await dispatchTool(name: request.method, arguments: request.arguments ?? [:])
-            respond(DaemonResponse.from(result, id: request.id))
-            DaemonState.shared.noteActivity()
         }
+        connectionTasks.add(task, id: request.id)
         return .keepOpen
+    }
+}
+
+/// Stop accepting new clients and exit shortly so in-flight replies can flush.
+/// Newer clients then spawn a fresh daemon.
+private func requestDaemonDrainAndExit() {
+    DaemonState.shared.beginDrain()
+    Thread.detachNewThread {
+        Thread.sleep(forTimeInterval: 0.35)
+        daemonLog("shutdown drain complete")
+        exit(0)
     }
 }
 
@@ -299,6 +381,34 @@ private final class DaemonState: @unchecked Sendable {
     private let lock = NSLock()
     private var connections = 0
     private var lastActivity = Date()
+    private var listenFD: Int32 = -1
+    private var draining = false
+
+    func setListenFD(_ fd: Int32) {
+        lock.lock()
+        listenFD = fd
+        lock.unlock()
+    }
+
+    func beginDrain() {
+        lock.lock()
+        draining = true
+        let fd = listenFD
+        listenFD = -1
+        lock.unlock()
+        if fd >= 0 {
+            // Unlink first so a replacement daemon can bind; then close so the
+            // accept loop wakes and observes the drain flag.
+            unlink(daemonSocketPath())
+            close(fd)
+        }
+    }
+
+    var isDraining: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return draining
+    }
 
     func connectionOpened() {
         lock.lock()

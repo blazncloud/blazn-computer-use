@@ -92,9 +92,8 @@ struct DaemonResponse: Codable, Sendable {
     var buildStamp: Double? = nil
 }
 
-/// Whether a shim should keep this daemon ("newest build wins"). A daemon
-/// running a different semantic version, or built before the shim's binary
-/// (including old daemons that report no build stamp), is asked to step down.
+/// Whether a shim should keep this daemon ("newest build wins"). Same semantic
+/// version and a daemon build stamp at least as new as the local binary.
 func daemonHandshakeAccepts(
     replyVersion: String?,
     replyAuthenticated: Bool?,
@@ -107,6 +106,94 @@ func daemonHandshakeAccepts(
         && (replyBuildStamp ?? 0) >= localBuildStamp
 }
 
+/// Major version component (`"0.4.1"` → `"0"`), used to prefer same-major
+/// handovers so an older CLI never retires a newer daemon across majors.
+func daemonMajorVersion(_ version: String) -> String {
+    String(version.split(separator: ".").first ?? Substring(version))
+}
+
+func daemonSameMajorVersion(_ lhs: String, _ rhs: String) -> Bool {
+    daemonMajorVersion(lhs) == daemonMajorVersion(rhs)
+}
+
+/// Whether this client may ask the daemon to shut down. Only a strictly newer
+/// local build (and preferably the same major version) may retire an older
+/// daemon. Equal or older clients must defer.
+func daemonClientShouldRequestShutdown(
+    replyVersion: String?,
+    replyBuildStamp: Double?,
+    localVersion: String,
+    localBuildStamp: Double
+) -> Bool {
+    let daemonStamp = replyBuildStamp ?? 0
+    guard localBuildStamp > daemonStamp else { return false }
+    // Legacy daemons omit buildStamp — a current client may retire them once.
+    guard let replyVersion, replyBuildStamp != nil else { return true }
+    return daemonSameMajorVersion(replyVersion, localVersion)
+}
+
+/// Whether the daemon should honor a shutdown request. The requester must prove
+/// a strictly newer buildStamp; equal/older requesters are refused.
+func daemonAllowsShutdown(requesterBuildStamp: Double?, daemonBuildStamp: Double) -> Bool {
+    (requesterBuildStamp ?? 0) > daemonBuildStamp
+}
+
+/// Message when a client cannot accept the running daemon and must not kill it.
+func daemonUpgradeRequiredMessage(daemonVersion: String, localVersion: String) -> String {
+    "Engine daemon is newer (\(daemonVersion)); upgrade this CLI from \(localVersion) to match."
+}
+
+/// Default per-request RPC deadline (seconds). Generous enough for slow AX /
+/// capture calls; override with `daemon_rpc_timeout` / COMPUTER_USE_MCP_DAEMON_RPC_TIMEOUT.
+func daemonRPCTimeoutSeconds() -> Double {
+    Config.double("daemon_rpc_timeout") ?? Double(DaemonProtocolLimits.defaultRPCTimeoutSeconds)
+}
+
+/// Tracks malformed newline frames against the shared budget. Returns true when
+/// the connection should close (`count > maxFrames`).
+struct DaemonMalformedFrameBudget: Equatable {
+    private(set) var count = 0
+    let maxFrames: Int
+
+    init(maxFrames: Int = DaemonProtocolLimits.maxMalformedFrames) {
+        self.maxFrames = maxFrames
+    }
+
+    mutating func record() -> Bool {
+        count += 1
+        return count > maxFrames
+    }
+}
+
+/// In-flight RPC id table. Completing or failing one id never touches others;
+/// `takeAll` is reserved for connection drop.
+struct DaemonPendingRegistry<Handler> {
+    private var handlers: [Int: Handler] = [:]
+
+    var count: Int { handlers.count }
+    var ids: Set<Int> { Set(handlers.keys) }
+
+    mutating func store(id: Int, handler: Handler) {
+        handlers[id] = handler
+    }
+
+    mutating func take(id: Int) -> Handler? {
+        handlers.removeValue(forKey: id)
+    }
+
+    mutating func takeAll() -> [Handler] {
+        let values = Array(handlers.values)
+        handlers.removeAll()
+        return values
+    }
+}
+
+/// Per-connection session identity for app leases and the overlay cursor.
+/// Set by the daemon around each tool Task; absent in no-daemon local dispatch.
+enum DaemonSessionContext {
+    @TaskLocal static var sessionID: Int32?
+}
+
 enum DaemonProtocolLimits {
     static let maxRequestFrameBytes = 1_048_576
     static let maxResponseFrameBytes = 32 * 1_048_576
@@ -115,6 +202,8 @@ enum DaemonProtocolLimits {
     static let maxUnauthenticatedFailures = 3
     static let authenticationTimeoutSeconds = 5
     static let maxConcurrentConnections = 64
+    /// Default wall-clock wait for one daemon RPC reply (see daemonRPCTimeoutSeconds).
+    static let defaultRPCTimeoutSeconds = 120
 }
 
 enum DaemonProtocolViolation: Error, Equatable {

@@ -67,6 +67,79 @@ import Testing
             ))
     }
 
+    @Test func newerClientShutsDownOlderDaemon() {
+        #expect(
+            daemonClientShouldRequestShutdown(
+                replyVersion: "0.4.1", replyBuildStamp: 50,
+                localVersion: "0.4.1", localBuildStamp: 100
+            ))
+        #expect(
+            daemonClientShouldRequestShutdown(
+                replyVersion: "0.4.0", replyBuildStamp: nil,
+                localVersion: "0.4.1", localBuildStamp: 100
+            ))
+        #expect(daemonAllowsShutdown(requesterBuildStamp: 100, daemonBuildStamp: 50))
+    }
+
+    @Test func olderClientDefersToNewerDaemon() {
+        #expect(
+            !daemonClientShouldRequestShutdown(
+                replyVersion: "0.4.1", replyBuildStamp: 200,
+                localVersion: "0.4.1", localBuildStamp: 100
+            ))
+        #expect(
+            !daemonAllowsShutdown(requesterBuildStamp: 100, daemonBuildStamp: 200)
+        )
+        let message = daemonUpgradeRequiredMessage(daemonVersion: "0.4.1", localVersion: "0.3.0")
+        #expect(message.contains("newer"))
+        #expect(message.contains("upgrade this CLI"))
+    }
+
+    @Test func equalBuildStampDefersWithoutShutdown() {
+        #expect(
+            !daemonClientShouldRequestShutdown(
+                replyVersion: "0.4.1", replyBuildStamp: 100,
+                localVersion: "0.4.1", localBuildStamp: 100
+            ))
+        #expect(!daemonAllowsShutdown(requesterBuildStamp: 100, daemonBuildStamp: 100))
+        #expect(!daemonAllowsShutdown(requesterBuildStamp: nil, daemonBuildStamp: 100))
+    }
+
+    @Test func malformedFrameBudgetSkipsUntilExhausted() {
+        var budget = DaemonMalformedFrameBudget(maxFrames: 3)
+        let first = budget.record()
+        let second = budget.record()
+        let third = budget.record()
+        let fourth = budget.record()
+        #expect(!first)
+        #expect(!second)
+        #expect(!third)
+        #expect(fourth)
+        #expect(budget.count == 4)
+    }
+
+    @Test func pendingRegistryFailureDropsOnlyOneId() {
+        var pending = DaemonPendingRegistry<String>()
+        pending.store(id: 1, handler: "one")
+        pending.store(id: 2, handler: "two")
+        pending.store(id: 3, handler: "three")
+
+        let removed = pending.take(id: 2)
+        #expect(removed == "two")
+        #expect(pending.count == 2)
+        #expect(pending.ids == [1, 3])
+        let missing = pending.take(id: 2)
+        #expect(missing == nil)
+
+        let remaining = pending.takeAll().sorted()
+        #expect(remaining == ["one", "three"])
+        #expect(pending.count == 0)
+    }
+
+    @Test func daemonRPCTimeoutDefaultIsGenerous() {
+        #expect(DaemonProtocolLimits.defaultRPCTimeoutSeconds == 120)
+    }
+
     @Test func daemonResponsePreservesCallToolMetadata() throws {
         let result = CallTool.Result(
             content: [.text(text: "ok", annotations: nil, _meta: nil)],
