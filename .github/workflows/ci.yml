@@ -10,10 +10,42 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app || sudo xcode-select -s /Applications/Xcode.app
+        # Fail hard if the pinned Xcode is missing — do not fall back to a
+        # different toolchain (that silently changes compiler/SDK behavior).
+        run: |
+          test -d /Applications/Xcode_16.4.app
+          sudo xcode-select -s /Applications/Xcode_16.4.app
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-swiftpm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-swiftpm-
+
       - name: Preflight (no GUI/TCC)
         # GUI-dependent paths (AX, ScreenCaptureKit, overlay) need a logged-in
         # desktop session and TCC grants, so hosted CI stays on the pure,
         # non-mutating path.
         run: python3 scripts/preflight.py
+
+  # Non-blocking style check: does not gate build-and-test. Prefer the
+  # toolchain-bundled `swift format lint` over adding a SwiftLint dependency.
+  lint:
+    runs-on: macos-15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          test -d /Applications/Xcode_16.4.app
+          sudo xcode-select -s /Applications/Xcode_16.4.app
+
+      - name: swift format lint
+        run: swift format lint --recursive Sources Tests

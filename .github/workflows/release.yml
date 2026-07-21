@@ -1,0 +1,92 @@
+# Release scaffold — runs only on tag push matching v*.
+#
+# Manual steps after this workflow drafts a GitHub Release:
+# 1. Review the draft release notes (from CHANGELOG) and the uploaded artifact.
+# 2. Optional: add Developer ID + notarization secrets (see gated steps below),
+#    then re-run or sign/notarize locally before publishing.
+# 3. Publish the draft when ready (this workflow never auto-publishes).
+# 4. If shipping via Homebrew, copy packaging/homebrew/computer-use-mcp.rb into
+#    the tap and refresh url/sha256 for the new tarball.
+#
+# Does NOT create tags. Does NOT run on branch pushes. Does NOT publish.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          test -d /Applications/Xcode_16.4.app
+          sudo xcode-select -s /Applications/Xcode_16.4.app
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-swiftpm-release-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-swiftpm-release-
+            ${{ runner.os }}-swiftpm-
+
+      - name: Version consistency
+        run: python3 scripts/check_version_consistency.py
+
+      - name: Tag matches Version.swift
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          BIN_VERSION="$(sed -n 's/^let version = "\(.*\)"$/\1/p' Sources/computer-use-mcp/Version.swift)"
+          test -n "$BIN_VERSION"
+          test "$TAG" = "$BIN_VERSION"
+
+      - name: Build release
+        run: swift build -c release
+
+      - name: Package artifact
+        run: |
+          mkdir -p dist
+          tar -czf dist/computer-use-mcp-macos.tar.gz -C .build/release computer-use-mcp
+
+      - name: Extract CHANGELOG notes
+        run: python3 scripts/check_version_consistency.py --print-notes > dist/release-notes.md
+
+      # Gated: no-op when secrets are absent so the draft release still succeeds.
+      - name: Developer ID codesign (optional)
+        if: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_CERT_BASE64 != '' && secrets.MACOS_DEVELOPER_ID_APPLICATION_CERT_PASSWORD != '' }}
+        env:
+          MACOS_DEVELOPER_ID_APPLICATION_CERT_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_CERT_BASE64 }}
+          MACOS_DEVELOPER_ID_APPLICATION_CERT_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_CERT_PASSWORD }}
+        run: |
+          echo "::notice::Signing secrets present — TODO: import cert and codesign .build/release/computer-use-mcp with --options runtime, then re-tar dist/computer-use-mcp-macos.tar.gz."
+
+      - name: Notarize (optional)
+        if: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' }}
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          echo "::notice::Notarization secrets present — TODO: notarytool submit the signed artifact and staple."
+
+      - name: Create draft GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: false
+          body_path: dist/release-notes.md
+          files: dist/computer-use-mcp-macos.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

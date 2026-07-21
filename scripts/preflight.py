@@ -121,6 +121,12 @@ def main() -> int:
 
     checks = [
         ("script_helper_tests", ["python3", "scripts/test_scripts.py"], 30, ci_safe_env()),
+        (
+            "version_consistency",
+            ["python3", "scripts/check_version_consistency.py"],
+            30,
+            ci_safe_env(),
+        ),
         ("swift_build", ["swift", "build"], 180, None),
         ("swift_test", ["swift", "test"], 180, None),
     ]

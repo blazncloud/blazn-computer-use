@@ -11,7 +11,12 @@ from __future__ import annotations
 import os
 import unittest
 
+import tempfile
+import textwrap
+from pathlib import Path
+
 import build_app_bundle
+import check_version_consistency
 import common
 import deploy_app_bundle
 import preflight
@@ -110,6 +115,56 @@ class ScriptHelperTests(unittest.TestCase):
                 os.environ.pop("COMPUTER_USE_MCP_BIN", None)
             else:
                 os.environ["COMPUTER_USE_MCP_BIN"] = old
+
+    def test_version_parsers_skip_unreleased_and_match(self) -> None:
+        self.assertEqual(
+            check_version_consistency.read_version_swift('let version = "0.4.1"\n'),
+            "0.4.1",
+        )
+        self.assertEqual(
+            check_version_consistency.read_homebrew_version('  version "0.4.1"\n'),
+            "0.4.1",
+        )
+        changelog = textwrap.dedent(
+            """\
+            ## [Unreleased]
+
+            Nothing yet.
+
+            ## [0.4.1] — 2026-07-20
+
+            Notes for 0.4.1.
+
+            ## [0.4.0] — 2026-07-03
+
+            Older.
+            """
+        )
+        self.assertEqual(check_version_consistency.read_changelog_version(changelog), "0.4.1")
+        self.assertEqual(
+            check_version_consistency.changelog_notes_for(changelog, "0.4.1").strip(),
+            "Notes for 0.4.1.",
+        )
+
+    def test_version_consistency_detects_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Sources" / "computer-use-mcp").mkdir(parents=True)
+            (root / "packaging" / "homebrew").mkdir(parents=True)
+            (root / "Sources" / "computer-use-mcp" / "Version.swift").write_text(
+                'let version = "0.4.1"\n', encoding="utf-8"
+            )
+            (root / "packaging" / "homebrew" / "computer-use-mcp.rb").write_text(
+                'version "0.4.1"\n', encoding="utf-8"
+            )
+            (root / "CHANGELOG.md").write_text(
+                "## [Unreleased]\n\n## [0.4.0] — 2026-07-03\n\nNotes.\n",
+                encoding="utf-8",
+            )
+            versions = check_version_consistency.collect_versions(root)
+            self.assertEqual(versions["Version.swift"], "0.4.1")
+            self.assertEqual(versions["CHANGELOG.md"], "0.4.0")
+            self.assertEqual(len(set(versions.values())), 2)
 
 
 if __name__ == "__main__":
