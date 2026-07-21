@@ -32,9 +32,10 @@ enum URLPolicyDecision: Equatable {
 }
 
 /// Pure policy decision, separated from AX/config state for tests.
-/// A nil URL fails closed (confirm) only when the user configured explicit
-/// patterns — a policy that evaporates whenever the URL is unreadable would
-/// not be a policy.
+/// A nil URL fails closed (confirm) whenever any deny/confirm pattern
+/// exists — including the built-in payment-page list — so protection does
+/// not evaporate when the URL cannot be read. `hasExplicitPolicy` remains
+/// a caller override that also forces the fail-closed path.
 func urlPolicyDecision(
     url: String?,
     denyPatterns: [String],
@@ -42,7 +43,10 @@ func urlPolicyDecision(
     hasExplicitPolicy: Bool
 ) -> URLPolicyDecision {
     guard let url = url?.lowercased() else {
-        return hasExplicitPolicy
+        let hasAnyPolicy = hasExplicitPolicy
+            || denyPatterns.contains(where: { !$0.isEmpty })
+            || confirmPatterns.contains(where: { !$0.isEmpty })
+        return hasAnyPolicy
             ? .requireConfirm(
                 "the browser's current URL could not be read, so the configured URL policy cannot be checked")
             : .allow
@@ -71,8 +75,10 @@ enum URLPolicy {
     // Config cannot change mid-process; read once.
     static let denyPatterns: [String] = Config.list("url_deny")
     static let confirmPatterns: [String] = defaultConfirmPatterns + Config.list("url_confirm")
+    /// True when any deny/confirm pattern exists (built-ins count). An
+    /// unreadable URL must fail closed against this, not silently allow.
     static let hasExplicitPolicy: Bool =
-        !denyPatterns.isEmpty || confirmPatterns.count > defaultConfirmPatterns.count
+        !denyPatterns.isEmpty || !confirmPatterns.isEmpty
 
     /// Gate an app-scoped mutating tool call. Returns nil when clear to act,
     /// or the error message to send back.

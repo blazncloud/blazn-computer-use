@@ -24,7 +24,15 @@ func lockedScreenMessage(toolName: String, isLocked: @autoclosure () -> Bool) ->
 }
 
 func screenIsLocked() -> Bool {
-    guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+    screenIsLocked(session: CGSessionCopyCurrentDictionary() as? [String: Any])
+}
+
+/// Pure lock decision from a session dictionary snapshot.
+/// A missing dictionary fails closed (locked) so mutating tools do not
+/// proceed on an unknown session. When the dictionary is present, a missing
+/// or false `CGSSessionScreenIsLocked` means unlocked.
+func screenIsLocked(session: [String: Any]?) -> Bool {
+    guard let session else { return true }
     return (session["CGSSessionScreenIsLocked"] as? Bool) ?? false
 }
 

@@ -62,6 +62,7 @@ enum InterferenceGuard {
         // Fast path: an idle user can never yield — skip resolving the app.
         guard threshold > 0, secondsSinceUserInput() < threshold else { return nil }
         let usesGlobalPath = arguments.bool("allow_global_cursor") == true
+            || arguments.bool("allow_global_keyboard") == true
         let targetPid = arguments.string("app").flatMap { try? resolveApp($0).pid }
         let deadline = ContinuousClock.now + .seconds(graceSeconds)
         while true {

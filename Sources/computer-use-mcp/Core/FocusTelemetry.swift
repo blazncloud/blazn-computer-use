@@ -151,10 +151,15 @@ func allowGlobalCursorArgument(_ args: [String: Value]) throws -> Bool {
 }
 
 func allowGlobalKeyboardArgument(_ args: [String: Value]) throws -> Bool {
-    let allowGlobalKeyboard = args.bool("allow_global_cursor") == true
+    // Preferred name is allow_global_keyboard; allow_global_cursor remains a
+    // wire-compat alias used by older clients / press_key schemas.
+    let viaCursorAlias = args.bool("allow_global_cursor") == true
+    let viaKeyboardName = args.bool("allow_global_keyboard") == true
+    let allowGlobalKeyboard = viaCursorAlias || viaKeyboardName
     if allowGlobalKeyboard && args.bool("allow_focus_change") != true {
+        let flag = viaKeyboardName && !viaCursorAlias ? "allow_global_keyboard" : "allow_global_cursor"
         throw ToolError.invalidArguments(
-            "\"allow_global_cursor\" sends keyboard input through the global session tap and may change focus. "
+            "\"\(flag)\" sends keyboard input through the global session tap and may change focus. "
                 + "Retry with \"allow_focus_change\": true when that escalation is intentional."
         )
     }

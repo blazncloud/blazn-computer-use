@@ -48,18 +48,30 @@ import Testing
         }
     }
 
-    @Test func unreadableURLFailsClosedOnlyWithExplicitPolicy() {
-        let strict = urlPolicyDecision(
+    @Test func unreadableURLFailsClosedWithBuiltInConfirmPatterns() {
+        let withUserPatterns = urlPolicyDecision(
             url: nil, denyPatterns: deny, confirmPatterns: confirm, hasExplicitPolicy: true
         )
-        guard case .requireConfirm = strict else {
-            Issue.record("expected requireConfirm, got \(strict)")
+        guard case .requireConfirm = withUserPatterns else {
+            Issue.record("expected requireConfirm, got \(withUserPatterns)")
             return
         }
+        // Built-in payment-page patterns alone must fail closed — callers that
+        // still pass hasExplicitPolicy:false must not silently allow.
+        let withBuiltInsOnly = urlPolicyDecision(
+            url: nil, denyPatterns: [], confirmPatterns: URLPolicy.defaultConfirmPatterns,
+            hasExplicitPolicy: false
+        )
+        guard case .requireConfirm = withBuiltInsOnly else {
+            Issue.record("expected requireConfirm for built-ins, got \(withBuiltInsOnly)")
+            return
+        }
+    }
+
+    @Test func unreadableURLAllowsWhenNoPatternsExist() {
         #expect(
             urlPolicyDecision(
-                url: nil, denyPatterns: [], confirmPatterns: URLPolicy.defaultConfirmPatterns,
-                hasExplicitPolicy: false
+                url: nil, denyPatterns: [], confirmPatterns: [], hasExplicitPolicy: false
             ) == .allow)
     }
 

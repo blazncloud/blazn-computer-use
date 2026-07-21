@@ -40,4 +40,29 @@ import Testing
     @Test func emptyThrows() {
         #expect(throws: (any Error).self) { try Keymap.parse("") }
     }
+
+    @Test func wouldInsertTextDetectsPrintableKeys() throws {
+        let letter = try Keymap.parse("a")
+        #expect(Keymap.wouldInsertText(combo: "a", chord: letter))
+
+        let space = try Keymap.parse("space")
+        #expect(Keymap.wouldInsertText(combo: "space", chord: space))
+
+        let shifted = try Keymap.parse("?")
+        #expect(Keymap.wouldInsertText(combo: "?", chord: shifted))
+    }
+
+    @Test func wouldInsertTextRejectsNavigationAndShortcuts() throws {
+        let tab = try Keymap.parse("Tab")
+        #expect(!Keymap.wouldInsertText(combo: "Tab", chord: tab))
+
+        let arrow = try Keymap.parse("Up")
+        #expect(!Keymap.wouldInsertText(combo: "Up", chord: arrow))
+
+        let shortcut = try Keymap.parse("cmd+a")
+        #expect(!Keymap.wouldInsertText(combo: "cmd+a", chord: shortcut))
+
+        let ret = try Keymap.parse("Return")
+        #expect(!Keymap.wouldInsertText(combo: "Return", chord: ret))
+    }
 }

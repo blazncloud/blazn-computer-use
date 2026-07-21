@@ -1,3 +1,4 @@
+import ApplicationServices
 import Foundation
 import Testing
 
@@ -82,6 +83,76 @@ private func invalidArgumentMessage(_ body: () throws -> Void) -> String {
     @Test func plainKeyPasses() throws {
         let chord = try Keymap.parse("Tab")
         try SafetyPolicy.checkKey(combo: "Tab", chord: chord, focused: nil, app: app, confirmed: false)
+    }
+
+    @Test func printableKeyIntoSecureFieldIsGated() {
+        #expect(throws: SafetyError.self) {
+            try SafetyPolicy.checkSecureFieldKeyInsertion(
+                insertsText: true,
+                focusedSubrole: kAXSecureTextFieldSubrole as String,
+                secureEventInputEnabled: false,
+                app: app,
+                confirmed: false
+            )
+        }
+    }
+
+    @Test func confirmedPrintableKeyIntoSecureFieldPasses() throws {
+        try SafetyPolicy.checkSecureFieldKeyInsertion(
+            insertsText: true,
+            focusedSubrole: kAXSecureTextFieldSubrole as String,
+            secureEventInputEnabled: false,
+            app: app,
+            confirmed: true
+        )
+    }
+
+    @Test func printableKeyIntoNonSecureFieldPasses() throws {
+        try SafetyPolicy.checkSecureFieldKeyInsertion(
+            insertsText: true,
+            focusedSubrole: nil,
+            secureEventInputEnabled: false,
+            app: app,
+            confirmed: false
+        )
+        try SafetyPolicy.checkSecureFieldKeyInsertion(
+            insertsText: true,
+            focusedSubrole: "AXTextField",
+            secureEventInputEnabled: false,
+            app: app,
+            confirmed: false
+        )
+    }
+
+    @Test func nonTextKeyIntoSecureFieldDoesNotUseSecureFieldGate() throws {
+        // Arrows/Tab/shortcuts are not text insertion; existing destructive
+        // / activate gates still apply separately.
+        try SafetyPolicy.checkSecureFieldKeyInsertion(
+            insertsText: false,
+            focusedSubrole: kAXSecureTextFieldSubrole as String,
+            secureEventInputEnabled: false,
+            app: app,
+            confirmed: false
+        )
+        #expect(
+            !keyPressRequiresSecureFieldConfirm(
+                insertsText: false,
+                focusedSubrole: kAXSecureTextFieldSubrole as String
+            )
+        )
+    }
+
+    @Test func secureEventInputIsSecondarySignalForTextKeys() {
+        #expect(
+            keyPressRequiresSecureFieldConfirm(
+                insertsText: true, focusedSubrole: nil, secureEventInputEnabled: true
+            )
+        )
+        #expect(
+            !keyPressRequiresSecureFieldConfirm(
+                insertsText: true, focusedSubrole: nil, secureEventInputEnabled: false
+            )
+        )
     }
 
     @Test func safetyErrorExplainsRecovery() {

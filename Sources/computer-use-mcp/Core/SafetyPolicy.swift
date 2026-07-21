@@ -124,12 +124,24 @@ enum SafetyPolicy {
         }
     }
 
-    /// Gate a key press: inherently destructive shortcuts (⌘⌫ etc.) and
-    /// Return/Space activating a focused destructive control.
+    /// Gate a key press: text insertion into secure fields, inherently
+    /// destructive shortcuts (⌘⌫ etc.), and Return/Space activating a
+    /// focused destructive control.
     static func checkKey(
         combo: String, chord: KeyChord, focused: AXUIElement?, app: ResolvedApp, confirmed: Bool
     ) throws {
         guard isEnabled, !confirmed else { return }
+        // Same secure-field policy as checkTyping: printable keys must not
+        // enter a password character-by-character without confirm. Primary
+        // signal is the AX secure-text subrole; secure-event-input is a
+        // cheap secondary when AX focus is missing or incomplete.
+        try checkSecureFieldKeyInsertion(
+            insertsText: Keymap.wouldInsertText(combo: combo, chord: chord),
+            focusedSubrole: focused.flatMap { axString($0, kAXSubroleAttribute) },
+            secureEventInputEnabled: IsSecureEventInputEnabled(),
+            app: app,
+            confirmed: confirmed
+        )
         let deleteKeys: Set<CGKeyCode> = [CGKeyCode(kVK_Delete), CGKeyCode(kVK_ForwardDelete)]
         if chord.flags.contains(.maskCommand), deleteKeys.contains(chord.keyCode) {
             throw SafetyError(reason: "\"\(combo)\" is a destructive keyboard shortcut in \(app.name).")
@@ -140,6 +152,26 @@ enum SafetyPolicy {
         if activateKeys.contains(chord.keyCode), let focused {
             try checkClick(label: clickableLabel(focused), app: app, confirmed: confirmed)
         }
+    }
+
+    /// Pure-ish gate for press_key → secure field (testable without AX).
+    /// Throws the same SafetyError as checkTyping when confirmation is required.
+    static func checkSecureFieldKeyInsertion(
+        insertsText: Bool,
+        focusedSubrole: String?,
+        secureEventInputEnabled: Bool,
+        app: ResolvedApp,
+        confirmed: Bool
+    ) throws {
+        guard isEnabled, !confirmed else { return }
+        guard keyPressRequiresSecureFieldConfirm(
+            insertsText: insertsText,
+            focusedSubrole: focusedSubrole,
+            secureEventInputEnabled: secureEventInputEnabled
+        ) else { return }
+        throw SafetyError(
+            reason: "the target in \(app.name) is a secure text field (password entry)."
+        )
     }
 
     /// Gate an action that clears a non-empty value (a destructive wipe).
@@ -159,6 +191,18 @@ enum SafetyPolicy {
             throw SafetyError(reason: "closing \(targetDescription) may discard unsaved state or dismiss important UI.")
         }
     }
+}
+
+/// Pure decision: a text-inserting key into a secure field (or while
+/// secure event input is active) requires confirm.
+func keyPressRequiresSecureFieldConfirm(
+    insertsText: Bool,
+    focusedSubrole: String?,
+    secureEventInputEnabled: Bool = false
+) -> Bool {
+    guard insertsText else { return false }
+    if focusedSubrole == (kAXSecureTextFieldSubrole as String) { return true }
+    return secureEventInputEnabled
 }
 
 enum ArgumentBounds {

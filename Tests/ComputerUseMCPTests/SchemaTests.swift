@@ -113,8 +113,31 @@ private func requiredProperties(for toolName: String) throws -> [String] {
     }
 
     @Test func pressKeyExposesFocusChangeOptInForGlobalKeyboardEscalation() throws {
+        #expect(try schemaType(schemaProperty("allow_global_keyboard", in: "press_key")) == "boolean")
         #expect(try schemaType(schemaProperty("allow_global_cursor", in: "press_key")) == "boolean")
         #expect(try schemaType(schemaProperty("allow_focus_change", in: "press_key")) == "boolean")
+    }
+
+    @Test func saveSkillStepEnumerationIncludesReadText() throws {
+        let steps = try objectValue(try schemaProperty("steps", in: "save_skill"))
+        let description = steps["description"]?.stringValue ?? ""
+        #expect(description.contains("read_text"))
+        for name in skillStepToolNames.sorted() {
+            #expect(description.contains(name), "save_skill steps should list \(name)")
+        }
+    }
+
+    @Test func batchActionsItemsExposeToolProperty() throws {
+        let actions = try objectValue(try schemaProperty("actions", in: "batch"))
+        let items = try objectValue(actions["items"] ?? .null)
+        #expect(try schemaType(.object(items)) == "object")
+        let properties = try objectValue(items["properties"] ?? .object([:]))
+        #expect(properties["tool"] != nil)
+        #expect(items["description"]?.stringValue?.contains("tool") == true)
+        guard case let .array(required)? = items["required"] else {
+            throw ToolError.failed("batch actions.items is missing required")
+        }
+        #expect(required.compactMap(\.stringValue) == ["tool"])
     }
 
     @Test func pageToolExposesSelectorActionAndVerificationArguments() throws {

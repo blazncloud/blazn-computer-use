@@ -34,7 +34,13 @@ private let allowGlobalKeyboardParam = boolParam(
     "Escape hatch (default false). When true, allows global keyboard delivery only "
         + "when the target app is already foreground. Use only if per-app delivery "
         + "did not land for a stubborn app. Requires allow_focus_change:true because "
-        + "global shortcuts can change foreground focus."
+        + "global shortcuts can change foreground focus. Preferred name: "
+        + "allow_global_keyboard (allow_global_cursor is accepted as a wire-compat alias)."
+)
+
+private let allowGlobalKeyboardAliasParam = boolParam(
+    "Preferred escape hatch for press_key global delivery (default false). Same meaning "
+        + "as allow_global_cursor on this tool. Requires allow_focus_change:true."
 )
 
 private let confirmParam = boolParam(
@@ -257,6 +263,8 @@ let toolCatalog: [ToolSpec] = [
             [
                 "app": appParam,
                 "key": stringParam("Key or combination in xdotool syntax, e.g. \"Return\", \"cmd+n\"."),
+                "allow_global_keyboard": allowGlobalKeyboardAliasParam,
+                // Wire-compat alias: handlers accept allow_global_cursor with the same meaning.
                 "allow_global_cursor": allowGlobalKeyboardParam,
                 "allow_focus_change": allowFocusChangeParam,
                 "include_screenshot": includeScreenshotParam,
@@ -667,9 +675,23 @@ let toolCatalog: [ToolSpec] = [
                     "description": .string(
                         "1-\(maxBatchActions) steps, each an object with \"tool\" set to one of: "
                             + batchableToolNames.sorted().joined(separator: ", ")
-                            + " — plus that tool's usual arguments."
+                            + " — plus that tool's usual arguments (omit \"app\"; the batch app applies)."
                     ),
-                    "items": .object(["type": .string("object")]),
+                    "items": .object([
+                        "type": .string("object"),
+                        "description": .string(
+                            "One batch step: {\"tool\": \"<name>\", ...that tool's usual arguments, "
+                                + "omitting \"app\"}."
+                        ),
+                        "properties": .object([
+                            "tool": stringParam(
+                                "Batchable tool name: "
+                                    + batchableToolNames.sorted().joined(separator: ", ") + "."
+                            ),
+                        ]),
+                        "required": .array([.string("tool")]),
+                        "additionalProperties": .bool(true),
+                    ]),
                 ]),
                 "include_screenshot": includeScreenshotParam,
             ],
@@ -707,7 +729,7 @@ let toolCatalog: [ToolSpec] = [
                     "type": .string("array"),
                     "description": .string(
                         "1-\(maxSkillSteps) steps, each {\"tool\": one of "
-                            + batchableToolNames.sorted().joined(separator: ", ")
+                            + skillStepToolNames.sorted().joined(separator: ", ")
                             + ", plus that tool's usual arguments}. Element-targeted steps: pass "
                             + "\"element_id\" from the CURRENT state (frozen into a locator at save "
                             + "time) or an explicit \"locator\": {\"role\", \"label\"}. Optional "

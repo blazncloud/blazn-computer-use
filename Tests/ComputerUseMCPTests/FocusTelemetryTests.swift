@@ -118,6 +118,28 @@ import Testing
         #expect(try allowGlobalKeyboardArgument([:]) == false)
     }
 
+    @Test func globalKeyboardAcceptsAllowGlobalKeyboardAlias() throws {
+        let message = invalidArgumentMessage {
+            _ = try allowGlobalKeyboardArgument(["allow_global_keyboard": .bool(true)])
+        }
+        #expect(message.contains("\"allow_global_keyboard\""))
+        #expect(message.contains("\"allow_focus_change\""))
+
+        #expect(
+            try allowGlobalKeyboardArgument([
+                "allow_global_keyboard": .bool(true),
+                "allow_focus_change": .bool(true),
+            ])
+        )
+        // Wire-compat: either name enables the escape hatch.
+        #expect(
+            try allowGlobalKeyboardArgument([
+                "allow_global_cursor": .bool(true),
+                "allow_focus_change": .bool(true),
+            ])
+        )
+    }
+
     @Test func focusMutatingToolsRequireExplicitFocusChangeAllowance() throws {
         let message = invalidArgumentMessage {
             try requireFocusChangeAllowed([:], reason: "This may change focus.")

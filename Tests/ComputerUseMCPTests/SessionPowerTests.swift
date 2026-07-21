@@ -17,4 +17,18 @@ import Testing
         #expect(lockedScreenMessage(toolName: "click", isLocked: false) == nil)
         #expect(lockedScreenMessage(toolName: "get_app_state", isLocked: false) == nil)
     }
+
+    @Test func missingSessionDictionaryFailsClosedAsLocked() {
+        #expect(screenIsLocked(session: nil))
+    }
+
+    @Test func unlockedSessionDictionaryIsDetected() {
+        #expect(!screenIsLocked(session: ["CGSSessionScreenIsLocked": false]))
+        // Key absent on a present dictionary means unlocked (normal desktop).
+        #expect(!screenIsLocked(session: [:]))
+    }
+
+    @Test func lockedSessionDictionaryIsDetected() {
+        #expect(screenIsLocked(session: ["CGSSessionScreenIsLocked": true]))
+    }
 }

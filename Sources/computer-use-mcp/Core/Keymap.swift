@@ -42,6 +42,25 @@ enum Keymap {
         return KeyChord(keyCode: resolved.code, flags: flags)
     }
 
+    /// True when this chord would insert a character into a text field
+    /// (a printable key or Space, with at most Shift). Modifier shortcuts
+    /// (⌘/⌃/⌥/Fn) and navigation/named keys do not insert text.
+    static func wouldInsertText(combo: String, chord: KeyChord) -> Bool {
+        var nonShift = chord.flags
+        nonShift.remove(.maskShift)
+        guard nonShift.isEmpty else { return false }
+
+        let tokens = combo.split(separator: "+").map {
+            String($0).trimmingCharacters(in: .whitespaces)
+        }
+        guard let keyToken = tokens.last, !keyToken.isEmpty else { return false }
+        if keyToken.count == 1 { return true }
+        switch keyToken.lowercased() {
+        case "space", " ": return true
+        default: return false
+        }
+    }
+
     private static func modifierFlag(_ token: String) -> CGEventFlags? {
         switch token.lowercased() {
         case "cmd", "command", "super", "meta", "win": return .maskCommand
