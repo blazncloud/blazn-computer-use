@@ -1,9 +1,8 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var honestCount = 0
-    @State private var toggleOn = false
-    @State private var keystrokeEcho = ""
+    @State private var fixtureState = BasicControlsFixtureState.initial
+    private let stateStore = BasicControlsFixtureStateStore()
 
     var body: some View {
         ScrollView([.vertical, .horizontal]) {
@@ -31,9 +30,11 @@ struct ContentView: View {
     // Honest, liar, and disabled buttons side by side.
     private var buttonsCard: some View {
         Card(title: "Buttons") {
-            Button("Honest Button") { honestCount += 1 }
+            Button("Honest Button") {
+                updateState { $0.honestCounter += 1 }
+            }
                 .accessibilityLabel("honest-button")
-            StatusReadout(name: "counter", value: String(honestCount))
+            StatusReadout(name: "counter", value: String(fixtureState.honestCounter))
 
             LiarButton()
                 .frame(width: 140, height: 30)
@@ -50,9 +51,15 @@ struct ContentView: View {
     // Toggle with a visible on/off state readout.
     private var stateCard: some View {
         Card(title: "State Controls") {
-            Toggle("Toggle Box", isOn: $toggleOn)
+            Toggle(
+                "Toggle Box",
+                isOn: Binding(
+                    get: { fixtureState.toggleOn },
+                    set: { value in updateState { $0.toggleOn = value } }
+                )
+            )
                 .accessibilityLabel("toggle-box")
-            StatusReadout(name: "toggle-state", value: toggleOn ? "on" : "off")
+            StatusReadout(name: "toggle-state", value: fixtureState.toggleOn ? "on" : "off")
         }
     }
 
@@ -62,9 +69,17 @@ struct ContentView: View {
             Text("AX value is read-only; type_text must use CGEvent fallback.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            KeystrokeInput(echo: $keystrokeEcho)
+            KeystrokeInput(
+                echo: Binding(
+                    get: { fixtureState.keystrokeEcho },
+                    set: { value in updateState { $0.keystrokeEcho = value } }
+                )
+            )
                 .frame(width: 260, height: 30)
-            StatusReadout(name: "keystroke-echo", value: keystrokeEcho.isEmpty ? "empty" : keystrokeEcho)
+            StatusReadout(
+                name: "keystroke-echo",
+                value: fixtureState.keystrokeEcho.isEmpty ? "empty" : fixtureState.keystrokeEcho
+            )
         }
     }
 
@@ -77,5 +92,14 @@ struct ContentView: View {
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.08)))
+    }
+
+    private func updateState(_ mutation: (inout BasicControlsFixtureState) -> Void) {
+        mutation(&fixtureState)
+        do {
+            try stateStore.write(fixtureState)
+        } catch {
+            fputs("ComputerUseFixture state write failed: \(error)\n", stderr)
+        }
     }
 }

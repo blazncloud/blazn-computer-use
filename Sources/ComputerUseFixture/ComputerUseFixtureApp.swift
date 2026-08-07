@@ -53,6 +53,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        do {
+            try BasicControlsFixtureStateStore().reset()
+        } catch {
+            fputs("ComputerUseFixture state reset failed: \(error)\n", stderr)
+        }
+
         // Decide the activation policy *before* SwiftUI shows the window.
         // .accessory keeps the app out of the Dock/menu bar and, with the
         // orderBack + deactivate below, keeps it from stealing focus on launch.
