@@ -31,14 +31,24 @@ private func captureLifecycleSnapshot(
     scoped: Bool = false,
     buildTree: @Sendable (String) -> BuiltTree
 ) async -> (snapshot: AppSnapshot, tree: BuiltTree, unchanged: Bool, diff: TreeDiff?) {
-    await SnapshotStore.shared.capture(
+    let identityWindowID = (windowTitle ?? "untitled").utf8.reduce(UInt32(2_166_136_261)) {
+        ($0 ^ UInt32($1)) &* 16_777_619
+    }
+    let identity = SnapshotLineage(
+        process: SnapshotProcessIdentity(
+            pid: pid, bundleIdentifier: "com.example.lifecycle",
+            startTimeMicroseconds: 1_000_000),
+        windowID: identityWindowID)
+    return await SnapshotStore.shared.capture(
         pid: pid,
         bundleIdentifier: "com.example.lifecycle",
         windowTitle: windowTitle,
+        windowID: identityWindowID,
         windowOrigin: windowOrigin,
         pixelsPerPoint: 2,
         windowSize: [400, 300],
         createdAt: Date(timeIntervalSince1970: 0),
+        lineageOverrideForTesting: identity,
         scoped: scoped,
         buildTree: buildTree
     )

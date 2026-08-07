@@ -1,6 +1,6 @@
 // Wire protocol between serve shims and the engine daemon: newline-delimited
-// JSON over a unix domain socket. One connection per agent session; the
-// connection is the session identity for app leases.
+// JSON over a unix domain socket. Logical sessions survive reconnects and
+// identify operation ownership in AppMutationCoordinator.
 
 import Foundation
 import Security
@@ -78,6 +78,12 @@ struct DaemonRequest: Codable, Sendable {
     var authToken: String? = nil
     /// Shim executable mtime, sent with "hello" (see executableBuildStamp).
     var buildStamp: Double? = nil
+    /// Stable logical session credential returned by hello. Omitted by legacy clients.
+    var resumeToken: String? = nil
+    /// Idempotency key for a tool operation. Omitted by legacy clients.
+    var operationID: String? = nil
+    /// Operation id to cancel when method is "cancel".
+    var cancelOperationID: String? = nil
 }
 
 struct DaemonResponse: Codable, Sendable {
@@ -90,6 +96,17 @@ struct DaemonResponse: Codable, Sendable {
     var authenticated: Bool? = nil
     /// Daemon executable mtime (see executableBuildStamp).
     var buildStamp: Double? = nil
+    /// Daemon-generated logical session identity and its reconnect credential.
+    var sessionID: String? = nil
+    var resumeToken: String? = nil
+    var operationID: String? = nil
+    /// Certainty of a cancel request: "cancelled", "cancellation_requested", or "not_running".
+    var cancellationDisposition: String? = nil
+    /// Changes on every daemon process start; retries must not cross it.
+    var daemonIncarnationID: String? = nil
+    /// True only when this daemon supports operation-id fingerprinting,
+    /// in-flight deduplication, and completed-result replay.
+    var operationDeduplicationSupported: Bool? = nil
 }
 
 /// Whether a shim should keep this daemon ("newest build wins"). Same semantic
@@ -188,10 +205,19 @@ struct DaemonPendingRegistry<Handler> {
     }
 }
 
-/// Per-connection session identity for app leases and the overlay cursor.
-/// Set by the daemon around each tool Task; absent in no-daemon local dispatch.
+/// Daemon request lineage. The legacy descriptor identity remains for the
+/// overlay cursor; logical session and operation UUIDs drive coordination.
+/// Values are absent in no-daemon local dispatch.
 enum DaemonSessionContext {
     @TaskLocal static var sessionID: Int32?
+    @TaskLocal static var logicalSessionID: UUID?
+    /// Canonical root operation UUID for the daemon request. Mutation
+    /// transaction lineage must inherit this value rather than minting a
+    /// second root id; nested batch/skill dispatch remains in this context.
+    @TaskLocal static var operationID: UUID?
+    /// Time spent behind an earlier same-app mutation on this connection.
+    /// Dispatch metrics may consume this instead of reporting a synthetic zero.
+    @TaskLocal static var queueLatencyMilliseconds: Double?
 }
 
 enum DaemonProtocolLimits {
@@ -397,6 +423,10 @@ private func generateDaemonAuthToken() throws -> String {
         throw DaemonAuthError.randomFailed
     }
     return Data(bytes).base64EncodedString()
+}
+
+func generateDaemonResumeToken() -> String {
+    (try? generateDaemonAuthToken()) ?? (UUID().uuidString + UUID().uuidString)
 }
 
 func constantTimeEqual(_ lhs: String, _ rhs: String) -> Bool {

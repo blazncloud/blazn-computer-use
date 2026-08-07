@@ -36,6 +36,7 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
             resolved: .unsupported(.unsupported, "\(target.description) is disabled and cannot be clicked."))
         return try await stateResult(
             app: app, windowTitle: target.snapshot.windowTitle,
+            windowID: target.deliveryContext.windowNumber,
             note: "\(target.description) is disabled; no click was performed.",
             screenshot: screenshotDetail(args),
             focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAction.rawValue),
@@ -74,7 +75,8 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         beforeWindowTitle: target.snapshot.windowTitle)
 
     return try await stateResult(
-        app: app, windowTitle: target.snapshot.windowTitle, note: outcome.note,
+        app: app, windowTitle: target.snapshot.windowTitle,
+        windowID: target.deliveryContext.windowNumber, note: outcome.note,
         screenshot: screenshotDetail(args),
         focusTelemetry: focus.finish(
             deliveryTier: outcome.deliveryTier.rawValue, fallbackReasons: outcome.fallbackReasons,
@@ -140,7 +142,7 @@ private func leftClick(
     if let element = target.element, clickCount == 1 {
         let window = axElement(element, kAXWindowAttribute)
         let beforeSignature = window.map(chainWindowSignature)
-        let result = await runClickChain(
+        let result = try await runClickChain(
             target: element, window: window, intent: intent, before: before,
             beforeWindowSignature: beforeSignature,
             settle: { try? await Task.sleep(for: .milliseconds(80)) })
@@ -177,13 +179,11 @@ private func leftClick(
     if let element = target.element,
         let pressable = selfOrAncestor(of: element, supporting: kAXPressAction as String)
     {
-        for _ in 0..<clickCount {
-            let error = AXUIElementPerformAction(pressable, kAXPressAction as CFString)
-            guard error == .success else {
-                throw ToolError.failed("AXPress failed on \(target.description) (\(axErrorDescription(error))).")
-            }
-            try? await Task.sleep(for: .milliseconds(80))
-        }
+        try await performRepeatedAXPress(
+            count: clickCount,
+            primitive: { AXUIElementPerformAction(pressable, kAXPressAction as CFString) },
+            betweenPresses: { try? await Task.sleep(for: .milliseconds(80)) },
+            failureMessage: "AXPress failed on \(target.description)")
         let verb = clickCount > 1 ? "Double-pressed" : "Pressed"
         return InputActionOutcome(
             note: "\(verb) \(target.description) via accessibility [tier1-ax-action].",
@@ -202,11 +202,32 @@ private func leftClick(
     )
 }
 
+func performRepeatedAXPress(
+    count: Int,
+    primitive: () -> AXError,
+    betweenPresses: () async -> Void,
+    failureMessage: String
+) async throws {
+    try checkCancellationBeforeDelivery()
+    for index in 0..<count {
+        let error = primitive()
+        guard error == .success else {
+            throw ToolError.failed("\(failureMessage) (\(axErrorDescription(error))).")
+        }
+        guard index + 1 < count else { continue }
+        await betweenPresses()
+        // Delivery already began. Cancellation now is intentionally generic,
+        // so Dispatch records unknown rather than a false safe-retry abort.
+        if Task.isCancelled { throw CancellationError() }
+    }
+}
+
 private func rightClick(_ target: PointTarget) throws -> InputActionOutcome {
     // Tier 1: accessibility context-menu action.
     if let element = target.element,
         let menu = selfOrAncestor(of: element, supporting: "AXShowMenu")
     {
+        try checkCancellationBeforeDelivery()
         let error = AXUIElementPerformAction(menu, "AXShowMenu" as CFString)
         guard error == .success else {
             throw ToolError.failed("AXShowMenu failed on \(target.description) (\(axErrorDescription(error))).")

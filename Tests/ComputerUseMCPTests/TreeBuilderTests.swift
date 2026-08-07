@@ -57,6 +57,21 @@ import Testing
         #expect(!built.text.contains("tree truncated"))
     }
 
+    @Test func visitCountIncludesOmittedStructuralWrappers() {
+        let node = MinimalTreeNode(
+            role: "AXWindow", label: "Window",
+            children: [
+                MinimalTreeNode(
+                    role: "AXGroup",
+                    children: [MinimalTreeNode(role: "AXButton", label: "Done")])
+            ])
+
+        let built = buildMinimalTree(node)
+
+        #expect(built.elementsVisited == 3)
+        #expect(built.elements.count == 2)
+    }
+
     @Test func unlabeledActionlessGroupIsWrapper() {
         #expect(isStructuralWrapper(role: "AXGroup", label: nil, value: nil, focused: false, actions: []))
         // ShowMenu and ScrollToVisible are universal web-element noise, not signal.

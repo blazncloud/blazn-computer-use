@@ -18,14 +18,21 @@ func openAppImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     if let running = try? resolveApp(identifier) {
         try SafetyPolicy.checkOpenApp(identifier: running.name, activate: activate, isAlreadyRunning: true, confirmed: confirmed)
         if activate {
-            NSRunningApplication(processIdentifier: running.pid)?.activate()
+            let activated = try performSystemMutation {
+                NSRunningApplication(processIdentifier: running.pid)?.activate() ?? false
+            }
+            guard activated else {
+                throw ToolError.failed("macOS refused to activate \(running.name).")
+            }
         }
         let note = "\(running.name) is already running\(activate ? " (activated)" : "")."
         if let result = try? await stateResult(app: running, windowTitle: nil, note: note) {
             return result.withFocusTelemetry(focus.finish(deliveryTier: InputTier.launchServices.rawValue))
+                .withActionOutcome(.success(note).withDispatchSucceeded(activate))
         }
         return CallTool.Result.text(note + " It has no queryable window — press_key cmd+n may create one.")
             .withFocusTelemetry(focus.finish(deliveryTier: InputTier.launchServices.rawValue))
+            .withActionOutcome(.success(note).withDispatchSucceeded(activate))
     }
 
     guard let url = applicationURL(for: identifier) else {
@@ -39,6 +46,7 @@ func openAppImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let configuration = NSWorkspace.OpenConfiguration()
     // Launch without stealing focus unless explicitly asked to.
     configuration.activates = activate
+    try checkCancellationBeforeDelivery()
     let pid: pid_t = try await withCheckedThrowingContinuation { continuation in
         NSWorkspace.shared.openApplication(at: url, configuration: configuration) { app, error in
             if let app {
@@ -81,15 +89,17 @@ func openAppImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
     if let result = try? await stateResult(app: app, windowTitle: nil, note: note) {
         return result.withFocusTelemetry(focus.finish(deliveryTier: InputTier.launchServices.rawValue))
+            .withActionOutcome(.success(note).withDispatchSucceeded(true))
     }
     return CallTool.Result.text(
         "Launched \(app.name) (pid \(app.pid)), but it has no queryable window yet — it may "
             + "be showing an open-file dialog or need press_key cmd+n to create one."
     ).withFocusTelemetry(focus.finish(deliveryTier: InputTier.launchServices.rawValue))
+        .withActionOutcome(.success(note).withDispatchSucceeded(true))
 }
 
 /// Find an app on disk by bundle id, /Applications name, or full path.
-private func applicationURL(for identifier: String) -> URL? {
+func applicationURL(for identifier: String) -> URL? {
     if identifier.contains("."), !identifier.hasSuffix(".app"),
         let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier)
     {
@@ -137,12 +147,14 @@ func openURLImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
     try SafetyPolicy.checkOpenURL(url, confirmed: confirmed)
 
-    guard NSWorkspace.shared.open(url) else {
+    let opened = try performSystemMutation { NSWorkspace.shared.open(url) }
+    guard opened else {
         throw ToolError.failed("macOS refused to open \(url.absoluteString) (no handler?).")
     }
     try? await Task.sleep(for: .milliseconds(300))
     return CallTool.Result.text("Opened \(url.absoluteString) in the default handler. Call get_app_state on the handling app to continue.")
         .withFocusTelemetry(focus.finish(deliveryTier: InputTier.launchServices.rawValue))
+        .withActionOutcome(.success("Opened the URL.").withDispatchSucceeded(true))
 }
 
 // MARK: - list_windows
@@ -195,12 +207,15 @@ func manageWindowImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         try requireFocusChangeAllowed(args, reason: "Raising a window can change foreground focus.")
     }
     let focus = FocusChangeTracker.start(focusChangeAllowed: action == "raise")
+    var mutationDispatched = false
 
     func setAttribute(_ name: String, _ value: CFTypeRef) throws {
+        try checkCancellationBeforeDelivery()
         let error = AXUIElementSetAttributeValue(window.element, name as CFString, value)
         guard error == .success else {
             throw ToolError.failed("Could not \(action) \(described) (\(axErrorDescription(error))).")
         }
+        mutationDispatched = true
     }
 
     // Each action builds a human note and an outcome that reports what actually
@@ -212,26 +227,32 @@ func manageWindowImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     switch action {
     case "raise":
         let beforeMain = axBool(window.element, kAXMainAttribute)
+        try checkCancellationBeforeDelivery()
         let error = AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
         guard error == .success else {
             throw ToolError.failed("Could not raise \(described) (\(axErrorDescription(error))).")
         }
+        mutationDispatched = true
         note = "Raised \(described)."
         let after = await WindowMotion.settleBool(
             desired: true, read: { axBool(window.element, kAXMainAttribute) })
         outcome = WindowMotion.raiseOutcome(described: described, before: beforeMain, after: after)
     case "minimize", "unminimize":
         let desired = action == "minimize"
-        outcome = try await verifyBooleanWindowState(
+        let verified = try await verifyBooleanWindowState(
             window: window.element, attribute: kAXMinimizedAttribute, desired: desired, described: described,
             achieved: desired ? "minimized" : "restored", already: desired ? "already minimized" : "not minimized")
+        outcome = verified.outcome
+        mutationDispatched = verified.dispatched
         note = "\(desired ? "Minimized" : "Restored") \(described)."
     case "fullscreen", "exit_fullscreen":
         let desired = action == "fullscreen"
-        outcome = try await verifyBooleanWindowState(
+        let verified = try await verifyBooleanWindowState(
             window: window.element, attribute: "AXFullScreen", desired: desired, described: described,
             achieved: desired ? "in full screen" : "out of full screen",
             already: desired ? "already in full screen" : "not in full screen")
+        outcome = verified.outcome
+        mutationDispatched = verified.dispatched
         note = "\(desired ? "Entered" : "Left") full screen for \(described)."
     case "move":
         guard let x = args.number("x"), let y = args.number("y") else {
@@ -275,10 +296,12 @@ func manageWindowImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         guard let button = axElement(window.element, kAXCloseButtonAttribute) else {
             throw ToolError.failed("\(described) has no close button.")
         }
+        try checkCancellationBeforeDelivery()
         let error = AXUIElementPerformAction(button, kAXPressAction as CFString)
         guard error == .success else {
             throw ToolError.failed("Could not close \(described) (\(axErrorDescription(error))).")
         }
+        mutationDispatched = true
         note = "Closed \(described). The app may show a save dialog — check list_windows."
         let gone = await WindowMotion.settleBool(
             desired: false, read: { windowStillPresent(window.element, in: app) }) == false
@@ -296,14 +319,17 @@ func manageWindowImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let finalNote = outcome.flatMap { $0.failureDomain != nil ? "\($0.summary)\n\n\(note)" : nil } ?? note
 
     // Minimize/close can leave no queryable window; degrade to the note.
-    if let result = try? await stateResult(app: app, windowTitle: nil, note: finalNote) {
+    if let result = try? await stateResult(
+        app: app, windowTitle: window.title, windowID: window.lineageWindowID,
+        note: finalNote)
+    {
         return result
             .withFocusTelemetry(focus.finish(deliveryTier: InputTier.windowManagement.rawValue))
-            .withActionOutcome(outcome)
+            .withActionOutcome(outcome?.withDispatchSucceeded(mutationDispatched))
     }
     return CallTool.Result.text(finalNote)
         .withFocusTelemetry(focus.finish(deliveryTier: InputTier.windowManagement.rawValue))
-        .withActionOutcome(outcome)
+        .withActionOutcome(outcome?.withDispatchSucceeded(mutationDispatched))
 }
 
 /// Pre-validate a window target frame is finite and on-screen before writing it
@@ -346,23 +372,24 @@ private func settledFrameOutcome(
 private func verifyBooleanWindowState(
     window: AXUIElement, attribute: String, desired: Bool, described: String,
     achieved: String, already: String
-) async throws -> ActionOutcome {
+) async throws -> (outcome: ActionOutcome, dispatched: Bool) {
     let before = axBool(window, attribute)
     // Already in the requested state: a correct no-op, skip the write.
     if before == desired {
-        return WindowMotion.booleanStateOutcome(
+        return (WindowMotion.booleanStateOutcome(
             described: described, achieved: achieved, already: already,
-            desired: desired, before: before, after: before)
+            desired: desired, before: before, after: before), false)
     }
+    try checkCancellationBeforeDelivery()
     let error = AXUIElementSetAttributeValue(
         window, attribute as CFString, (desired ? kCFBooleanTrue : kCFBooleanFalse) as CFTypeRef)
     guard error == .success else {
         throw ToolError.failed("Could not update \(described) (\(axErrorDescription(error))).")
     }
     let after = await WindowMotion.settleBool(desired: desired, read: { axBool(window, attribute) })
-    return WindowMotion.booleanStateOutcome(
+    return (WindowMotion.booleanStateOutcome(
         described: described, achieved: achieved, already: already,
-        desired: desired, before: before, after: after)
+        desired: desired, before: before, after: after), true)
 }
 
 /// Whether the window element is still among the app's live windows (used to
@@ -413,12 +440,14 @@ func clickMenuItemImpl(_ args: [String: Value]) async throws -> CallTool.Result 
             family: .menu, intent: .openMenu, deliveryTier: InputTier.accessibilityAction.rawValue,
             dispatchSucceeded: false, hasTargetElement: false, snapshotElement: nil,
             resolved: .unsupported(.unsupported, "Menu item \"\(path)\" is disabled right now."))
-        return try await stateResult(
-            app: app, windowTitle: nil, note: "Menu item \"\(path)\" is disabled; nothing was selected.",
+        return await menuItemStateResult(
+            app: app,
+            note: "Menu item \"\(path)\" is disabled; nothing was selected.",
             screenshot: screenshotDetail(args),
             focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAction.rawValue),
             verifier: verifier)
     }
+    try checkCancellationBeforeDelivery()
     let error = AXUIElementPerformAction(current, kAXPressAction as CFString)
     guard error == .success else {
         throw ToolError.failed("Pressing menu item \"\(path)\" failed (\(axErrorDescription(error))).")
@@ -427,12 +456,41 @@ func clickMenuItemImpl(_ args: [String: Value]) async throws -> CallTool.Result 
     let verifier = ActionVerifier(
         family: .menu, intent: .openMenu, deliveryTier: InputTier.accessibilityAction.rawValue,
         dispatchSucceeded: true, hasTargetElement: false, snapshotElement: nil)
-    return try await stateResult(
-        app: app, windowTitle: nil, note: "Selected menu \(segments.joined(separator: " > ")).",
+    return await menuItemStateResult(
+        app: app,
+        note: "Selected menu \(segments.joined(separator: " > ")).",
         screenshot: screenshotDetail(args),
         focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAction.rawValue),
-        verifier: verifier
-    )
+        verifier: verifier)
+}
+
+private func menuItemStateResult(
+    app: ResolvedApp,
+    note: String,
+    screenshot: ScreenshotDetail,
+    focusTelemetry: FocusTelemetry,
+    verifier: ActionVerifier
+) async -> CallTool.Result {
+    if let window = try? targetWindow(for: app, title: nil),
+        let result = try? await stateResult(
+            app: app, windowTitle: window.title, windowID: window.lineageWindowID,
+            note: note, screenshot: screenshot,
+            focusTelemetry: focusTelemetry, verifier: verifier)
+    {
+        return result
+    }
+    return menuItemNoWindowResult(
+        note: note, focusTelemetry: focusTelemetry, verifier: verifier)
+}
+
+func menuItemNoWindowResult(
+    note: String,
+    focusTelemetry: FocusTelemetry?,
+    verifier: ActionVerifier
+) -> CallTool.Result {
+    CallTool.Result.text(note + " No window was available for state recapture.")
+        .withFocusTelemetry(focusTelemetry)
+        .withActionOutcome(verifier.skippedStateOutcome())
 }
 
 /// Children of a menu container, descending the single AXMenu wrapper when
@@ -453,6 +511,7 @@ private func menuChildren(of element: AXUIElement) async -> [AXUIElement] {
 
     // The submenu wrapper is present but empty: show it to force population.
     for action in ["AXShowMenu", kAXPressAction as String] where axActionNames(element).contains(action) {
+        guard (try? checkCancellationBeforeDelivery()) != nil else { return [] }
         guard AXUIElementPerformAction(element, action as CFString) == .success else { continue }
         try? await Task.sleep(for: .milliseconds(120))
         break
@@ -505,6 +564,7 @@ func writeClipboardImpl(_ args: [String: Value]) async throws -> CallTool.Result
         }
     }
 
+    try checkCancellationBeforeDelivery()
     pasteboard.clearContents()
     guard pasteboard.setString(text, forType: .string) else {
         throw ToolError.failed("The clipboard rejected the write; restored the previous contents.")
@@ -512,6 +572,12 @@ func writeClipboardImpl(_ args: [String: Value]) async throws -> CallTool.Result
     committed = true
     return CallTool.Result.text("Replaced the clipboard with \(text.count) characters. Paste with press_key cmd+v.")
         .withFocusTelemetry(focus.finish(deliveryTier: InputTier.pasteboard.rawValue))
+        .withActionOutcome(.success("Clipboard write committed.").withDispatchSucceeded(true))
+}
+
+func performSystemMutation<T>(_ primitive: () -> T) throws -> T {
+    try checkCancellationBeforeDelivery()
+    return primitive()
 }
 
 /// The clipboard text to restore after a write attempt: nil once the new value

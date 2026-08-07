@@ -65,6 +65,10 @@ struct FocusTelemetry: Equatable {
     /// Which multi-strategy AX chain rung landed (its verified effect was
     /// observed), when tier 1 was a chain. nil for non-chain deliveries.
     var landedRung: String? = nil
+    /// Handler-owned fact: whether the mutation primitive actually dispatched.
+    /// A tier can describe the selected strategy even when dispatch was
+    /// skipped (for example a disabled control), so consumers must prefer this.
+    var dispatchSucceeded: Bool? = nil
 
     var focusChanged: Bool {
         before != after
@@ -106,6 +110,9 @@ struct FocusTelemetry: Equatable {
         }
         if let uiChanged {
             fields["ui_changed"] = .bool(uiChanged)
+        }
+        if let dispatchSucceeded {
+            fields["dispatch_succeeded"] = .bool(dispatchSucceeded)
         }
         return fields.isEmpty ? nil : .object(fields)
     }

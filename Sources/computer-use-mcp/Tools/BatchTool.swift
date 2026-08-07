@@ -17,8 +17,15 @@ let maxBatchActions = 10
 /// targets a different app — one app per batch keeps lease arbitration and
 /// the URL/interference gates coherent.
 let batchableToolNames: Set<String> = appScopedToolNames.subtracting(["batch", "run_skill"]).union(["wait_for"])
+let batchIntermediateToolNames: Set<String> = [
+    "type_text", "scroll", "set_value", "perform_secondary_action",
+    "click_menu_item", "page", "manage_window", "wait_for",
+]
 
-func batchImpl(_ args: [String: Value]) async throws -> CallTool.Result {
+func batchImpl(
+    _ args: [String: Value],
+    dispatcher: LocalToolDispatcher = dispatchTool
+) async throws -> CallTool.Result {
     let appName = try args.requireString("app")
     guard case .array(let rawActions)? = args["actions"] else {
         throw ToolError.invalidArguments("\"actions\" (array of {\"tool\": …, …} objects) is required.")
@@ -46,6 +53,12 @@ func batchImpl(_ args: [String: Value]) async throws -> CallTool.Result {
                 "actions[\(index)]: \"\(tool)\" cannot run in a batch. Allowed steps: "
                     + batchableToolNames.sorted().joined(separator: ", ") + ".")
         }
+        if index < rawActions.count - 1, !batchIntermediateToolNames.contains(tool) {
+            throw ToolError.invalidArguments(
+                "actions[\(index)]: \"\(tool)\" cannot be an intermediate batch step because it "
+                    + "does not emit structured success evidence. Put it last, or run the next "
+                    + "dependent action in a separate call.")
+        }
         var arguments = fields
         arguments["tool"] = nil
         arguments["app"] = .string(appName)
@@ -53,21 +66,43 @@ func batchImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     }
 
     var summary: [String] = []
+    var definitePriorCommit = false
+    var ambiguousCommit = false
     func stopped(atStep step: Int, tool: String, error: String) -> CallTool.Result {
-        .text(
-            "Batch stopped at step \(step) of \(steps.count) — earlier steps already ran:\n"
-                + (summary + ["✗ step \(step) \(tool): \(error)"]).joined(separator: "\n"),
-            isError: true
+        batchStoppedResult(
+            step: step, stepCount: steps.count, tool: tool, error: error,
+            summary: summary, definitePriorCommit: definitePriorCommit,
+            ambiguousCommit: ambiguousCommit
         )
     }
 
     for (index, step) in steps.dropLast().enumerated() {
         var arguments = step.arguments
-        arguments["include_state"] = .bool(false)
-        let result = await dispatchTool(name: step.tool, arguments: arguments)
+        if isMutatingTool(step.tool) {
+            // A dependent mutation may only advance after a structured
+            // verifier success. Keep state recapture, but suppress the
+            // intermediate screenshot to avoid needless payload cost.
+            arguments["include_state"] = .bool(true)
+            arguments["include_screenshot"] = .bool(false)
+        } else {
+            arguments["include_state"] = .bool(false)
+        }
+        let result = await dispatcher(step.tool, arguments)
         let text = batchResultText(result)
-        if result.isError == true {
+        if !leafResultSucceeded(result, isMutating: isMutatingTool(step.tool)) {
+            if isMutatingTool(step.tool) {
+                updateCompositeEvidence(
+                    leafCommitEvidence(result),
+                    definite: &definitePriorCommit,
+                    ambiguous: &ambiguousCommit)
+            }
             return stopped(atStep: index + 1, tool: step.tool, error: text)
+        }
+        if isMutatingTool(step.tool) {
+            updateCompositeEvidence(
+                leafCommitEvidence(result),
+                definite: &definitePriorCommit,
+                ambiguous: &ambiguousCommit)
         }
         summary.append("✓ step \(index + 1) \(step.tool): \(firstLine(text))")
     }
@@ -77,9 +112,21 @@ func batchImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     if let includeScreenshot = args["include_screenshot"] {
         lastArguments["include_screenshot"] = includeScreenshot
     }
-    let result = await dispatchTool(name: last.tool, arguments: lastArguments)
-    if result.isError == true {
+    let result = await dispatcher(last.tool, lastArguments)
+    if !finalLeafResultAccepted(result) {
+        if isMutatingTool(last.tool) {
+            updateCompositeEvidence(
+                leafCommitEvidence(result),
+                definite: &definitePriorCommit,
+                ambiguous: &ambiguousCommit)
+        }
         return stopped(atStep: steps.count, tool: last.tool, error: batchResultText(result))
+    }
+    if isMutatingTool(last.tool) {
+        updateCompositeEvidence(
+            leafCommitEvidence(result),
+            definite: &definitePriorCommit,
+            ambiguous: &ambiguousCommit)
     }
 
     var header = "Batch completed \(steps.count) step(s):\n"
@@ -91,7 +138,46 @@ func batchImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     } else {
         content.insert(.text(text: header, annotations: nil, _meta: nil), at: 0)
     }
-    return CallTool.Result(content: content, isError: result.isError, _meta: result._meta)
+    let completed = CallTool.Result(content: content, isError: result.isError, _meta: result._meta)
+    // The final leaf's metadata describes only that leaf. Always merge prior
+    // composite evidence so a successful no-op/unknown tail cannot erase an
+    // earlier committed or ambiguous mutation.
+    return applyingSuccessfulCompositeCommitEvidence(
+        to: completed,
+        definiteCommit: definitePriorCommit,
+        ambiguousCommit: ambiguousCommit)
+}
+
+func batchStoppedResult(
+    step: Int,
+    stepCount: Int,
+    tool: String,
+    error: String,
+    summary: [String],
+    definitePriorCommit: Bool,
+    ambiguousCommit: Bool
+) -> CallTool.Result {
+    let result = CallTool.Result.text(
+        "Batch stopped at step \(step) of \(stepCount) — earlier steps already ran:\n"
+            + (summary + ["✗ step \(step) \(tool): \(error)"]).joined(separator: "\n"),
+        isError: true
+    )
+    return applyingCompositeCommitEvidence(
+        to: result,
+        definitePriorCommit: definitePriorCommit,
+        ambiguousCommit: ambiguousCommit)
+}
+
+private func updateCompositeEvidence(
+    _ evidence: LeafCommitEvidence,
+    definite: inout Bool,
+    ambiguous: inout Bool
+) {
+    switch evidence {
+    case .definite: definite = true
+    case .unknown: ambiguous = true
+    case .none: break
+    }
 }
 
 func batchResultText(_ result: CallTool.Result) -> String {

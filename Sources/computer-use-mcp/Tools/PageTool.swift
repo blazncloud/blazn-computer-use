@@ -112,6 +112,10 @@ func pageImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let targetURLContains = args.string("target_url_contains")
     let focus = FocusChangeTracker.start()
     let window = try targetWindow(for: app, title: args.string("window_title"))
+    guard window.lineageWindowID != nil else {
+        throw ToolError.failed(
+            "Could not establish the target window identity for \(app.name). Call get_app_state and retry.")
+    }
     let host = pageHostType(for: app)
 
     switch action {
@@ -166,6 +170,7 @@ private func pageClick(
     let verifier = resolvedPageVerifier(outcome: outcome, tier: delivery.tier.rawValue)
     return try await stateResult(
         app: app, windowTitle: window.title,
+        windowID: window.lineageWindowID,
         note: "Clicked \(selector) via page DOM coordinates at screen (\(roundedIntegerDescription(point.x)),\(roundedIntegerDescription(point.y))) [\(delivery.tier.rawValue)].",
         screenshot: screenshotDetail(args),
         focusTelemetry: focus.finish(deliveryTier: delivery.tier.rawValue, fallbackReasons: delivery.fallbackReasons),
@@ -193,8 +198,11 @@ private func pageSetText(
     let before = try await pageDOMSnapshot(
         selector: verifySelector, app: app, window: window, cdpPort: cdpPort,
         targetURLContains: targetURLContains)
-    try await pageJavaScriptExecutor.insertText(
-        text, selector: selector, app: app, window: window, cdpPort: cdpPort, targetURLContains: targetURLContains)
+    try await executePageInsertAfterProbe {
+        try await pageJavaScriptExecutor.insertText(
+            text, selector: selector, app: app, window: window, cdpPort: cdpPort,
+            targetURLContains: targetURLContains)
+    }
     try? await Task.sleep(for: .milliseconds(80))
     let after = try? await pageDOMSnapshot(
         selector: verifySelector, app: app, window: window, cdpPort: cdpPort,
@@ -205,10 +213,16 @@ private func pageSetText(
     let tier = pageTextDeliveryTier(host: host)
     return try await stateResult(
         app: app, windowTitle: window.title,
+        windowID: window.lineageWindowID,
         note: "Set text in \(selector) via \(host.rawValue) page scripting.",
         screenshot: screenshotDetail(args),
         focusTelemetry: focus.finish(deliveryTier: tier),
         verifier: resolvedPageVerifier(outcome: outcome, tier: tier))
+}
+
+func executePageInsertAfterProbe(_ insert: () async throws -> Void) async throws {
+    try checkCancellationBeforeDelivery()
+    try await insert()
 }
 
 private func pageClickAXFallback(
@@ -226,6 +240,7 @@ private func pageClickAXFallback(
     let tier: InputTier
     var fallbackReasons: [FallbackReason] = []
     if let pressable = selfOrAncestor(of: target, supporting: kAXPressAction as String) {
+        try checkCancellationBeforeDelivery()
         let error = AXUIElementPerformAction(pressable, kAXPressAction as CFString)
         guard error == .success else {
             throw ToolError.failed("AX fallback press failed for \(selector) (\(axErrorDescription(error))).")
@@ -250,6 +265,7 @@ private func pageClickAXFallback(
         axChanged: before != after, deliveryTier: tier.rawValue, host: host)
     return try await stateResult(
         app: app, windowTitle: window.title,
+        windowID: window.lineageWindowID,
         note: "Clicked \(selector) through AX fallback [\(tier.rawValue)].",
         screenshot: screenshotDetail(args),
         focusTelemetry: focus.finish(deliveryTier: tier.rawValue, fallbackReasons: fallbackReasons),
@@ -278,11 +294,13 @@ private func pageSetTextAXFallback(
             .unsupported, "AX fallback found \(selector), but it does not accept a direct value.")
         return try await stateResult(
             app: app, windowTitle: window.title,
+            windowID: window.lineageWindowID,
             note: "\(selector) does not accept a direct AX value; no text was set.",
             screenshot: screenshotDetail(args),
             focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAttribute.rawValue),
             verifier: resolvedPageVerifier(outcome: outcome, tier: InputTier.accessibilityAttribute.rawValue))
     }
+    try checkCancellationBeforeDelivery()
     let error = AXUIElementSetAttributeValue(target, kAXValueAttribute as CFString, text as CFString)
     guard error == .success else {
         throw ToolError.failed("AX fallback set_value failed for \(selector) (\(axErrorDescription(error))).")
@@ -294,6 +312,7 @@ private func pageSetTextAXFallback(
         host: host, expectedText: text)
     return try await stateResult(
         app: app, windowTitle: window.title,
+        windowID: window.lineageWindowID,
         note: "Set text in \(selector) through AX fallback.",
         screenshot: screenshotDetail(args),
         focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAttribute.rawValue),

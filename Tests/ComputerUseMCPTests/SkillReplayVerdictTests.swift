@@ -212,4 +212,72 @@ private func syntheticReplay(
         #expect(replayMissingOutcomeFails(tool: "wait_for", canExpectationProve: false) == false)
     }
 
+    @Test func firstFailingCommittedLeafRequiresReconciliationInsteadOfSameStepRetry() {
+        let guidance = replayFailureGuidance(
+            name: "fixture", app: "Fixture", step: 1, completedSteps: [],
+            currentLeafEvidence: .definite)
+        #expect(guidance.contains("mutation was delivered"))
+        #expect(guidance.contains("get_app_state"))
+        #expect(guidance.contains("Do not replay step 1"))
+        #expect(!guidance.contains("No earlier steps ran"))
+        #expect(!guidance.contains("start_at_step: 1"))
+    }
+
+    @Test func firstFailingUnknownLeafRequiresReconciliationInsteadOfSameStepRetry() {
+        let guidance = replayFailureGuidance(
+            name: "fixture", app: "Fixture", step: 1, completedSteps: [],
+            currentLeafEvidence: .unknown)
+        #expect(guidance.contains("may have delivered"))
+        #expect(guidance.contains("get_app_state"))
+        #expect(!guidance.contains("No earlier steps ran"))
+        #expect(!guidance.contains("start_at_step: 1"))
+    }
+
+    @Test func firstFailingPreDeliveryLeafCanRetryTheSameStep() {
+        let guidance = replayFailureGuidance(
+            name: "fixture", app: "Fixture", step: 1, completedSteps: [],
+            currentLeafEvidence: .none)
+        #expect(guidance.contains("No earlier steps ran"))
+        #expect(guidance.contains("start_at_step: 1"))
+    }
+
+    @Test func committedNonIdempotentStepFollowedByExpectationTimeoutRetainsCommitEvidence() {
+        let stepResult = CallTool.Result.text("Created item")
+            .withActionOutcome(.success("created").withDispatchSucceeded(true))
+            .withCommittedEvidence()
+        let waitResult = CallTool.Result.text("TIMED OUT after 2 seconds", isError: true)
+            .withNotCommittedEvidence()
+
+        let combined = replayExpectationFailureEvidence(
+            stepResult: stepResult, waitResult: waitResult)
+        #expect(leafCommitEvidence(combined) == .definite)
+
+        let guidance = replayFailureGuidance(
+            name: "create-item", app: "Fixture", step: 1, completedSteps: [],
+            currentLeafEvidence: leafCommitEvidence(combined))
+        #expect(guidance.contains("get_app_state"))
+        #expect(guidance.contains("Do not replay step 1"))
+        #expect(!guidance.contains("start_at_step: 1"))
+    }
+
+    @Test func unknownStepCommitFollowedByExpectationTimeoutStaysUnknown() {
+        let stepResult = CallTool.Result.text("delivery uncertain", isError: true)
+            .withUnknownCommitEvidence()
+        let waitResult = CallTool.Result.text("TIMED OUT after 2 seconds", isError: true)
+            .withNotCommittedEvidence()
+        let combined = replayExpectationFailureEvidence(
+            stepResult: stepResult, waitResult: waitResult)
+        #expect(leafCommitEvidence(combined) == .unknown)
+    }
+
+    @Test func preDeliveryStepAndExpectationFailureRemainNotCommitted() {
+        let stepResult = CallTool.Result.text("not delivered", isError: true)
+            .withNotCommittedEvidence()
+        let waitResult = CallTool.Result.text("TIMED OUT after 2 seconds", isError: true)
+            .withNotCommittedEvidence()
+        let combined = replayExpectationFailureEvidence(
+            stepResult: stepResult, waitResult: waitResult)
+        #expect(leafCommitEvidence(combined) == .none)
+    }
+
 }

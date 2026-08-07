@@ -14,12 +14,57 @@ actor DaemonClient {
     private var nextID = 1
     private var pending = DaemonPendingRegistry<CheckedContinuation<DaemonResponse, any Error>>()
     private var pendingTimeouts: [Int: Task<Void, Never>] = [:]
+    private var resumeToken: String?
+    private var daemonIncarnationID: String?
+    private var operationDeduplicationSupported = false
+    private var connectionGeneration = 0
     /// Keeps a spawned daemon Process alive so Foundation reaps it on exit.
     private var spawnedDaemon: Process?
 
     func call(tool: String, arguments: [String: Value]) async throws -> CallTool.Result {
+        let operationID = UUID().uuidString
         try await ensureConnected()
-        let response = try await send(DaemonRequest(id: allocateID(), method: tool, arguments: arguments))
+        let originalIncarnationID = daemonIncarnationID
+        let originalConnectionGeneration = connectionGeneration
+        let deduplicationWasNegotiated = operationDeduplicationSupported
+        let mutation = isMutatingTool(tool)
+        do {
+            return try await sendOperation(
+                tool: tool, arguments: arguments, operationID: operationID)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            guard daemonRetryPermitted(
+                isMutating: mutation,
+                deduplicationSupported: deduplicationWasNegotiated,
+                daemonIncarnationID: originalIncarnationID)
+            else { throw error }
+        }
+
+        // One bounded retry. Read-only calls remain safe against legacy
+        // daemons; mutations require a negotiated dedupe capability.
+        try await ensureConnected()
+        if mutation, connectionGeneration != originalConnectionGeneration,
+            !daemonRetryAllowed(
+                originalIncarnationID: originalIncarnationID,
+                currentIncarnationID: daemonIncarnationID,
+                connectionChanged: true)
+        {
+            throw ToolError.failed(
+                "Daemon restarted after an ambiguous mutation result; refusing to replay the operation.")
+        }
+        return try await sendOperation(
+            tool: tool, arguments: arguments, operationID: operationID)
+    }
+
+    private func sendOperation(
+        tool: String, arguments: [String: Value], operationID: String
+    ) async throws -> CallTool.Result {
+        let response = try await send(
+            DaemonRequest(
+                id: allocateID(), method: tool, arguments: arguments,
+                operationID: operationID),
+            operationIDForCallerCancellation: operationID)
         return response.asCallToolResult
     }
 
@@ -65,7 +110,7 @@ actor DaemonClient {
         let reply = try await send(
             DaemonRequest(
                 id: allocateID(), method: "hello", version: version, authToken: token,
-                buildStamp: executableBuildStamp
+                buildStamp: executableBuildStamp, resumeToken: resumeToken
             ))
         if reply.isError == true {
             let message = reply.content?.compactMap(\.text).joined(separator: "\n")
@@ -76,7 +121,14 @@ actor DaemonClient {
             replyVersion: reply.version, replyAuthenticated: reply.authenticated,
             replyBuildStamp: reply.buildStamp,
             localVersion: version, localBuildStamp: executableBuildStamp
-        ) { return true }
+        ) {
+            resumeToken = reply.resumeToken ?? resumeToken
+            daemonIncarnationID = reply.daemonIncarnationID
+            operationDeduplicationSupported =
+                reply.operationDeduplicationSupported == true
+                && reply.daemonIncarnationID != nil
+            return true
+        }
         guard let replyVersion = reply.version else {
             throw ToolError.failed("daemon handshake did not return a version")
         }
@@ -126,6 +178,7 @@ actor DaemonClient {
 
     private func adopt(fd connected: Int32) {
         fd = connected
+        connectionGeneration += 1
         // Reader thread: blocking reads must not occupy the cooperative pool.
         Thread.detachNewThread { [weak self] in
             var frames = DaemonLineBuffer<DaemonResponse>(
@@ -189,7 +242,9 @@ actor DaemonClient {
         return nextID
     }
 
-    private func send(_ request: DaemonRequest) async throws -> DaemonResponse {
+    private func send(
+        _ request: DaemonRequest, operationIDForCallerCancellation: String? = nil
+    ) async throws -> DaemonResponse {
         guard fd >= 0 else { throw ToolError.failed("Not connected to the engine daemon.") }
         let timeoutSeconds = daemonRPCTimeoutSeconds()
         let requestID = request.id
@@ -197,8 +252,12 @@ actor DaemonClient {
             try await withCheckedThrowingContinuation { continuation in
                 pending.store(id: requestID, handler: continuation)
                 let timeoutTask = Task { [timeoutSeconds] in
-                    try? await Task.sleep(for: .seconds(timeoutSeconds))
-                    await self.failPending(
+                    do {
+                        try await Task.sleep(for: .seconds(timeoutSeconds))
+                    } catch {
+                        return
+                    }
+                    self.failPending(
                         id: requestID,
                         error: ToolError.failed(
                             "Daemon RPC timed out after \(Int(timeoutSeconds))s waiting for \"\(request.method)\"."
@@ -215,8 +274,20 @@ actor DaemonClient {
                 }
             }
         } onCancel: {
-            Task { await self.failPending(id: requestID, error: CancellationError()) }
+            Task {
+                await self.failPending(id: requestID, error: CancellationError())
+                if let operationID = operationIDForCallerCancellation {
+                    await self.sendCancel(operationID: operationID)
+                }
+            }
         }
+    }
+
+    private func sendCancel(operationID: String) {
+        guard fd >= 0 else { return }
+        let request = DaemonRequest(
+            id: allocateID(), method: "cancel", cancelOperationID: operationID)
+        _ = writeJSONLine(request, to: fd)
     }
 
     private func fulfill(_ response: DaemonResponse) {
@@ -243,4 +314,18 @@ actor DaemonClient {
             continuation.resume(throwing: error)
         }
     }
+}
+
+func daemonRetryAllowed(
+    originalIncarnationID: String?, currentIncarnationID: String?, connectionChanged: Bool
+) -> Bool {
+    guard connectionChanged else { return true }
+    guard let originalIncarnationID, let currentIncarnationID else { return false }
+    return originalIncarnationID == currentIncarnationID
+}
+
+func daemonRetryPermitted(
+    isMutating: Bool, deduplicationSupported: Bool, daemonIncarnationID: String?
+) -> Bool {
+    !isMutating || (deduplicationSupported && daemonIncarnationID != nil)
 }

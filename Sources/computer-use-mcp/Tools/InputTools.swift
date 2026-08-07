@@ -21,7 +21,21 @@ func pressKeyImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         app: app, confirmed: confirmed
     )
 
-    let window = try? targetWindow(for: app, title: await SnapshotStore.shared.load(forPid: app.pid)?.windowTitle)
+    let storedSnapshot = await SnapshotStore.shared.load(forPid: app.pid)
+    let window: TargetWindow?
+    if pressKeyRequiresSnapshotIdentity(storedSnapshotExists: storedSnapshot != nil),
+        let storedSnapshot
+    {
+        let resolved = try targetWindow(for: app, title: storedSnapshot.windowTitle)
+        try requireCompatibleSnapshotIdentity(
+            snapshot: storedSnapshot, app: app, window: resolved, requirement: .mutation)
+        window = resolved
+    } else {
+        // A focused key chord has no snapshot-derived target or coordinates.
+        // Use current window context for delivery telemetry, but do not let an
+        // unrelated legacy/lineage-less snapshot block the mutation.
+        window = try? targetWindow(for: app, title: nil)
+    }
     let context = DeliveryContext(
         pid: app.pid,
         windowNumber: window.flatMap { windowID(for: $0.element) },
@@ -32,11 +46,24 @@ func pressKeyImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let deliveryMode = try deliverKey(chord, context: context, targetAppIsActive: targetAppIsActive)
     try? await Task.sleep(for: .milliseconds(80))
 
-    return try await stateResult(
-        app: app, windowTitle: window?.title, note: "Pressed \(combo).",
+    return try await recaptureAfterPressKey { windowTitle, windowID in
+        try await stateResult(
+        app: app, windowTitle: windowTitle, windowID: windowID,
+        note: "Pressed \(combo).",
         screenshot: screenshotDetail(args),
         focusTelemetry: focus.finish(deliveryTier: deliveryMode.rawValue)
-    )
+        )
+    }
+}
+
+func recaptureAfterPressKey<T>(
+    _ recapture: (String?, CGWindowID?) async throws -> T
+) async throws -> T {
+    try await recapture(nil, nil)
+}
+
+func pressKeyRequiresSnapshotIdentity(storedSnapshotExists _: Bool) -> Bool {
+    false
 }
 
 func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
@@ -135,6 +162,7 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
                 before: before, beforeWindowTitle: target.snapshot.windowTitle)
             return try await stateResult(
                 app: app, windowTitle: target.snapshot.windowTitle,
+                windowID: target.deliveryContext.windowNumber,
                 note: "Scrolled \(direction)\(pageCount > 1 ? " \(pageCount) pages" : "") at \(target.description).",
                 screenshot: screenshotDetail(args),
                 focusTelemetry: focus.finish(
@@ -161,6 +189,7 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
             let newValue = scrolledBarValue(
                 current: current, pageProportion: proportion, pages: args.number("pages") ?? 1, forward: forward)
             if abs(newValue - current) > 1e-6 {
+                try checkCancellationBeforeDelivery()
                 let ok =
                     AXUIElementSetAttributeValue(bar, kAXValueAttribute as CFString, NSNumber(value: newValue))
                     == .success
@@ -192,6 +221,7 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         {
             let fingerprint = scrollMovementFingerprint(container: actionContainer, target: target.element)
             var performed = true
+            try checkCancellationBeforeDelivery()
             for _ in 0..<pageCount where performed {
                 performed = AXUIElementPerformAction(actionContainer, action as CFString) == .success
             }
@@ -215,6 +245,7 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
                 windowFrame: target.deliveryContext.windowFrame)
         {
             let fingerprint = scrollMovementFingerprint(container: container, target: target.element)
+            try checkCancellationBeforeDelivery()
             let performed = AXUIElementPerformAction(reveal, "AXScrollToVisible" as CFString) == .success
             try? await Task.sleep(for: .milliseconds(80))
             let moved = scrollMovementChanged(
@@ -230,7 +261,7 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     }
 
     // Tier 2: synthetic wheel at the hit point.
-    let tier = deliverScroll(at: point, deltaX: deltaX, deltaY: deltaY, context: target.deliveryContext)
+    let tier = try deliverScroll(at: point, deltaX: deltaX, deltaY: deltaY, context: target.deliveryContext)
     try? await Task.sleep(for: .milliseconds(80))
 
     if let container, let beforeOffset, let afterOffset = scrollOffsetSignature(container) {
@@ -249,6 +280,7 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         before: before, beforeWindowTitle: target.snapshot.windowTitle)
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle,
+        windowID: target.deliveryContext.windowNumber,
         note: "Scrolled (\(deltaX),\(deltaY)) at \(target.description).",
         screenshot: screenshotDetail(args),
         focusTelemetry: focus.finish(deliveryTier: tier.rawValue, fallbackReasons: fallbackReasons),
@@ -264,6 +296,7 @@ func dragImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     guard let snapshot = await SnapshotStore.shared.load(forPid: app.pid) else {
         throw ToolError.failed("Call get_app_state for \(app.name) before dragging.")
     }
+    let window = try resolveMutationWindow(snapshot: snapshot, app: app)
     let from = try screenPoint(x: try args.requireNumber("from_x"), y: try args.requireNumber("from_y"), snapshot: snapshot)
     let to = try screenPoint(x: try args.requireNumber("to_x"), y: try args.requireNumber("to_y"), snapshot: snapshot)
 
@@ -273,15 +306,14 @@ func dragImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         try SafetyPolicy.checkClick(label: clickableLabel(destination), app: app, confirmed: confirmed)
     }
 
-    let window = try? targetWindow(for: app, title: snapshot.windowTitle)
     let context = DeliveryContext(
         pid: app.pid,
-        windowNumber: window.flatMap { windowID(for: $0.element) },
-        windowFrame: window?.frame,
+        windowNumber: window.lineageWindowID,
+        windowFrame: window.frame,
         allowGlobalCursor: false
     )
     await AgentCursor.shared.glide(to: from, targetWindow: context.windowNumber)
-    let tier = await deliverDrag(from: from, to: to, context: context)
+    let tier = try await deliverDrag(from: from, to: to, context: context)
     await AgentCursor.shared.pulse(at: to, targetWindow: context.windowNumber)
     try? await Task.sleep(for: .milliseconds(80))
 
@@ -294,6 +326,7 @@ func dragImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         beforeWindowTitle: snapshot.windowTitle)
     return try await stateResult(
         app: app, windowTitle: snapshot.windowTitle,
+        windowID: context.windowNumber,
         note: "Dragged from (\(roundedIntegerDescription(from.x)),\(roundedIntegerDescription(from.y))) "
             + "to (\(roundedIntegerDescription(to.x)),\(roundedIntegerDescription(to.y))).",
         screenshot: screenshotDetail(args),

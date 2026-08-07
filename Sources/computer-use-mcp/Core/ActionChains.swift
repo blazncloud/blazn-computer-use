@@ -92,11 +92,11 @@ struct ChainResult: Sendable, Equatable {
 /// so the live attempt can await AX reads; deterministic and unit-testable with
 /// a synchronous closure.
 func runActionChain(
-    _ rungs: [ChainRung], attempt: (ChainRung) async -> RungAttempt
-) async -> ChainResult {
+    _ rungs: [ChainRung], attempt: (ChainRung) async throws -> RungAttempt
+) async throws -> ChainResult {
     var firedUnverified: [String] = []
     for rung in rungs {
-        switch await attempt(rung) {
+        switch try await attempt(rung) {
         case .skipped:
             continue
         case .firedUnverified:
@@ -148,13 +148,22 @@ private func rungActionSupported(_ action: ChainAction, by element: AXUIElement)
 
 /// Perform a rung's action; true when the AX call reported success (which the
 /// verifier then confirms — or refutes).
-func performRungAction(_ action: ChainAction, on element: AXUIElement) -> Bool {
+func performRungAction(_ action: ChainAction, on element: AXUIElement) throws -> Bool {
     switch action {
     case .axAction(let name):
-        return AXUIElementPerformAction(element, name as CFString) == .success
+        return try performChainPrimitive {
+            AXUIElementPerformAction(element, name as CFString) == .success
+        }
     case .selectionRelay:
-        return AXUIElementSetAttributeValue(element, "AXSelected" as CFString, kCFBooleanTrue) == .success
+        return try performChainPrimitive {
+            AXUIElementSetAttributeValue(element, "AXSelected" as CFString, kCFBooleanTrue) == .success
+        }
     }
+}
+
+func performChainPrimitive(_ primitive: () -> Bool) throws -> Bool {
+    try checkCancellationBeforeDelivery()
+    return primitive()
 }
 
 /// Breadth-first nearest descendant supporting the action, bounded so a deep
@@ -207,10 +216,10 @@ func runClickChain(
     before: ActionVerification,
     beforeWindowSignature: String?,
     settle: @Sendable () async -> Void
-) async -> ChainResult {
-    await runActionChain(clickChain) { rung in
+) async throws -> ChainResult {
+    try await runActionChain(clickChain) { rung in
         guard let element = resolveRungElement(rung, target: target) else { return .skipped }
-        guard performRungAction(rung.action, on: element) else { return .skipped }
+        guard try performRungAction(rung.action, on: element) else { return .skipped }
         await settle()
 
         var after = before

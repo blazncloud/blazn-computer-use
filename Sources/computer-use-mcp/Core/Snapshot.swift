@@ -29,6 +29,76 @@ struct SnapshotElement: Codable {
     let frame: [Double]
 }
 
+/// Strong process identity when macOS exposes a launch timestamp. PID and
+/// bundle id are always retained; `startTimeMicroseconds` is nil when libproc
+/// cannot inspect the process.
+struct SnapshotProcessIdentity: Codable, Equatable {
+    let pid: Int32
+    let bundleIdentifier: String
+    let startTimeMicroseconds: UInt64?
+}
+
+/// Identity shared by the AX window used to build the tree and later mutation
+/// resolution. A nil `windowID` explicitly means strong window identity was
+/// unavailable.
+struct SnapshotLineage: Codable, Equatable {
+    let process: SnapshotProcessIdentity
+    let windowID: UInt32?
+}
+
+enum SnapshotLineageDecision: Equatable {
+    case compatible
+    case unavailable
+    case conflict(String)
+}
+
+/// Single policy for deciding whether a persisted locator may be applied to a
+/// current process/window. Missing strong identity preserves legacy behavior;
+/// any positively observed conflict fails closed.
+func compareSnapshotLineage(
+    persisted: SnapshotLineage?, current: SnapshotLineage
+) -> SnapshotLineageDecision {
+    guard let persisted else { return .unavailable }
+    guard persisted.process.pid == current.process.pid else {
+        return .conflict("the process id changed")
+    }
+    guard persisted.process.bundleIdentifier == current.process.bundleIdentifier else {
+        return .conflict("pid \(current.process.pid) now belongs to a different app")
+    }
+    if let oldStart = persisted.process.startTimeMicroseconds,
+        let newStart = current.process.startTimeMicroseconds,
+        oldStart != newStart
+    {
+        return .conflict("the app process was replaced")
+    }
+    if let oldWindow = persisted.windowID, let newWindow = current.windowID,
+        oldWindow != newWindow
+    {
+        return .conflict("the target window was replaced")
+    }
+    guard persisted.process.startTimeMicroseconds != nil,
+        current.process.startTimeMicroseconds != nil,
+        persisted.windowID != nil, current.windowID != nil
+    else { return .unavailable }
+    return .compatible
+}
+
+func snapshotLineagesAreCompatible(_ persisted: SnapshotLineage?, _ current: SnapshotLineage) -> Bool {
+    if case .conflict = compareSnapshotLineage(persisted: persisted, current: current) {
+        return false
+    }
+    return true
+}
+
+/// Element IDs may survive only when both captures carry fully available,
+/// matching strong identity. Legacy or partial lineage always gets a fresh
+/// generation so new identity is never attached to old locators.
+func snapshotLineagesCanReuseElementIDs(
+    _ persisted: SnapshotLineage?, _ current: SnapshotLineage
+) -> Bool {
+    compareSnapshotLineage(persisted: persisted, current: current) == .compatible
+}
+
 struct AppSnapshot: Codable {
     let pid: Int32
     let bundleIdentifier: String
@@ -59,6 +129,8 @@ struct AppSnapshot: Codable {
     /// of truncation, skeleton depth, or collection windowing. Partial
     /// snapshots must not invalidate ids they did not observe.
     var partial: Bool? = nil
+    /// Optional so snapshots written by older versions remain decodable.
+    var lineage: SnapshotLineage? = nil
     let elements: [SnapshotElement]
 
     func element(withID id: String) -> SnapshotElement? {
@@ -112,7 +184,9 @@ actor SnapshotStore {
     /// so the caller can send only what changed while existing ids stay valid.
     func capture(
         pid: pid_t, bundleIdentifier: String, windowTitle: String?,
+        windowID: CGWindowID?,
         windowOrigin: CGPoint, pixelsPerPoint: Double, windowSize: [Double]?, createdAt: Date,
+        lineageOverrideForTesting: SnapshotLineage? = nil,
         scoped: Bool = false,
         buildTree: (String) -> BuiltTree
     ) -> (snapshot: AppSnapshot, tree: BuiltTree, unchanged: Bool, diff: TreeDiff?) {
@@ -129,6 +203,11 @@ actor SnapshotStore {
         let generation = "s\(next)"
         var tree = buildTree(generation)
         let fingerprint = treeFingerprint(tree.text)
+        let lineage =
+            lineageOverrideForTesting
+            ?? snapshotLineage(
+                pid: pid, bundleIdentifier: bundleIdentifier,
+                windowID: windowID)
 
         let previous = bestBaseline(
             forPid: pid,
@@ -137,6 +216,7 @@ actor SnapshotStore {
             windowOrigin: windowOrigin,
             windowSize: windowSize,
             pixelsPerPoint: pixelsPerPoint,
+            lineage: lineage,
             scoped: scoped
         )
         if let previous,
@@ -148,6 +228,7 @@ actor SnapshotStore {
             previous.windowSize == windowSize,
             previous.bundleIdentifier == bundleIdentifier,
             previous.pixelsPerPoint == pixelsPerPoint,
+            snapshotLineagesCanReuseElementIDs(previous.lineage, lineage),
             (previous.scoped == true) == scoped
         {
             let committedTree = Self.committedTree(from: previous, matching: tree)
@@ -169,6 +250,7 @@ actor SnapshotStore {
             previous.windowOrigin == [windowOrigin.x, windowOrigin.y],
             previous.windowSize == windowSize,
             previous.pixelsPerPoint == pixelsPerPoint,
+            snapshotLineagesCanReuseElementIDs(previous.lineage, lineage),
             let stabilized = stabilizeTree(tree, against: previous)
         {
             tree = stabilized.tree
@@ -180,7 +262,7 @@ actor SnapshotStore {
             windowOrigin: [windowOrigin.x, windowOrigin.y], pixelsPerPoint: pixelsPerPoint,
             windowSize: windowSize, createdAt: createdAt, generation: generation,
             treeFingerprint: fingerprint, treeText: tree.text, scoped: scoped,
-            partial: tree.isPartial, elements: tree.elements
+            partial: tree.isPartial, lineage: lineage, elements: tree.elements
         )
         cache[pid] = snapshot
         remember(snapshot)
@@ -224,6 +306,13 @@ actor SnapshotStore {
         }
     }
 
+    func seedForTesting(_ snapshot: AppSnapshot) {
+        cache[snapshot.pid] = snapshot
+        counters[snapshot.pid] = max(counters[snapshot.pid] ?? 0, Self.parseGeneration(snapshot))
+        remember(snapshot)
+        persist(snapshot)
+    }
+
     func clearMemoryForTesting(pid: pid_t) {
         cache.removeValue(forKey: pid)
         counters.removeValue(forKey: pid)
@@ -239,6 +328,7 @@ actor SnapshotStore {
             if merged.treeText == nil { merged.treeText = existing.treeText }
             if merged.scoped == nil { merged.scoped = existing.scoped }
             if merged.partial == nil { merged.partial = existing.partial }
+            if merged.lineage == nil { merged.lineage = existing.lineage }
             snapshots[existingIndex] = merged
         } else {
             snapshots.append(snapshot)
@@ -256,6 +346,7 @@ actor SnapshotStore {
         windowOrigin: CGPoint,
         windowSize: [Double]?,
         pixelsPerPoint: Double,
+        lineage: SnapshotLineage,
         scoped: Bool
     ) -> AppSnapshot? {
         let candidates = history[pid] ?? []
@@ -266,6 +357,7 @@ actor SnapshotStore {
                     && $0.windowOrigin == [windowOrigin.x, windowOrigin.y]
                     && $0.windowSize == windowSize
                     && $0.pixelsPerPoint == pixelsPerPoint
+                    && snapshotLineagesAreCompatible($0.lineage, lineage)
                     && ($0.scoped == true) == scoped
                     && $0.partial != true
             }
@@ -375,7 +467,11 @@ actor SnapshotStore {
         let candidateGeneration = parseGeneration(candidate)
         var current = (snapshot: candidate, element: element)
         for newer in snapshots where parseGeneration(newer) > candidateGeneration {
-            guard sameWindowLineage(candidate, newer) else { continue }
+            guard sameWindowGeometry(candidate, newer) else { continue }
+            // Once a newer snapshot occupies the same logical window slot,
+            // unavailable or conflicting lineage invalidates the historical
+            // locator instead of allowing the old snapshot to remain current.
+            guard sameWindowLineage(candidate, newer) else { return nil }
             if let sameID = newer.element(withID: element.id) {
                 current = (newer, sameID)
                 continue
@@ -398,6 +494,11 @@ actor SnapshotStore {
     }
 
     private static func sameWindowLineage(_ lhs: AppSnapshot, _ rhs: AppSnapshot) -> Bool {
+        sameWindowGeometry(lhs, rhs)
+            && (rhs.lineage.map { snapshotLineagesCanReuseElementIDs(lhs.lineage, $0) } ?? false)
+    }
+
+    private static func sameWindowGeometry(_ lhs: AppSnapshot, _ rhs: AppSnapshot) -> Bool {
         lhs.bundleIdentifier == rhs.bundleIdentifier
             && lhs.windowTitle == rhs.windowTitle
             && lhs.windowOrigin == rhs.windowOrigin
@@ -423,9 +524,13 @@ actor SnapshotStore {
             }
             return BuiltTree(
                 text: lines.joined(separator: "\n"), elements: snapshot.elements,
-                isPartial: snapshot.partial == true)
+                isPartial: snapshot.partial == true,
+                elementsVisited: freshTree.elementsVisited)
         }
-        return BuiltTree(text: text, elements: snapshot.elements, isPartial: snapshot.partial == true)
+        return BuiltTree(
+            text: text, elements: snapshot.elements,
+            isPartial: snapshot.partial == true,
+            elementsVisited: freshTree.elementsVisited)
     }
 }
 
@@ -569,7 +674,9 @@ func stabilizeTree(_ tree: BuiltTree, against previous: AppSnapshot) -> (tree: B
         return "- \(leftover.element.id) \(leftover.element.role)\(label) is gone"
     }
 
-    let stabilized = BuiltTree(text: newLines.joined(separator: "\n"), elements: elements, isPartial: tree.isPartial)
+    let stabilized = BuiltTree(
+        text: newLines.joined(separator: "\n"), elements: elements,
+        isPartial: tree.isPartial, elementsVisited: tree.elementsVisited)
     return (stabilized, TreeDiff(changed: changed, added: added, removed: removed, totalElements: elements.count))
 }
 

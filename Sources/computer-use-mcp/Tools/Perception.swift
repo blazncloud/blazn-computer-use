@@ -15,18 +15,24 @@ func getAppStateImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     // Scoped query: rebuild the tree from one element down, with full budget —
     // the recourse when the whole-window tree is truncated.
     var scope: TreeScope?
+    var scopeWindowTitle: String?
+    var scopeWindowID: CGWindowID?
     if let scopeID = args.string("scope_element_id") {
         let target = try await resolveTarget(app: app, elementID: scopeID)
         scope = TreeScope(root: target.element, pathPrefix: target.snapshotElement.path)
+        scopeWindowTitle = target.window.title
+        scopeWindowID = target.window.lineageWindowID
     }
     return try await stateResult(
-        app: app, windowTitle: args.string("window_title"),
+        app: app, windowTitle: scopeWindowTitle ?? args.string("window_title"),
+        windowID: scopeWindowID,
         screenshot: appStateScreenshotDetail(args),
         scope: scope, maxElements: args.integer("max_elements") ?? defaultMaxTreeElements,
         ocr: args.bool("ocr") == true,
         // Skeleton and scoped drill-down are complementary: skeleton gives the
         // shallow overview, scope_element_id expands one container from it.
-        skeleton: scope == nil && args.bool("skeleton") == true
+        skeleton: scope == nil && args.bool("skeleton") == true,
+        metricTool: "get_app_state"
     )
 }
 
@@ -142,6 +148,7 @@ func screenshotDetail(_ args: [String: Value]) -> ScreenshotDetail {
 func stateResult(
     app: ResolvedApp,
     windowTitle: String?,
+    windowID requestedWindowID: CGWindowID? = nil,
     note: String? = nil,
     screenshot detail: ScreenshotDetail = .reduced,
     scope: TreeScope? = nil,
@@ -149,9 +156,13 @@ func stateResult(
     ocr: Bool = false,
     skeleton: Bool = false,
     focusTelemetry: FocusTelemetry? = nil,
-    verifier: ActionVerifier? = nil
+    verifier: ActionVerifier? = nil,
+    metricTool: String = "state_result"
 ) async throws -> CallTool.Result {
+    let metricStart = ContinuousClock.now
     try requireAccessibilityTrusted()
+    var handlerTelemetry = focusTelemetry
+    handlerTelemetry?.dispatchSucceeded = verifier?.dispatchSucceeded
 
     // Every tool call lands here; let the cursor overlay know the agent is
     // still mid-task so it stays visible across the whole operation.
@@ -160,7 +171,7 @@ func stateResult(
     if detail == .noState {
         let confirmation = note ?? "Action completed."
         var result = CallTool.Result.text(confirmation + " Call get_app_state when you need the updated UI state.")
-            .withFocusTelemetry(focusTelemetry)
+            .withFocusTelemetry(handlerTelemetry)
         // No recapture on the fast path: honor the skip honestly rather than
         // paying for a reread — a pre-resolved verdict still rides along, but
         // an unresolved one becomes verifier_ambiguous, never a false success.
@@ -173,22 +184,43 @@ func stateResult(
     // Give the UI a brief beat to settle after whatever just happened.
     try? await Task.sleep(for: .milliseconds(40))
 
-    // Actions can close or replace the window they acted in (dialogs,
-    // sheets); fall back to the front window rather than failing.
+    // Mutation callers carry the exact acted-on window id through the reread.
+    // If that window disappeared, fail without capturing or persisting a
+    // same-title sibling. Read-only callers retain the legacy title selection.
     let window: TargetWindow
     var windowNote: String?
-    do {
-        window = try targetWindow(for: app, title: windowTitle)
-    } catch where windowTitle != nil {
-        window = try targetWindow(for: app, title: nil)
-        windowNote = "Window \"\(windowTitle!)\" is gone; showing the front window instead."
+    if let requestedWindowID {
+        do {
+            window = try targetWindow(for: app, snapshotWindowID: requestedWindowID)
+        } catch {
+            let confirmation = note ?? "Action completed."
+            var result = CallTool.Result.text(
+                confirmation + "\n\nThe exact acted-on window (id \(requestedWindowID)) "
+                    + "is no longer available, so no replacement window was captured. "
+                    + "Call get_app_state when you need the current UI state.")
+                .withFocusTelemetry(handlerTelemetry)
+            if let verifier {
+                result = result.withActionOutcome(verifier.missingWindowOutcome())
+            }
+            return result
+        }
+    } else {
+        do {
+            window = try targetWindow(for: app, title: windowTitle)
+        } catch where windowTitle != nil {
+            window = try targetWindow(for: app, title: nil)
+            windowNote = "Window \"\(windowTitle!)\" is gone; showing the front window instead."
+        }
     }
+    let exactWindowID = requestedWindowID ?? windowID(for: window.element)
 
     var capture: WindowCapture?
     var captureNote: String?
     if detail != .none {
         do {
-            capture = try await captureWindow(pid: app.pid, title: window.title, frame: window.frame, detail: detail)
+            capture = try await captureWindow(
+                pid: app.pid, windowID: exactWindowID, title: window.title,
+                frame: window.frame, detail: detail)
         } catch {
             captureNote = "Screenshot unavailable: \(error)"
         }
@@ -220,6 +252,7 @@ func stateResult(
             pid: app.pid,
             bundleIdentifier: app.bundleIdentifier,
             windowTitle: window.title,
+            windowID: exactWindowID,
             windowOrigin: window.frame.origin,
             pixelsPerPoint: pixelsPerPoint,
             windowSize: [window.frame.width * pixelsPerPoint, window.frame.height * pixelsPerPoint],
@@ -338,7 +371,7 @@ func stateResult(
         text += "\n\n" + canvasHint
     }
 
-    var enrichedTelemetry = focusTelemetry
+    var enrichedTelemetry = handlerTelemetry
     enrichedTelemetry?.uiChanged = !unchanged
 
     // Re-read the acted-on element and reduce to an outcome. The reread never
@@ -369,9 +402,30 @@ func stateResult(
             )
         )
     }
-    return .init(content: content, isError: false)
+    let result = CallTool.Result(content: content, isError: false)
         .withFocusTelemetry(enrichedTelemetry)
         .withActionOutcome(actionOutcome)
+    let elapsed = metricStart.duration(to: .now)
+    let elapsedMilliseconds =
+        elapsed.components.seconds * 1000
+        + elapsed.components.attoseconds / 1_000_000_000_000_000
+    let operationID =
+        ActionTransactionContext.currentOperationID
+        ?? DaemonSessionContext.operationID
+        ?? UUID()
+    await MetricsRecorder.shared.record(
+        MetricsEvent(payload: .perception(PerceptionMetric(
+            operation: operationID.uuidString,
+            tool: metricTool,
+            appBundleIdentifier: app.bundleIdentifier,
+            elapsedMs: elapsedMilliseconds,
+            elementsVisited: tree.elementsVisited,
+            elementsReturned: tree.elements.count,
+            partial: tree.isPartial,
+            diff: diff != nil,
+            contextBytes: text.utf8.count
+        ))))
+    return result
 }
 
 /// Guidance when a synthetic background-event delivery produced no visible

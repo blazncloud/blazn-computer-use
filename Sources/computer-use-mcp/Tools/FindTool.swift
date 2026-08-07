@@ -29,6 +29,7 @@ func findImpl(_ args: [String: Value]) async throws -> CallTool.Result {
             pid: app.pid,
             bundleIdentifier: app.bundleIdentifier,
             windowTitle: window.title,
+            windowID: windowID(for: window.element),
             windowOrigin: window.frame.origin,
             pixelsPerPoint: pixelsPerPoint,
             windowSize: [window.frame.width * pixelsPerPoint, window.frame.height * pixelsPerPoint],

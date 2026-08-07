@@ -115,9 +115,7 @@ struct ActionVerification: Sendable {
 
     /// True when any whole-window signal shows a change.
     var windowChanged: Bool {
-        renderedTextChanged == true || windowTitleChanged == true
-            || focusedElementChanged == true || windowFrameChanged == true
-            || scrollPositionChanged == true
+        ActionPredicates.windowChanged(self)
     }
 
     var value: Value {
@@ -153,6 +151,46 @@ struct ActionVerification: Sendable {
     }
 }
 
+/// Pure, typed predicates shared by outcome reducers and future transaction
+/// integration. Keeping observation separate from classification prevents each
+/// handler from inventing subtly different truth rules.
+enum ActionPredicates {
+    static func value(_ observed: String?, equals expected: String) -> Bool {
+        observed == expected
+    }
+
+    static func value(_ observed: String?, contains inserted: String) -> Bool {
+        observed?.contains(inserted) == true
+    }
+
+    static func selection(_ observed: Bool?, equals expected: Bool) -> Bool {
+        observed == expected
+    }
+
+    static func number(_ observed: String?, equals expected: Double, tolerance: Double = numberEpsilon) -> Bool {
+        guard let observed, let value = Double(observed) else { return false }
+        return abs(value - expected) < tolerance
+    }
+
+    static func focused(_ observed: Bool?, rereadFailed: Bool = false) -> Bool {
+        observed == true && !rereadFailed
+    }
+
+    static func frameChanged(from before: (Double, Double), to after: (Double, Double), tolerance: Double) -> Bool {
+        abs(before.0 - after.0) > tolerance || abs(before.1 - after.1) > tolerance
+    }
+
+    static func windowChanged(_ verification: ActionVerification) -> Bool {
+        verification.renderedTextChanged == true || verification.windowTitleChanged == true
+            || verification.focusedElementChanged == true || verification.windowFrameChanged == true
+            || verification.scrollPositionChanged == true
+    }
+
+    static func scrollMoved(_ verification: ActionVerification) -> Bool {
+        verification.scrollPositionChanged == true || verification.scrollContentChanged == true
+    }
+}
+
 // MARK: - The outcome envelope
 
 struct ActionOutcome: Sendable {
@@ -161,19 +199,22 @@ struct ActionOutcome: Sendable {
     let summary: String
     let verification: ActionVerification?
     let webAXEchoRisk: Bool
+    let dispatchSucceeded: Bool?
 
     init(
         classification: ActionClassification,
         failureDomain: FailureDomain?,
         summary: String,
         verification: ActionVerification?,
-        webAXEchoRisk: Bool = false
+        webAXEchoRisk: Bool = false,
+        dispatchSucceeded: Bool? = nil
     ) {
         self.classification = classification
         self.failureDomain = failureDomain
         self.summary = summary
         self.verification = verification
         self.webAXEchoRisk = webAXEchoRisk
+        self.dispatchSucceeded = dispatchSucceeded
     }
 
     var isSuccess: Bool { classification == .success }
@@ -199,7 +240,20 @@ struct ActionOutcome: Sendable {
         if webAXEchoRisk {
             fields["web_ax_echo_risk"] = .bool(true)
         }
+        if let dispatchSucceeded {
+            fields["dispatch_succeeded"] = .bool(dispatchSucceeded)
+        }
         return .object(fields)
+    }
+
+    func withDispatchSucceeded(_ succeeded: Bool) -> ActionOutcome {
+        ActionOutcome(
+            classification: classification,
+            failureDomain: failureDomain,
+            summary: summary,
+            verification: verification,
+            webAXEchoRisk: webAXEchoRisk,
+            dispatchSucceeded: succeeded)
     }
 
     static func success(_ summary: String, _ verification: ActionVerification? = nil) -> ActionOutcome {
@@ -245,7 +299,9 @@ enum ActionFamily: Sendable {
 /// What an action is trying to do, carried so the pure reducer can decide
 /// already-satisfied (pre-dispatch) and satisfied (post-reread).
 enum ActionIntent: Sendable, Equatable {
-    /// Generic activation (button press); success is any observed change.
+    /// Generic activation (button press). Without a declared target-specific
+    /// postcondition, observed UI churn is context rather than proof that the
+    /// intended business effect occurred.
     case activate
     /// A click whose intended effect is focus/caret placement.
     case focusTarget
@@ -267,12 +323,11 @@ enum ActionIntent: Sendable, Equatable {
     func alreadySatisfied(by v: ActionVerification) -> Bool {
         switch self {
         case .toggle(let want):
-            return v.beforeSelected == want
+            return ActionPredicates.selection(v.beforeSelected, equals: want)
         case .setText(let want):
-            return v.beforeValuePreview == want
+            return ActionPredicates.value(v.beforeValuePreview, equals: want)
         case .setNumber(let want):
-            guard let text = v.beforeValuePreview, let current = Double(text) else { return false }
-            return abs(current - want) < numberEpsilon
+            return ActionPredicates.number(v.beforeValuePreview, equals: want)
         case .activate, .focusTarget, .insertText, .scrollContent, .openMenu:
             return false
         }
@@ -284,17 +339,14 @@ enum ActionIntent: Sendable, Equatable {
     func satisfiedByAfter(_ v: ActionVerification) -> (satisfied: Bool, semanticsNote: String?) {
         switch self {
         case .toggle(let want):
-            guard let selected = v.afterSelected else { return (false, nil) }
-            return (selected == want, nil)
+            return (ActionPredicates.selection(v.afterSelected, equals: want), nil)
         case .insertText(let text):
-            guard let after = v.afterValuePreview else { return (false, nil) }
-            return (after.contains(text), nil)
+            return (ActionPredicates.value(v.afterValuePreview, contains: text), nil)
         case .setText(let want):
-            guard let after = v.afterValuePreview else { return (false, nil) }
-            return (after == want, nil)
+            return (ActionPredicates.value(v.afterValuePreview, equals: want), nil)
         case .setNumber(let want):
             guard let text = v.afterValuePreview, let current = Double(text) else { return (false, nil) }
-            if abs(current - want) < numberEpsilon { return (true, nil) }
+            if ActionPredicates.number(text, equals: want) { return (true, nil) }
             let step = max(1.0, abs(want) * 0.05)
             if abs(current - want) <= step {
                 return (true, "Snapped to the nearest step: requested \(want), applied \(current).")
@@ -335,14 +387,20 @@ extension ActionVerifier {
 
         switch family {
         case .click, .secondaryAction, .drag:
-            if intent == .focusTarget, v.afterFocused == true, !rereadFailed {
+            if intent == .focusTarget, ActionPredicates.focused(v.afterFocused, rereadFailed: rereadFailed) {
                 return .success("The target is focused after the click.", v)
             }
-            if v.targetStateChanged == true {
+            if intent != .activate, v.targetStateChanged == true {
                 return .success("The target's state changed after the action.", v)
             }
-            if windowChanged {
+            if intent != .activate, windowChanged {
                 return .success("The UI changed after the action.", v)
+            }
+            if intent == .activate, v.targetStateChanged == true || windowChanged {
+                return .effectNotVerified(
+                    .verification,
+                    "The UI changed after activation, but no declared postcondition proves the intended effect.",
+                    v)
             }
             if rereadFailed {
                 return .ambiguous(.targeting, "The target could not be re-read; no confirming change was observed.", v)
@@ -416,7 +474,7 @@ extension ActionVerifier {
                 .verification, "The value did not change to the requested value; the app may have rejected it.", v)
 
         case .scroll:
-            if v.scrollPositionChanged == true || v.scrollContentChanged == true {
+            if ActionPredicates.scrollMoved(v) {
                 return .success("The content scrolled.", v)
             }
             if v.scrollAtExtent == true {
@@ -482,8 +540,8 @@ extension ActionVerifier {
             ? (Double(after.width), Double(after.height))
             : (Double(after.origin.x), Double(after.origin.y))
 
-        v.windowFrameChanged =
-            abs(beforeValue.0 - afterValue.0) > tolerance || abs(beforeValue.1 - afterValue.1) > tolerance
+        v.windowFrameChanged = ActionPredicates.frameChanged(
+            from: beforeValue, to: afterValue, tolerance: tolerance)
         v.beforeValuePreview = frameString(beforeValue)
         v.afterValuePreview = frameString(afterValue)
 
@@ -576,10 +634,28 @@ struct ActionVerifier: Sendable {
     /// anything, so the honest answer is verifier_ambiguous — never a success
     /// manufactured without a reread.
     func skippedStateOutcome() -> ActionOutcome {
-        if let resolved { return resolved }
+        if let resolved { return resolved.withDispatchSucceeded(dispatchSucceeded) }
         var record = before
         record.notes.append("State verification skipped (include_state=false).")
-        return .ambiguous(nil, "State verification was skipped (include_state=false).", record)
+        return ActionOutcome
+            .ambiguous(nil, "State verification was skipped (include_state=false).", record)
+            .withDispatchSucceeded(dispatchSucceeded)
+    }
+
+    /// Honest post-delivery result when the exact acted-on window disappeared
+    /// before recapture. This is observed window-change evidence, but never a
+    /// license to reread a sibling window.
+    func missingWindowOutcome() -> ActionOutcome {
+        var record = before
+        record.windowTitleChanged = beforeWindowTitle != nil
+        if hasTargetElement { record.targetRelocated = true }
+        record.notes.append(
+            "The exact acted-on window disappeared before post-action state could be captured.")
+        return ActionOutcome.ambiguous(
+            .verification,
+            "The action was delivered, but its effect could not be verified because the exact acted-on window disappeared.",
+            record)
+            .withDispatchSucceeded(dispatchSucceeded)
     }
 
     private func independentElementChanged(in diff: TreeDiff?) -> Bool? {
@@ -599,7 +675,7 @@ struct ActionVerifier: Sendable {
     func finalize(
         windowElement: AXUIElement?, treeChanged: Bool, diff: TreeDiff?, afterWindowTitle: String?
     ) async -> ActionOutcome {
-        if let resolved { return resolved }
+        if let resolved { return resolved.withDispatchSucceeded(dispatchSucceeded) }
 
         var v = before
         v.renderedTextChanged = treeChanged
@@ -638,6 +714,7 @@ struct ActionVerifier: Sendable {
             family: family, intent: intent, verification: v,
             rereadFailed: rereadFailed, dispatchSucceeded: dispatchSucceeded,
             deliveryTier: deliveryTier, hasTargetElement: hasTargetElement)
+            .withDispatchSucceeded(dispatchSucceeded)
     }
 }
 

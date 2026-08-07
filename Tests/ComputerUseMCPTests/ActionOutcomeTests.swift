@@ -24,10 +24,10 @@ import Testing
 
     // MARK: click
 
-    @Test func honestButtonWindowChangeIsSuccess() {
+    @Test func genericActivationWindowChangeDoesNotClaimBusinessEffect() {
         var v = ActionVerification()
         v.renderedTextChanged = true
-        #expect(reduceClick(v).classification == .success)
+        #expect(reduceClick(v).classification == .effectNotVerified)
     }
 
     @Test func checkboxAlreadyCheckedIsSuccess() {
@@ -77,11 +77,42 @@ import Testing
         #expect(outcome.classification == .success)
     }
 
-    @Test func rereadFailedWithWindowChangeIsSuccess() {
+    @Test func genericActivationRereadFailureWithWindowChangeIsUnverified() {
         var v = ActionVerification()
         v.renderedTextChanged = true
         let outcome = reduceClick(v, rereadFailed: true)
-        #expect(outcome.classification == .success)
+        #expect(outcome.classification == .effectNotVerified)
+    }
+
+    @Test func closeControlWindowDisappearancePreservesDeliveryEvidenceWithoutFalseSuccess() {
+        let verifier = ActionVerifier(
+            family: .click, intent: .activate, deliveryTier: axTier,
+            dispatchSucceeded: true, hasTargetElement: true,
+            snapshotElement: nil, beforeWindowTitle: "Document")
+
+        let outcome = verifier.missingWindowOutcome()
+
+        #expect(outcome.classification == .verifierAmbiguous)
+        #expect(outcome.dispatchSucceeded == true)
+        #expect(outcome.verification?.windowTitleChanged == true)
+        #expect(outcome.verification?.targetRelocated == true)
+    }
+
+    @Test func typeWindowDisappearanceCannotSynthesizeSuccessFromBeforeFields() {
+        var before = ActionVerification()
+        before.beforeValuePreview = "draft"
+        let verifier = ActionVerifier(
+            family: .type, intent: .insertText("hello"), deliveryTier: attrTier,
+            dispatchSucceeded: true, hasTargetElement: true,
+            snapshotElement: nil, before: before,
+            beforeWindowTitle: "Document")
+
+        let outcome = verifier.missingWindowOutcome()
+
+        #expect(outcome.classification == .verifierAmbiguous)
+        #expect(!outcome.isSuccess)
+        #expect(outcome.dispatchSucceeded == true)
+        #expect(outcome.verification?.targetRelocated == true)
     }
 
     @Test func rereadFailedWithoutWindowChangeIsAmbiguousTargeting() {

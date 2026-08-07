@@ -4,14 +4,15 @@
 // like the overlay helper). It owns accessibility, screen capture, input
 // delivery, and the agent cursor; serve shims connect over a unix socket and
 // forward tool calls. One engine process means sessions cannot collide on
-// shared system services, and per-app leases (AppLeases) keep two sessions
-// from interleaving actions inside the same app.
+// shared system services, and AppMutationCoordinator keeps operations from
+// interleaving inside the same app while allowing different apps to proceed.
 
 import Darwin
 import Foundation
 import MCP
 
 private let daemonConnectionLimiter = DaemonConnectionLimiter(maxConnections: DaemonProtocolLimits.maxConcurrentConnections)
+private let daemonIncarnationID = UUID().uuidString
 
 func runDaemon() async -> Never {
     // Singleton: hold the lock for the daemon's lifetime; the kernel releases
@@ -57,17 +58,24 @@ func runDaemon() async -> Never {
             DaemonState.shared.connectionOpened()
             Thread.detachNewThread {
                 let connectionTasks = DaemonConnectionTasks()
+                let authorization = DaemonConnectionAuthorization()
                 defer {
                     connectionTasks.cancelAll()
                     Task {
-                        await AppLeases.shared.dropLeases(session: connectionFD)
+                        if let sessionID = authorization.sessionID {
+                            if DaemonSessionRegistry.shared.detach(sessionID: sessionID) {
+                                await DaemonOperationRegistry.shared.disconnect(sessionID: sessionID)
+                                DaemonSessionRegistry.shared.finishCleanup(sessionID: sessionID)
+                            }
+                        }
                         await AgentCursor.shared.dropSession(connectionFD)
                     }
                     DaemonState.shared.connectionClosed()
                     daemonConnectionLimiter.close()
                 }
                 serveConnection(
-                    fd: connectionFD, authToken: authToken, connectionTasks: connectionTasks
+                    fd: connectionFD, authToken: authToken, authorization: authorization,
+                    connectionTasks: connectionTasks
                 )
             }
         }
@@ -119,14 +127,16 @@ private func isTrustedPeer(_ fd: Int32) -> Bool {
     return uid == geteuid()
 }
 
-private func serveConnection(fd: Int32, authToken: String, connectionTasks: DaemonConnectionTasks) {
+private func serveConnection(
+    fd: Int32, authToken: String, authorization: DaemonConnectionAuthorization,
+    connectionTasks: DaemonConnectionTasks
+) {
     defer { close(fd) }
     let authenticationDeadline = Date().addingTimeInterval(
         TimeInterval(DaemonProtocolLimits.authenticationTimeoutSeconds)
     )
     // Serializes response writes from concurrently completing tool Tasks.
     let writeLock = NSLock()
-    let authorization = DaemonConnectionAuthorization()
     var frames = DaemonLineBuffer<DaemonRequest>()
     var chunk = [UInt8](repeating: 0, count: DaemonProtocolLimits.readChunkBytes)
 
@@ -188,13 +198,31 @@ final class DaemonConnectionAuthorization: @unchecked Sendable {
     private var authenticated = false
     private var malformedFrames = 0
     private var unauthenticatedFailures = 0
+    private var logicalSession: DaemonLogicalSession?
 
-    func markAuthenticated() {
+    func markAuthenticated(session: DaemonLogicalSession) {
         lock.lock()
         authenticated = true
+        logicalSession = session
         malformedFrames = 0
         unauthenticatedFailures = 0
         lock.unlock()
+    }
+
+    func markAuthenticated() {
+        markAuthenticated(session: DaemonSessionRegistry.shared.establish(resumeToken: nil))
+    }
+
+    var sessionID: UUID? {
+        lock.lock()
+        defer { lock.unlock() }
+        return logicalSession?.id
+    }
+
+    var session: DaemonLogicalSession? {
+        lock.lock()
+        defer { lock.unlock() }
+        return logicalSession
     }
 
     var isAuthenticated: Bool {
@@ -233,6 +261,30 @@ final class DaemonConnectionTasks: @unchecked Sendable {
         lock.unlock()
     }
 
+    func start(
+        id: Int, reservation: DaemonMutationSequencer.Reservation? = nil,
+        sequencer: DaemonMutationSequencer = .shared,
+        operation: @escaping @Sendable () async -> Void
+    ) {
+        lock.lock()
+        let task = Task {
+            defer {
+                if let reservation { sequencer.finish(reservation) }
+            }
+            if let predecessor = reservation?.predecessor { await predecessor.value }
+            let queueLatency = reservation?.predecessor == nil
+                ? 0
+                : durationMilliseconds(reservation!.enqueuedAt.duration(to: .now))
+            if !Task.isCancelled {
+                await DaemonSessionContext.$queueLatencyMilliseconds.withValue(queueLatency) {
+                    await operation()
+                }
+            }
+        }
+        tasks[id] = task
+        lock.unlock()
+    }
+
     func remove(id: Int) {
         lock.lock()
         tasks[id] = nil
@@ -248,6 +300,24 @@ final class DaemonConnectionTasks: @unchecked Sendable {
             task.cancel()
         }
     }
+
+
+    func waitForAll() async {
+        let active = activeTasks()
+        for task in active { await task.value }
+    }
+
+    private func activeTasks() -> [Task<Void, Never>] {
+        lock.lock()
+        defer { lock.unlock() }
+        return Array(tasks.values)
+    }
+}
+
+private func durationMilliseconds(_ duration: Duration) -> Double {
+    let components = duration.components
+    return Double(components.seconds) * 1_000
+        + Double(components.attoseconds) / 1_000_000_000_000_000
 }
 
 private enum DaemonConnectionAction: Equatable {
@@ -263,7 +333,7 @@ private func handle(
     authorization: DaemonConnectionAuthorization,
     connectionTasks: DaemonConnectionTasks
 ) -> DaemonConnectionAction {
-    func respond(_ response: DaemonResponse) {
+    @Sendable func respond(_ response: DaemonResponse) {
         writeLock.lock()
         _ = writeJSONLine(response, to: fd)
         writeLock.unlock()
@@ -287,12 +357,48 @@ private func handle(
         guard let provided = request.authToken, constantTimeEqual(provided, authToken) else {
             return unauthorized()
         }
-        authorization.markAuthenticated()
+        let session: DaemonLogicalSession
+        if let established = authorization.session {
+            session = established
+        } else {
+            session = DaemonSessionRegistry.shared.establish(resumeToken: request.resumeToken)
+            authorization.markAuthenticated(session: session)
+        }
         respond(
             DaemonResponse(
                 id: request.id, version: version, authenticated: true,
-                buildStamp: executableBuildStamp
+                buildStamp: executableBuildStamp, sessionID: session.id.uuidString,
+                resumeToken: session.resumeToken, daemonIncarnationID: daemonIncarnationID,
+                operationDeduplicationSupported: true
             ))
+        return .keepOpen
+    case "cancel":
+        guard authorization.isAuthenticated, let sessionID = authorization.sessionID else {
+            return unauthorized()
+        }
+        guard let rawOperationID = request.cancelOperationID,
+            let operationID = UUID(uuidString: rawOperationID)
+        else {
+            respond(DaemonResponse.from(
+                codedErrorResult("cancel requires a valid operation id.", code: nil),
+                id: request.id))
+            return .keepOpen
+        }
+        connectionTasks.start(id: request.id) {
+            defer { connectionTasks.remove(id: request.id) }
+            let disposition = await DaemonOperationRegistry.shared.cancel(
+                operationID: operationID, sessionID: sessionID)
+            if !Task.isCancelled {
+                var response = disposition == .capacityExceeded
+                    ? DaemonResponse.from(daemonOperationCapacityResult(), id: request.id)
+                    : DaemonResponse(
+                        id: request.id,
+                        content: [DaemonContent(type: "text", text: disposition.rawValue)])
+                response.operationID = operationID.uuidString
+                response.cancellationDisposition = disposition.rawValue
+                respond(response)
+            }
+        }
         return .keepOpen
     case "shutdown":
         guard authorization.isAuthenticated,
@@ -326,27 +432,227 @@ private func handle(
             return unauthorized()
         }
         DaemonState.shared.noteActivity()
-        let session = fd
-        let task = Task {
-            defer { connectionTasks.remove(id: request.id) }
-            await DaemonSessionContext.$sessionID.withValue(session) {
-                if let denial = await AppLeases.shared.check(
-                    tool: request.method, arguments: request.arguments ?? [:], session: session
-                ) {
-                    respond(
-                        DaemonResponse.from(
-                            codedErrorResult(denial, code: .appLeaseHeld), id: request.id
-                        ))
-                    return
-                }
-                let result = await dispatchTool(name: request.method, arguments: request.arguments ?? [:])
-                respond(DaemonResponse.from(result, id: request.id))
-                DaemonState.shared.noteActivity()
+        guard let sessionID = authorization.sessionID else { return unauthorized() }
+        let operationID: UUID
+        if let rawOperationID = request.operationID {
+            guard let parsed = UUID(uuidString: rawOperationID) else {
+                respond(DaemonResponse.from(
+                    codedErrorResult("operationID must be a UUID.", code: nil), id: request.id))
+                return .keepOpen
             }
+            operationID = parsed
+        } else {
+            operationID = UUID()
         }
-        connectionTasks.add(task, id: request.id)
+        let arguments = request.arguments ?? [:]
+        let requestFingerprint = daemonOperationFingerprint(
+            method: request.method, arguments: arguments)
+        let reservation = Config.bool("no_app_lease") == true
+            ? nil
+            : mutationSerializationKey(name: request.method, arguments: arguments)
+                .map {
+                    DaemonMutationSequencer.shared.reserve(
+                        sessionID: sessionID, appKey: $0)
+                }
+        connectionTasks.start(id: request.id, reservation: reservation) {
+            defer { connectionTasks.remove(id: request.id) }
+            let result = await DaemonOperationRegistry.shared.run(
+                operationID: operationID, sessionID: sessionID,
+                requestFingerprint: requestFingerprint,
+                retainCompleted: isMutatingTool(request.method)
+            ) {
+                await DaemonSessionContext.$sessionID.withValue(fd) {
+                    await DaemonSessionContext.$logicalSessionID.withValue(sessionID) {
+                        await DaemonSessionContext.$operationID.withValue(operationID) {
+                            await ActionTransactionContext.$currentOperationID.withValue(operationID) {
+                                await dispatchCoordinatedTool(
+                                    name: request.method, arguments: arguments,
+                                    sessionID: sessionID, operationID: operationID)
+                            }
+                        }
+                    }
+                }
+            }
+            var response = DaemonResponse.from(result, id: request.id)
+            response.operationID = operationID.uuidString
+            if !Task.isCancelled { respond(response) }
+            DaemonState.shared.noteActivity()
+        }
         return .keepOpen
     }
+}
+
+private func dispatchCoordinatedTool(
+    name: String, arguments: [String: Value], sessionID: UUID, operationID: UUID
+) async -> CallTool.Result {
+    guard Config.bool("no_app_lease") != true,
+        daemonCoordinatedToolNames.contains(name),
+        let coordinationKey = coordinatedAppKey(name: name, arguments: arguments)
+    else {
+        return await dispatchTool(name: name, arguments: arguments)
+    }
+
+    let coordinatorQueuedAt = ContinuousClock.now
+    let admission = await withTaskCancellationHandler {
+        await AppMutationCoordinator.shared.acquire(
+            key: coordinationKey, sessionID: sessionID, operationID: operationID)
+    } onCancel: {
+        Task {
+            await AppMutationCoordinator.shared.cancelQueued(
+                operationID: operationID, sessionID: sessionID)
+        }
+    }
+    let accumulatedQueueLatency = daemonAccumulatedQueueLatency(
+        coordinatorWaitMilliseconds: durationMilliseconds(
+            coordinatorQueuedAt.duration(to: .now)))
+    switch admission {
+    case .busy(let ownerSessionID):
+        return appBusyResult(ownerSessionID: ownerSessionID)
+    case .cancelled:
+        return codedErrorResult("Operation cancelled before execution.", code: nil)
+    case .acquired:
+        return await DaemonSessionContext.$queueLatencyMilliseconds.withValue(
+            accumulatedQueueLatency
+        ) {
+            if Task.isCancelled {
+                await AppMutationCoordinator.shared.release(
+                    key: coordinationKey, sessionID: sessionID, operationID: operationID)
+                return codedErrorResult("Operation cancelled before execution.", code: nil)
+            }
+            var priorCompositeCommit = false
+            if name == "run_skill" {
+                switch await prepareRunSkillTarget(arguments: arguments) {
+                case .ready(_, let priorCommit):
+                    priorCompositeCommit = priorCommit
+                case .result(let result):
+                    await AppMutationCoordinator.shared.release(
+                        key: coordinationKey, sessionID: sessionID,
+                        operationID: operationID)
+                    return result
+                }
+            }
+            if Task.isCancelled {
+                await AppMutationCoordinator.shared.release(
+                    key: coordinationKey, sessionID: sessionID, operationID: operationID)
+                let cancelled = operationCancelledResult()
+                return priorCompositeCommit
+                    ? cancelled.withPartialCommitEvidence()
+                    : cancelled
+            }
+            let result = await CompositeCommitContext.$priorMutationCommitted.withValue(
+                priorCompositeCommit
+            ) {
+                await dispatchTool(name: name, arguments: arguments)
+            }
+            await AppMutationCoordinator.shared.release(
+                key: coordinationKey, sessionID: sessionID, operationID: operationID)
+            return result
+        }
+    }
+}
+
+func daemonAccumulatedQueueLatency(coordinatorWaitMilliseconds: Double) -> Double {
+    (DaemonSessionContext.queueLatencyMilliseconds ?? 0)
+        + max(0, coordinatorWaitMilliseconds)
+}
+
+private enum RunSkillPreparation {
+    case ready(pid_t, priorCommit: Bool)
+    case result(CallTool.Result)
+}
+
+private func prepareRunSkillTarget(arguments: [String: Value]) async -> RunSkillPreparation {
+    guard case .string(let skillName)? = arguments["name"],
+        let skill = try? SkillStore.load(skillName)
+    else {
+        return .result(await dispatchTool(name: "run_skill", arguments: arguments))
+    }
+    if let app = try? resolveApp(skill.app) { return .ready(app.pid, priorCommit: false) }
+    // Preserve run_skill's confirmation behavior. An unconfirmed request is
+    // dispatched normally and fails before mutation; confirmed/disabled-safety
+    // requests launch first, then acquire the real PID before replaying steps.
+    guard SafetyPolicy.confirmed(arguments) || !SafetyPolicy.isEnabled else {
+        return .result(await dispatchTool(name: "run_skill", arguments: arguments))
+    }
+    let launch = await dispatchTool(
+        name: "open_app", arguments: ["app": .string(skill.app), "confirm": .bool(true)])
+    if launch.isError == true { return .result(launch) }
+    if Task.isCancelled {
+        return .result(operationCancelledResult().withPartialCommitEvidence())
+    }
+    let deadline = Date().addingTimeInterval(5)
+    while Date() < deadline {
+        if let app = try? resolveApp(skill.app) {
+            return .ready(app.pid, priorCommit: true)
+        }
+        do {
+            try await Task.sleep(for: .milliseconds(100))
+        } catch {
+            return .result(operationCancelledResult().withPartialCommitEvidence())
+        }
+    }
+    return .result(codedErrorResult(
+        "Skill target app did not become controllable in time.", code: .appNotFound)
+        .withPartialCommitEvidence())
+}
+
+private func coordinatedAppPID(name: String, arguments: [String: Value]) -> pid_t? {
+    if case .string(let appName)? = arguments["app"] {
+        return try? resolveApp(appName).pid
+    }
+    if name == "run_skill", case .string(let skillName)? = arguments["name"],
+        let skill = try? SkillStore.load(skillName)
+    {
+        return try? resolveApp(skill.app).pid
+    }
+    return nil
+}
+
+private let daemonCoordinatedToolNames = appScopedToolNames.union(["open_app"])
+
+func canonicalAppCoordinationKey(
+    identifier: String, resolvedPID: pid_t?, resolvedBundleIdentifier: String?,
+    applicationURLResolver: (String) -> URL? = applicationURL
+) -> AppCoordinationKey {
+    if let bundleIdentifier = resolvedBundleIdentifier,
+        !bundleIdentifier.isEmpty, bundleIdentifier != "unknown"
+    {
+        return .bundleIdentifier(bundleIdentifier.lowercased())
+    }
+    if let installed = applicationURLResolver(identifier)
+        .flatMap(Bundle.init(url:))?.bundleIdentifier, !installed.isEmpty
+    {
+        return .bundleIdentifier(installed.lowercased())
+    }
+    if let resolvedPID { return .pid(resolvedPID) }
+    return .unresolvedIdentity(identifier.lowercased())
+}
+
+private func coordinatedAppKey(
+    name: String, arguments: [String: Value]
+) -> AppCoordinationKey? {
+    let identifier: String
+    if case .string(let appName)? = arguments["app"] {
+        identifier = appName
+    } else if name == "run_skill", case .string(let skillName)? = arguments["name"],
+        let skill = try? SkillStore.load(skillName)
+    {
+        identifier = skill.app
+    } else {
+        return nil
+    }
+    let resolved = try? resolveApp(identifier)
+    return canonicalAppCoordinationKey(
+        identifier: identifier, resolvedPID: resolved?.pid,
+        resolvedBundleIdentifier: resolved?.bundleIdentifier)
+}
+
+func mutationSerializationKey(
+    name: String, arguments: [String: Value],
+    resolveKey: (String, [String: Value]) -> AppCoordinationKey? = coordinatedAppKey
+) -> String? {
+    guard daemonCoordinatedToolNames.contains(name) else { return nil }
+    return resolveKey(name, arguments)?.serializationKey
 }
 
 /// Stop accepting new clients and exit shortly so in-flight replies can flush.

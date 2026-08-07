@@ -37,7 +37,10 @@ enum ScreenshotDetail: Sendable {
     }
 }
 
-func captureWindow(pid: pid_t, title: String?, frame: CGRect, detail: ScreenshotDetail) async throws -> WindowCapture {
+func captureWindow(
+    pid: pid_t, windowID: CGWindowID?, title: String?, frame: CGRect,
+    detail: ScreenshotDetail
+) async throws -> WindowCapture {
     guard CGPreflightScreenCaptureAccess() else {
         throw ToolError.failed(
             """
@@ -55,7 +58,8 @@ func captureWindow(pid: pid_t, title: String?, frame: CGRect, detail: Screenshot
     // wedged daemon degrades to a no-screenshot result, not a hung server.
     return try await withCrossProcessLock(named: "screencapture") {
         try await withTimeout(seconds: 8, label: "Window screenshot") {
-            try await captureWindowUnbounded(pid: pid, title: title, frame: frame, detail: detail)
+            try await captureWindowUnbounded(
+                pid: pid, windowID: windowID, title: title, frame: frame, detail: detail)
         }
     }
 }
@@ -103,11 +107,19 @@ private actor ShareableContentCache {
 }
 
 private func captureWindowUnbounded(
-    pid: pid_t, title: String?, frame: CGRect, detail: ScreenshotDetail
+    pid: pid_t, windowID: CGWindowID?, title: String?, frame: CGRect,
+    detail: ScreenshotDetail
 ) async throws -> WindowCapture {
     let appWindows = try await ShareableContentCache.shared.appWindows(pid: pid, title: title).windows
     guard !appWindows.isEmpty else {
         throw ToolError.failed("No capturable window found for pid \(pid).")
+    }
+
+    if let windowID {
+        guard let window = appWindows.first(where: { $0.windowID == windowID }) else {
+            throw ToolError.failed("The captured window (id \(windowID)) is not available for a screenshot.")
+        }
+        return try await captureShareableWindow(window, detail: detail)
     }
 
     // Prefer title matches; off-screen enumeration can list several same-pid
@@ -120,6 +132,12 @@ private func captureWindowUnbounded(
         distance(lhs.frame, frame) < distance(rhs.frame, frame)
     }!
 
+    return try await captureShareableWindow(window, detail: detail)
+}
+
+private func captureShareableWindow(
+    _ window: SCWindow, detail: ScreenshotDetail
+) async throws -> WindowCapture {
     let filter = SCContentFilter(desktopIndependentWindow: window)
 
     // Full detail captures at display scale; reduced detail captures at 1x.

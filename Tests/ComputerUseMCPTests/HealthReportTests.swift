@@ -1,4 +1,5 @@
 import MCP
+import Foundation
 import Testing
 
 @testable import computer_use_mcp
@@ -116,6 +117,81 @@ private func outcomeFields(in result: CallTool.Result) throws -> [String: Value]
         #expect(outcome["failure_domain"] == nil)
     }
 
+    @Test func healthReportStructuredContentIncludesOperationMetrics() async throws {
+        var metrics = MetricsAggregateSnapshot(updatedAt: Date(timeIntervalSince1970: 1))
+        metrics.record(
+            MetricsEvent(
+                timestamp: Date(timeIntervalSince1970: 2),
+                payload: .perception(
+                    PerceptionMetric(
+                        operation: "snapshot",
+                        tool: "get_app_state",
+                        appBundleIdentifier: "com.example.fixture",
+                        elapsedMs: 12,
+                        elementsVisited: 40,
+                        elementsReturned: 20,
+                        partial: false,
+                        diff: true,
+                        contextBytes: 1024
+                    ))))
+        let recordedMetrics = metrics
+        let result = try await healthReportImpl([:]) { _ in
+            Self.mockReport(
+                accessibility: true,
+                screenRecording: true,
+                captureServiceStatus: .responsive,
+                operationMetrics: recordedMetrics
+            )
+        }
+
+        let report = try structuredReport(in: result)
+        guard case let .object(operationMetrics)? = report["operationMetrics"] else {
+            Issue.record("expected operationMetrics object")
+            return
+        }
+        #expect(operationMetrics["events"]?.intValue == 1)
+        #expect(operationMetrics["perceptions"]?.intValue == 1)
+    }
+
+    @Test func testHostedHealthDiagnosticsDoNotReadOrTouchProductionSummary() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("health-metrics-sentinel-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("metrics-summary.json")
+        var sentinel = MetricsAggregateSnapshot(updatedAt: Date(timeIntervalSince1970: 1))
+        sentinel.record(
+            MetricsEvent(
+                timestamp: Date(timeIntervalSince1970: 2),
+                payload: .operation(
+                    OperationMetric(
+                        operation: "sentinel",
+                        tool: "click",
+                        appBundleIdentifier: nil,
+                        axRole: nil,
+                        attemptedDeliveryStrategies: [],
+                        finalDeliveryStrategy: nil,
+                        effectOutcome: "success",
+                        queueLatencyMs: 1,
+                        executionLatencyMs: 2
+                    ))))
+        try sentinel.write(toPath: path.path)
+        let beforeData = try Data(contentsOf: path)
+        let before = try FileManager.default.attributesOfItem(atPath: path.path)
+
+        let report = operationMetricsDiagnostics(
+            environment: ["SWIFT_TESTING_ENABLED": "1"],
+            arguments: ["/tmp/computer-use-mcpPackageTests.xctest"],
+            summaryPath: path.path
+        )
+
+        #expect(report == nil)
+        #expect(try Data(contentsOf: path) == beforeData)
+        let after = try FileManager.default.attributesOfItem(atPath: path.path)
+        #expect(before[.size] as? NSNumber == after[.size] as? NSNumber)
+        #expect(before[.modificationDate] as? Date == after[.modificationDate] as? Date)
+    }
+
     @Test func recommendationStartsWithAccessibility() {
         let action = recommendedNextAction(
             accessibility: false,
@@ -169,7 +245,8 @@ private func outcomeFields(in result: CallTool.Result) throws -> [String: Value]
     private static func mockReport(
         accessibility: Bool,
         screenRecording: Bool,
-        captureServiceStatus: CaptureServiceStatus
+        captureServiceStatus: CaptureServiceStatus,
+        operationMetrics: MetricsAggregateSnapshot? = nil
     ) -> HealthReport {
         let captureService = CaptureServiceDiagnostic(status: captureServiceStatus, detail: "mock")
         return HealthReport(
@@ -214,6 +291,7 @@ private func outcomeFields(in result: CallTool.Result) throws -> [String: Value]
                 secretContentsReported: false
             ),
             telemetry: nil,
+            operationMetrics: operationMetrics,
             tccAttribution: "mock attribution",
             recommendedNextAction: recommendedNextAction(
                 accessibility: accessibility,

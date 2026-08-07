@@ -56,6 +56,7 @@ func makeHealthReport(prompt: Bool, probeCaptureService: Bool) async -> HealthRe
         captureService: captureService,
         daemon: daemon,
         telemetry: telemetryDiagnostics(),
+        operationMetrics: operationMetricsDiagnostics(),
         tccAttribution: tccAttributionNote(parent: process.parent),
         recommendedNextAction: action
     )
@@ -153,6 +154,8 @@ struct HealthReport: Codable, Sendable {
     /// Absent when no daemon has persisted a telemetry snapshot yet (or
     /// telemetry is disabled with "no_telemetry").
     let telemetry: TelemetryReport?
+    /// Privacy-safe daemon-wide operational and perception aggregates.
+    let operationMetrics: MetricsAggregateSnapshot?
     let tccAttribution: String
     let recommendedNextAction: String
 
@@ -167,6 +170,17 @@ struct HealthReport: Codable, Sendable {
             && permissions.screenRecording.granted
             && captureService.status == .responsive
     }
+}
+
+func operationMetricsDiagnostics(
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    arguments: [String] = CommandLine.arguments,
+    summaryPath: @autoclosure () -> String = operationMetricsSummaryPath()
+) -> MetricsAggregateSnapshot? {
+    guard !isMetricsTestProcess(environment: environment, arguments: arguments) else {
+        return nil
+    }
+    return MetricsAggregateSnapshot.read(atPath: summaryPath())
 }
 
 struct ProcessDiagnostics: Codable, Sendable {

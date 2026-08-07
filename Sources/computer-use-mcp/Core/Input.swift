@@ -180,6 +180,7 @@ enum MouseButtonKind {
 func deliverClick(
     at point: CGPoint, button: MouseButtonKind, clickCount: Int, context: DeliveryContext
 ) throws -> DeliveryOutcome {
+    try checkCancellationBeforeDelivery()
     if context.allowGlobalCursor {
         let tier = deliverClickGlobal(at: point, button: button, clickCount: clickCount, context: context)
         return DeliveryOutcome(tier: tier, fallbackReasons: [.globalCursorRequested])
@@ -322,7 +323,8 @@ private func deliverClickGlobal(
 /// Deliver scroll wheel events at a global point. Distributes the delta across
 /// steps with error diffusion so the posted amounts sum exactly to the request
 /// and a small axis is never truncated to zero.
-func deliverScroll(at point: CGPoint, deltaX: Int, deltaY: Int, context: DeliveryContext) -> InputTier {
+func deliverScroll(at point: CGPoint, deltaX: Int, deltaY: Int, context: DeliveryContext) throws -> InputTier {
+    try checkCancellationBeforeDelivery()
     let source = CGEventSource(stateID: .privateState)
     let stepCount = max(1, max(abs(deltaX), abs(deltaY)) / 40)
     var emittedX = 0
@@ -365,7 +367,8 @@ func deliverScroll(at point: CGPoint, deltaX: Int, deltaY: Int, context: Deliver
 }
 
 /// Deliver a drag gesture from one global point to another.
-func deliverDrag(from: CGPoint, to: CGPoint, context: DeliveryContext) async -> InputTier {
+func deliverDrag(from: CGPoint, to: CGPoint, context: DeliveryContext) async throws -> InputTier {
+    try checkCancellationBeforeDelivery()
     let source = CGEventSource(stateID: .privateState)
     var tier: InputTier = context.windowNumber != nil ? .perWindow : .perPid
     func post(_ type: CGEventType, _ p: CGPoint) {
@@ -435,6 +438,7 @@ func unicodeTypingChunks(_ text: String) -> [[UniChar]] {
 /// target first. Returns the delivery tier used.
 @discardableResult
 func typeUnicodeText(_ text: String, context: DeliveryContext) throws -> InputTier {
+    try checkCancellationBeforeDelivery()
     let source = CGEventSource(stateID: .privateState)
     var usedSkyLight = !text.isEmpty
     for chunk in unicodeTypingChunks(text) {
@@ -475,6 +479,7 @@ func keyDeliveryMode(context: DeliveryContext, targetAppIsActive: Bool) throws -
 /// Deliver a key chord to the target process.
 @discardableResult
 func deliverKey(_ chord: KeyChord, context: DeliveryContext, targetAppIsActive: Bool) throws -> KeyDeliveryMode {
+    try checkCancellationBeforeDelivery()
     let mode = try keyDeliveryMode(context: context, targetAppIsActive: targetAppIsActive)
     let source = CGEventSource(stateID: .privateState)
     guard let down = CGEvent(keyboardEventSource: source, virtualKey: chord.keyCode, keyDown: true),

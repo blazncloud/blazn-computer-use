@@ -38,9 +38,10 @@ struct PointTarget {
 
 func resolvePointTarget(_ args: [String: Value], app: ResolvedApp, allowGlobalCursor: Bool = false) async throws -> PointTarget {
     if let elementID = args.string("element_id") {
-        let target = try await resolveTarget(app: app, elementID: elementID)
-        let window = try? targetWindow(for: app, title: target.snapshot.windowTitle)
-        let context = pointDeliveryContext(app: app, window: window, allowGlobalCursor: allowGlobalCursor)
+        let target = try await resolveMutationTarget(app: app, elementID: elementID)
+        let context = pointDeliveryContext(
+            pid: app.pid, windowNumber: target.snapshot.lineage?.windowID,
+            windowFrame: target.window.frame, allowGlobalCursor: allowGlobalCursor)
         let point = axFrame(target.element).map { CGPoint(x: $0.midX, y: $0.midY) }
         return PointTarget(
             element: target.element, snapshotElement: target.snapshotElement, point: point,
@@ -49,12 +50,13 @@ func resolvePointTarget(_ args: [String: Value], app: ResolvedApp, allowGlobalCu
     }
 
     if let x = args.number("x"), let y = args.number("y") {
-        let snapshot = await SnapshotStore.shared.load(forPid: app.pid)
-        let window = try? targetWindow(for: app, title: snapshot?.windowTitle)
-        let context = pointDeliveryContext(app: app, window: window, allowGlobalCursor: allowGlobalCursor)
-        guard let snapshot else {
+        guard let snapshot = await SnapshotStore.shared.load(forPid: app.pid) else {
             throw ToolError.failed("Call get_app_state for \(app.name) before using coordinates.")
         }
+        let window = try resolveMutationWindow(snapshot: snapshot, app: app)
+        let context = pointDeliveryContext(
+            pid: app.pid, windowNumber: snapshot.lineage?.windowID,
+            windowFrame: window.frame, allowGlobalCursor: allowGlobalCursor)
         let point = try screenPoint(x: x, y: y, snapshot: snapshot)
         let element = accessibilityElement(at: point, pid: app.pid)
         return PointTarget(
@@ -66,11 +68,13 @@ func resolvePointTarget(_ args: [String: Value], app: ResolvedApp, allowGlobalCu
     throw ToolError.invalidArguments("Provide element_id, or x and y screenshot coordinates.")
 }
 
-private func pointDeliveryContext(
-    app: ResolvedApp, window: TargetWindow?, allowGlobalCursor: Bool
+/// Pure delivery-context constructor used to prove exact window affinity
+/// independently of live AX resolution.
+func pointDeliveryContext(
+    pid: pid_t, windowNumber: CGWindowID?, windowFrame: CGRect?,
+    allowGlobalCursor: Bool
 ) -> DeliveryContext {
     DeliveryContext(
-        pid: app.pid, windowNumber: window.flatMap { windowID(for: $0.element) },
-        windowFrame: window?.frame, allowGlobalCursor: allowGlobalCursor
-    )
+        pid: pid, windowNumber: windowNumber,
+        windowFrame: windowFrame, allowGlobalCursor: allowGlobalCursor)
 }

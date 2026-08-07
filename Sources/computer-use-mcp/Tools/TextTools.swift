@@ -20,13 +20,20 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let described: String
     let snapshotElement: SnapshotElement?
     let windowTitle: String?
+    let actedWindowID: CGWindowID?
     if let elementID = args.string("element_id") {
-        let target = try await resolveTarget(app: app, elementID: elementID)
+        let target = try await resolveMutationTarget(app: app, elementID: elementID)
         element = target.element
         described = describeTarget(target)
         snapshotElement = target.snapshotElement
         windowTitle = target.snapshot.windowTitle
+        actedWindowID = target.window.lineageWindowID
     } else {
+        let window = try targetWindow(for: app, title: nil)
+        guard let windowID = window.lineageWindowID else {
+            throw ToolError.failed(
+                "Could not establish the target window identity for \(app.name). Call get_app_state and retry.")
+        }
         guard let focused = axElement(app.axApplication, kAXFocusedUIElementAttribute) else {
             throw ToolError.failed(
                 "\(app.name) has no focused element. Pass element_id for the field to type into."
@@ -35,7 +42,8 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         element = focused
         described = "the focused element (\(axRole(focused)))"
         snapshotElement = nil
-        windowTitle = await SnapshotStore.shared.load(forPid: app.pid)?.windowTitle
+        windowTitle = window.title
+        actedWindowID = windowID
     }
 
     try SafetyPolicy.checkTyping(into: element, app: app, confirmed: confirmed)
@@ -48,7 +56,7 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         dispatchSucceeded: true, hasTargetElement: snapshotElement != nil,
         snapshotElement: snapshotElement, before: before, beforeWindowTitle: windowTitle)
     return try await stateResult(
-        app: app, windowTitle: windowTitle,
+        app: app, windowTitle: windowTitle, windowID: actedWindowID,
         note: "Typed \(text.count) characters into \(described). "
             + (warning ?? "Verify the new value below."),
         screenshot: screenshotDetail(args),
@@ -90,6 +98,7 @@ private func insertText(_ text: String, into element: AXUIElement, app: Resolved
     var settable = DarwinBoolean(false)
 
     // Preferred: replace the current selection.
+    try checkCancellationBeforeDelivery()
     if AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable) == .success,
         settable.boolValue,
         AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) == .success
@@ -107,6 +116,7 @@ private func insertText(_ text: String, into element: AXUIElement, app: Resolved
         // to the pid — same background-safe, pid-targeted discipline as the
         // click ladder, never a global post. The secure-field gate already ran
         // in typeTextImpl, so this path stays behind that confirmation.
+        try checkCancellationBeforeDelivery()
         AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
         let context = DeliveryContext(pid: app.pid, windowNumber: nil, windowFrame: nil, allowGlobalCursor: false)
         return try typeUnicodeText(text, context: context)
@@ -124,6 +134,7 @@ private func insertText(_ text: String, into element: AXUIElement, app: Resolved
     let length = max(0, min(range.length, nsCurrent.length - start))
     let updated = nsCurrent.replacingCharacters(in: NSRange(location: start, length: length), with: text)
 
+    try checkCancellationBeforeDelivery()
     guard AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, updated as CFString) == .success
     else {
         throw ToolError.failed("Could not set the value of \(described).")
@@ -145,7 +156,7 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let confirmed = SafetyPolicy.confirmed(args)
     try SafetyPolicy.check(app: app, confirmed: confirmed)
     let focus = FocusChangeTracker.start()
-    let target = try await resolveTarget(app: app, elementID: args.requireString("element_id"))
+    let target = try await resolveMutationTarget(app: app, elementID: args.requireString("element_id"))
     try SafetyPolicy.checkTyping(into: target.element, app: app, confirmed: confirmed)
     // An empty value is valid (clearing a field), so accept "" rather than
     // treating it as a missing argument.
@@ -184,7 +195,7 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
             try performAXAction(kAXPressAction as String, on: target)
         }
         return try await stateResult(
-            app: app, windowTitle: windowTitle,
+            app: app, windowTitle: windowTitle, windowID: target.window.lineageWindowID,
             note: "Set \(describeTarget(target)) to \(desired).",
             screenshot: screenshotDetail(args),
             focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAction.rawValue),
@@ -200,7 +211,7 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         // No settable value: retrying won't help — classify unsupported rather
         // than throw (isError stays false, the agent learns to switch tools).
         return try await stateResult(
-            app: app, windowTitle: windowTitle,
+            app: app, windowTitle: windowTitle, windowID: target.window.lineageWindowID,
             note: "\(describeTarget(target)) does not accept a direct value; nothing was set.",
             screenshot: screenshotDetail(args),
             focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAttribute.rawValue),
@@ -223,7 +234,7 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     if isNumeric {
         guard let number = Double(value) else {
             return try await stateResult(
-                app: app, windowTitle: windowTitle,
+                app: app, windowTitle: windowTitle, windowID: target.window.lineageWindowID,
                 note: "\(describeTarget(target)) takes a number; \"\(value)\" is not numeric and was not applied.",
                 screenshot: screenshotDetail(args),
                 focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAttribute.rawValue),
@@ -241,12 +252,13 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         intent = .setText(value)
     }
 
+    try checkCancellationBeforeDelivery()
     guard AXUIElementSetAttributeValue(target.element, kAXValueAttribute as CFString, newValue) == .success
     else {
         throw ToolError.failed("Setting the value of \(describeTarget(target)) failed.")
     }
     return try await stateResult(
-        app: app, windowTitle: windowTitle,
+        app: app, windowTitle: windowTitle, windowID: target.window.lineageWindowID,
         note: "Set the value of \(describeTarget(target)). Verify it below.",
         screenshot: screenshotDetail(args),
         focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAttribute.rawValue),
@@ -260,7 +272,7 @@ func selectTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
     try requireAccessibilityTrusted()
     let focus = FocusChangeTracker.start()
-    let target = try await resolveTarget(app: app, elementID: args.requireString("element_id"))
+    let target = try await resolveMutationTarget(app: app, elementID: args.requireString("element_id"))
     let text = try args.requireString("text")
     let occurrence = max(1, args.integer("occurrence") ?? 1)
 
@@ -303,6 +315,7 @@ func selectTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     default:
         throw ToolError.invalidArguments("position must be select, before, or after.")
     }
+    try checkCancellationBeforeDelivery()
     guard let rangeValue = AXValueCreate(.cfRange, &range),
         AXUIElementSetAttributeValue(target.element, kAXSelectedTextRangeAttribute as CFString, rangeValue)
             == .success
@@ -311,6 +324,7 @@ func selectTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     }
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle,
+        windowID: target.window.lineageWindowID,
         note: note,
         screenshot: screenshotDetail(args),
         focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAttribute.rawValue)
@@ -381,7 +395,7 @@ func performSecondaryActionImpl(_ args: [String: Value]) async throws -> CallToo
     let confirmed = SafetyPolicy.confirmed(args)
     try SafetyPolicy.check(app: app, confirmed: confirmed)
     let focus = FocusChangeTracker.start()
-    let target = try await resolveTarget(app: app, elementID: args.requireString("element_id"))
+    let target = try await resolveMutationTarget(app: app, elementID: args.requireString("element_id"))
     let action = args.string("action") ?? "AXShowMenu"
 
     let available = axActionNames(target.element)
@@ -409,6 +423,7 @@ func performSecondaryActionImpl(_ args: [String: Value]) async throws -> CallToo
         beforeWindowTitle: target.snapshot.windowTitle)
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle,
+        windowID: target.window.lineageWindowID,
         note: "Performed \(action) on \(describeTarget(target)).",
         screenshot: screenshotDetail(args),
         focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAction.rawValue),

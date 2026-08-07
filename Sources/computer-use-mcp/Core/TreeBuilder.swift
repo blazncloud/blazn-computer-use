@@ -13,11 +13,18 @@ struct BuiltTree {
     let text: String
     let elements: [SnapshotElement]
     let isPartial: Bool
+    /// Nodes whose full facts were read during traversal, including structural
+    /// wrappers that were inspected but omitted from the returned outline.
+    let elementsVisited: Int
 
-    init(text: String, elements: [SnapshotElement], isPartial: Bool = false) {
+    init(
+        text: String, elements: [SnapshotElement], isPartial: Bool = false,
+        elementsVisited: Int? = nil
+    ) {
         self.text = text
         self.elements = elements
         self.isPartial = isPartial
+        self.elementsVisited = max(0, elementsVisited ?? elements.count)
     }
 }
 
@@ -232,6 +239,7 @@ func buildTreeCore<Node>(
     var depthTruncated = false
     var budgetTruncated = false
     var coveragePartial = false
+    var elementsVisited = 0
 
     func visit(_ element: Node, depth: Int, rawDepth: Int, path: [LocatorStep]) {
         guard elements.count < maxNodes else {
@@ -244,6 +252,7 @@ func buildTreeCore<Node>(
         }
 
         let facts = accessors.facts(element)
+        elementsVisited += 1
         let role = facts.role
 
         // Wrappers (never the tree root) pass their outline slot straight to
@@ -342,7 +351,10 @@ func buildTreeCore<Node>(
                 + "scope_element_id set to the deepest visible container to expand further."
         )
     }
-    return BuiltTree(text: lines.joined(separator: "\n"), elements: elements, isPartial: coveragePartial || depthTruncated)
+    return BuiltTree(
+        text: lines.joined(separator: "\n"), elements: elements,
+        isPartial: coveragePartial || depthTruncated,
+        elementsVisited: elementsVisited)
 }
 
 // MARK: - Live accessibility-backed accessors

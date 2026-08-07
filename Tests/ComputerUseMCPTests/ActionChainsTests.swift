@@ -14,7 +14,7 @@ import Testing
     ]
 
     private func run(_ outcomes: [String: RungAttempt]) async -> ChainResult {
-        await runActionChain(rungs) { rung in outcomes[rung.id] ?? .skipped }
+        try! await runActionChain(rungs) { rung in outcomes[rung.id] ?? .skipped }
     }
 
     @Test func firstRungLandsWins() async {
