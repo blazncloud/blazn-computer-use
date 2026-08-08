@@ -94,6 +94,7 @@ actor DaemonClient {
         var didSpawn = false
         let deadline = Date().addingTimeInterval(5)
         while true {
+            try Task.checkCancellation()
             if let connected = Self.connect() {
                 adopt(fd: connected)
                 do {
@@ -113,7 +114,7 @@ actor DaemonClient {
                 didSpawn = true
                 spawnDaemon()
             }
-            try? await Task.sleep(for: .milliseconds(50))
+            try await Task.sleep(for: .milliseconds(50))
         }
     }
 
