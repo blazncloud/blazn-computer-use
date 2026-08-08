@@ -26,6 +26,8 @@ enum ToolErrorCode: String, Sendable, CaseIterable {
     case appLeaseHeld = "APP_LEASE_HELD"
     case daemonUnauthorized = "DAEMON_UNAUTHORIZED"
     case daemonUnavailable = "DAEMON_UNAVAILABLE"
+    case daemonVersionMismatch = "DAEMON_VERSION_MISMATCH"
+    case daemonResultUnknown = "DAEMON_RESULT_UNKNOWN"
 
     /// One-line, agent-directed next step for this failure class.
     var recovery: String {
@@ -56,6 +58,10 @@ enum ToolErrorCode: String, Sendable, CaseIterable {
             return "Reconnect with a current CLI that can authenticate to the local engine daemon."
         case .daemonUnavailable:
             return "Retry after the local engine daemon is available."
+        case .daemonVersionMismatch:
+            return "Use matching computer-use-mcp client and daemon versions, then retry."
+        case .daemonResultUnknown:
+            return "Inspect fresh app state and reconcile the prior mutation before deciding whether to retry."
         }
     }
 }
@@ -87,6 +93,9 @@ private let errorCodeRules: [(fragment: String, code: ToolErrorCode)] = [
     ("another agent session is mid-task", .appLeaseHeld),
     ("unauthorized daemon request", .daemonUnauthorized),
     ("shutdown refused: requester build", .daemonUnauthorized),
+    ("engine daemon is newer", .daemonVersionMismatch),
+    ("daemon handshake did not return a version", .daemonVersionMismatch),
+    ("daemon restarted after an ambiguous mutation result", .daemonResultUnknown),
 ]
 
 /// Classify an error message into a code, or nil when nothing matches (the

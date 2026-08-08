@@ -264,12 +264,14 @@ final class DaemonConnectionTasks: @unchecked Sendable {
     func start(
         id: Int, reservation: DaemonMutationSequencer.Reservation? = nil,
         sequencer: DaemonMutationSequencer = .shared,
+        onFinish: @escaping @Sendable () -> Void = {},
         operation: @escaping @Sendable () async -> Void
     ) {
         lock.lock()
         let task = Task {
             defer {
                 if let reservation { sequencer.finish(reservation) }
+                onFinish()
             }
             if let predecessor = reservation?.predecessor { await predecessor.value }
             let queueLatency = reservation?.predecessor == nil
@@ -433,9 +435,18 @@ private func handle(
         }
         DaemonState.shared.noteActivity()
         guard let sessionID = authorization.sessionID else { return unauthorized() }
+        guard DaemonState.shared.requestStarted() else {
+            respond(DaemonResponse.from(
+                codedErrorResult(
+                    "Engine daemon is shutting down; tool \"\(request.method)\" was not run.",
+                    code: .daemonUnavailable),
+                id: request.id))
+            return .keepOpen
+        }
         let operationID: UUID
         if let rawOperationID = request.operationID {
             guard let parsed = UUID(uuidString: rawOperationID) else {
+                DaemonState.shared.requestFinished()
                 respond(DaemonResponse.from(
                     codedErrorResult("operationID must be a UUID.", code: nil), id: request.id))
                 return .keepOpen
@@ -454,7 +465,10 @@ private func handle(
                     DaemonMutationSequencer.shared.reserve(
                         sessionID: sessionID, appKey: $0)
                 }
-        connectionTasks.start(id: request.id, reservation: reservation) {
+        connectionTasks.start(
+            id: request.id, reservation: reservation,
+            onFinish: { DaemonState.shared.requestFinished() }
+        ) {
             defer { connectionTasks.remove(id: request.id) }
             let result = await DaemonOperationRegistry.shared.run(
                 operationID: operationID, sessionID: sessionID,
@@ -660,7 +674,7 @@ func mutationSerializationKey(
 private func requestDaemonDrainAndExit() {
     DaemonState.shared.beginDrain()
     Task {
-        try? await Task.sleep(for: .milliseconds(350))
+        await waitForDaemonRequestsToDrain()
         await MetricsRecorder.shared.flush()
         daemonLog("shutdown drain complete")
         exit(0)
@@ -687,6 +701,7 @@ private final class DaemonState: @unchecked Sendable {
     static let shared = DaemonState()
     private let lock = NSLock()
     private var connections = 0
+    private var activeRequests = 0
     private var lastActivity = Date()
     private var listenFD: Int32 = -1
     private var draining = false
@@ -737,10 +752,37 @@ private final class DaemonState: @unchecked Sendable {
         lock.unlock()
     }
 
+    func requestStarted() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !draining else { return false }
+        activeRequests += 1
+        return true
+    }
+
+    func requestFinished() {
+        lock.lock()
+        activeRequests = max(0, activeRequests - 1)
+        lastActivity = Date()
+        lock.unlock()
+    }
+
+    var hasActiveRequests: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return activeRequests > 0
+    }
+
     var isIdle: Bool {
         lock.lock()
         defer { lock.unlock() }
         return connections <= 0 && Date().timeIntervalSince(lastActivity) > 1800
+    }
+}
+
+private func waitForDaemonRequestsToDrain() async {
+    while DaemonState.shared.hasActiveRequests {
+        try? await Task.sleep(for: .milliseconds(10))
     }
 }
 
@@ -753,6 +795,7 @@ private func scheduleIdleExit() {
             if DaemonState.shared.isIdle {
                 DaemonState.shared.beginDrain()
                 Task {
+                    await waitForDaemonRequestsToDrain()
                     await MetricsRecorder.shared.flush()
                     daemonLog("idle exit")
                     exit(0)

@@ -97,7 +97,7 @@ struct ActionTransaction: Equatable, Sendable {
     private(set) var cancellationRequested = false
 
     /// Create a root transaction from the canonical request id supplied by the
-    /// daemon protocol (or generated explicitly by the no-daemon dispatcher).
+    /// daemon protocol (or generated for internal dispatch in tests).
     init(rootOperationID: UUID) {
         operationID = rootOperationID
         parentOperationID = nil

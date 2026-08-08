@@ -20,7 +20,12 @@ func dispatchToolThroughDaemon(
 ) async -> CallTool.Result {
     do {
         return try await daemonCall(name, arguments)
+    } catch is CancellationError {
+        return codedErrorResult("Tool \"\(name)\" was cancelled.", code: nil)
     } catch {
+        if let code = toolErrorCode(for: error) {
+            return codedErrorResult("\(error)", code: code)
+        }
         return codedErrorResult(
             "Engine daemon unavailable (\(error)); tool \"\(name)\" was not run.",
             code: .daemonUnavailable
@@ -168,13 +173,13 @@ func abortedTransaction(
 }
 
 func makeActionTransactionForDispatch(
-    noDaemonOperationID: UUID = UUID()
+    generatedOperationID: UUID = UUID()
 ) -> ActionTransaction {
     if ActionTransactionContext.depth > 0 {
         return ActionTransaction()
     }
     return ActionTransaction(
-        rootOperationID: DaemonSessionContext.operationID ?? noDaemonOperationID)
+        rootOperationID: DaemonSessionContext.operationID ?? generatedOperationID)
 }
 
 func deliveryStatus(for result: CallTool.Result) -> ActionDeliveryStatus {

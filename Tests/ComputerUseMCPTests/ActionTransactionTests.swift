@@ -201,11 +201,11 @@ import Testing
     @Test func dispatchUsesDaemonCanonicalRootAndNestedChildLineage() async {
         let canonical = UUID()
         let root = DaemonSessionContext.$operationID.withValue(canonical) {
-            makeActionTransactionForDispatch(noDaemonOperationID: UUID())
+            makeActionTransactionForDispatch(generatedOperationID: UUID())
         }
         let child = await DaemonSessionContext.$operationID.withValue(canonical) {
             await ActionTransactionContext.withCurrentOperation(root) {
-                makeActionTransactionForDispatch(noDaemonOperationID: UUID())
+                makeActionTransactionForDispatch(generatedOperationID: UUID())
             }
         }
 
@@ -215,9 +215,9 @@ import Testing
         #expect(child.parentOperationID == canonical)
     }
 
-    @Test func noDaemonRootUsesExplicitDispatcherID() {
+    @Test func internalDispatchRootUsesGeneratedOperationID() {
         let local = UUID()
-        let transaction = makeActionTransactionForDispatch(noDaemonOperationID: local)
+        let transaction = makeActionTransactionForDispatch(generatedOperationID: local)
         #expect(transaction.operationID == local)
         #expect(transaction.parentOperationID == nil)
     }

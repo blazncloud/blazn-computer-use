@@ -286,6 +286,36 @@ import Testing
         #expect(result.isError != true)
         #expect(textContent(result) == "daemon list_apps")
     }
+
+    @Test func externalRoutePreservesCancellationWithoutRetryAdvice() async {
+        let result = await dispatchToolThroughDaemon(
+            name: "click", arguments: [:],
+            daemonCall: { _, _ in throw CancellationError() })
+
+        #expect(result.isError == true)
+        #expect(textContent(result) == "Tool \"click\" was cancelled.")
+        #expect(result._meta?["computer-use-mcp/error"] == nil)
+    }
+
+    @Test(arguments: [
+        ("Unauthorized daemon request.", "DAEMON_UNAUTHORIZED"),
+        ("Engine daemon is newer (0.5.0); upgrade this CLI", "DAEMON_VERSION_MISMATCH"),
+        (
+            "Daemon restarted after an ambiguous mutation result; refusing to replay the operation.",
+            "DAEMON_RESULT_UNKNOWN"
+        ),
+    ])
+    func externalRoutePreservesSpecificDaemonFailure(message: String, expectedCode: String) async {
+        let result = await dispatchToolThroughDaemon(
+            name: "click", arguments: [:],
+            daemonCall: { _, _ in throw ToolError.failed(message) })
+
+        guard case .object(let metadata)? = result._meta?["computer-use-mcp/error"] else {
+            Issue.record("Missing structured daemon failure metadata")
+            return
+        }
+        #expect(metadata["code"] == .string(expectedCode))
+    }
 }
 
 private func textContent(_ result: CallTool.Result) -> String {

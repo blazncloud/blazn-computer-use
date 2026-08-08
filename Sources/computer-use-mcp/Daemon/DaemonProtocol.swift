@@ -207,7 +207,7 @@ struct DaemonPendingRegistry<Handler> {
 
 /// Daemon request lineage. The legacy descriptor identity remains for the
 /// overlay cursor; logical session and operation UUIDs drive coordination.
-/// Values are absent in no-daemon local dispatch.
+/// Values are absent only in direct internal dispatch tests.
 enum DaemonSessionContext {
     @TaskLocal static var sessionID: Int32?
     @TaskLocal static var logicalSessionID: UUID?

@@ -127,6 +127,40 @@ import Testing
         #expect(await order.values == [1, 2])
     }
 
+    @Test func connectionTaskFinishHookRunsWhenQueuedWorkIsCancelled() async {
+        let tasks = DaemonConnectionTasks()
+        let sequencer = DaemonMutationSequencer()
+        let sessionID = UUID()
+        let gate = AsyncGate()
+        let firstStarted = AsyncGate()
+        let queuedExecutions = AsyncCounter()
+        let finished = AsyncCounter()
+        tasks.start(
+            id: 1,
+            reservation: sequencer.reserve(sessionID: sessionID, appKey: "pid:drain"),
+            sequencer: sequencer,
+            onFinish: { Task { await finished.increment() } }
+        ) {
+            await firstStarted.open()
+            await gate.wait()
+        }
+        await firstStarted.wait()
+        tasks.start(
+            id: 2,
+            reservation: sequencer.reserve(sessionID: sessionID, appKey: "pid:drain"),
+            sequencer: sequencer,
+            onFinish: { Task { await finished.increment() } }
+        ) {
+            await queuedExecutions.increment()
+        }
+
+        tasks.cancelAll()
+        await gate.open()
+        await waitUntil { await finished.value == 2 }
+
+        #expect(await queuedExecutions.value == 0)
+    }
+
     @Test func resumedConnectionsPreserveSharedLogicalSessionRequestOrder() async {
         let connectionA = DaemonConnectionTasks()
         let connectionB = DaemonConnectionTasks()
