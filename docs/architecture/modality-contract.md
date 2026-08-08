@@ -26,7 +26,7 @@ window metadata, and a shared local daemon in one trusted user session.
 | Coordinate identity | Raw `x` and `y` are screenshot pixels from the latest snapshot for that app. They are bounds-checked, converted to global screen points, then optionally hit-tested back to an AX element for labels and safety gates. | Use coordinates when the target is absent from AX, custom drawn, or found by OCR. | Coordinates outside the latest screenshot are rejected; coordinates require a prior state capture. |
 | Dispatch ladder | Left click prefers AX actions first, then window-routed process events, then per-pid CoreGraphics events. AX-backed text/value/menu/window operations use Accessibility directly. Scroll and drag use targeted event delivery. | `allow_global_cursor:true` enables the real-cursor/session-tap path for clicks. `press_key` can use global keyboard delivery only when the target app is already foreground. | Background event posting is app-dependent and has no reliable success signal, so global escalation is explicit rather than automatic. |
 | Foreground guarantee | Default pointer and key delivery does not activate the target app, move the real cursor, or steal user focus. `open_app` also avoids activation by default. | `open_app activate:true`, `manage_window raise`, or explicit global cursor/keyboard modes can affect focus or visible ordering. | Global keyboard delivery fails if requested while the target app is not foreground. Apps that require real focus may ignore background events. |
-| Session ownership | `serve` is a thin MCP stdio shim over one per-user daemon by default. The daemon owns capture, AX, input, overlay cursor, and app leases. | `COMPUTER_USE_MCP_NO_DAEMON=1` runs the engine in process. Read-only tools may fall back in process if the daemon is unavailable. | Mutating tools fail closed when daemon arbitration is unavailable, unless in-process mode was explicitly selected. |
+| Session ownership | `serve` and `call` are thin clients over one per-user daemon. The daemon owns capture, AX, input, overlay cursor, app leases, and metrics persistence. | All tool calls cross the authenticated daemon boundary. | Any daemon failure returns a structured `DAEMON_UNAVAILABLE` error; no tool runs in-process. |
 | Multi-session guarantee | Per-app leases serialize action tools against the same resolved pid for a short window after each action. Perception is never blocked. | Work in another app, retry when the lease expires, or explicitly disable app leases for local experiments. | Lease denial names the app and remaining wait time. It prevents interleaved actions, not every possible app-level race. |
 | Safety policy | Destructive labels, confirmation-listed apps, secure password fields, risky URL schemes, and destructive window actions require `confirm:true`. Browser actions additionally pass a server-side URL policy, mutating tools yield to live user input in the target app, and mutating tools pause while the screen is locked. | The caller may retry with `confirm:true` after reading the server's reason, retry after the user goes idle, or wait for unlock. `url_deny` matches are hard blocks that `confirm` does not override. | Recoverable "Confirmation required", interference-yield, and lock-pause errors are part of the tool contract, not crashes. |
 
@@ -284,8 +284,8 @@ Public failures should be recoverable and specific:
   `confirm:true`;
 - screen locked: wait for the user to unlock; read-only perception stays
   available;
-- daemon unavailable: read-only fallback may continue, mutating tools require a
-  healthy daemon or explicit `no_daemon` mode;
+- daemon unavailable: every tool fails fast with `DAEMON_UNAVAILABLE`; restore
+  the daemon and retry;
 - app lease denied: retry after the reported lease expiry;
 - skill step failed: fix the named step, `save_skill` again, and re-run.
 

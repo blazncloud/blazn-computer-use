@@ -266,8 +266,10 @@ shared engine **daemon** (one per user, spawned on demand over a unix socket) th
 owns accessibility, screen capture, input delivery, and the agent cursor. One
 engine process means concurrent agent sessions cannot collide on shared system
 services, and short per-app leases keep two sessions from interleaving actions
-inside the same app. `COMPUTER_USE_MCP_NO_DAEMON=1` runs the engine in-process
-instead.
+inside the same app. Tool calls fail fast with structured `DAEMON_UNAVAILABLE`
+metadata if the daemon cannot be reached; they never fall back in-process.
+The daemon also owns privacy-filtered runtime metrics: events are buffered and
+flushed in bounded batches to rotating JSONL plus an aggregate summary.
 
 Click interactions first resolve to an accessibility element and a screen point,
 then descend a delivery ladder, stopping at the first tier that works:
@@ -458,7 +460,6 @@ key in `~/.config/computer-use-mcp.json` (env wins):
 | `ax_element_timeout` | Per-element AX messaging timeout during tree traversal (default 0.25s). |
 | `viewport_probe_timeout` | Tighter AX timeout for dense-collection viewport frame probes (default 0.05s). |
 | `read_text_visible_threshold` | Character count above which `read_text` auto-switches to the visible-range path (default 50000). |
-| `no_daemon` / `COMPUTER_USE_MCP_NO_DAEMON=1` | Run the engine in-process instead of through the shared daemon. |
 | `no_app_lease` | Disable per-app session arbitration. |
 | `app_lease_seconds` | How long an app stays leased to a session after its last action (default 10). |
 | `no_interference_yield` | Disable yielding to real user input (yield is on by default). |

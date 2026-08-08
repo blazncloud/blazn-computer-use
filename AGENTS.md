@@ -41,10 +41,10 @@ safety-sensitive even when they look like ordinary Swift edits.
   handlers), `Recorder.swift` (listen-only event-tap teach mode),
   `ReplayVerdict.swift` (per-step structured replay outcomes).
 - `Sources/computer-use-mcp/Daemon/`: shared engine process, socket protocol,
-  and app leases. Verify multi-session and daemon fallback assumptions before
+  and app leases. Verify multi-session and daemon fail-fast assumptions before
   claiming concurrency safety; when touching leases or the socket path, confirm
   concurrent sessions cannot interleave inside one app and that mutating tools
-  still refuse in-process fallback unless `no_daemon` is set.
+  cannot bypass daemon arbitration through in-process fallback.
 - `Sources/computer-use-mcp/Overlay/`: visible agent cursor. Keep it optional
   for headless/CI paths.
 - `Sources/computer-use-mcp/ToolKit/`: schema/tool-spec plumbing. Prefer small,
