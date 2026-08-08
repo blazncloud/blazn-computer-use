@@ -95,7 +95,7 @@ private let errorCodeRules: [(fragment: String, code: ToolErrorCode)] = [
     ("shutdown refused: requester build", .daemonUnauthorized),
     ("engine daemon is newer", .daemonVersionMismatch),
     ("daemon handshake did not return a version", .daemonVersionMismatch),
-    ("daemon restarted after an ambiguous mutation result", .daemonResultUnknown),
+    ("daemon mutation result is unknown", .daemonResultUnknown),
 ]
 
 /// Classify an error message into a code, or nil when nothing matches (the

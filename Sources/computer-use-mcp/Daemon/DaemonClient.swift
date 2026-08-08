@@ -32,29 +32,45 @@ actor DaemonClient {
             return try await sendOperation(
                 tool: tool, arguments: arguments, operationID: operationID)
         } catch is CancellationError {
+            if mutation { throw unknownMutationResultError("caller cancellation") }
             throw CancellationError()
         } catch {
             guard daemonRetryPermitted(
                 isMutating: mutation,
                 deduplicationSupported: deduplicationWasNegotiated,
                 daemonIncarnationID: originalIncarnationID)
-            else { throw error }
+            else {
+                if mutation { throw unknownMutationResultError("daemon transport failure: \(error)") }
+                throw error
+            }
         }
 
         // One bounded retry. Read-only calls remain safe against legacy
         // daemons; mutations require a negotiated dedupe capability.
-        try await ensureConnected()
+        do {
+            try await ensureConnected()
+        } catch {
+            if mutation { throw unknownMutationResultError("reconnection failure: \(error)") }
+            throw error
+        }
         if mutation, connectionGeneration != originalConnectionGeneration,
             !daemonRetryAllowed(
                 originalIncarnationID: originalIncarnationID,
                 currentIncarnationID: daemonIncarnationID,
                 connectionChanged: true)
         {
-            throw ToolError.failed(
-                "Daemon restarted after an ambiguous mutation result; refusing to replay the operation.")
+            throw unknownMutationResultError("daemon restart")
         }
-        return try await sendOperation(
-            tool: tool, arguments: arguments, operationID: operationID)
+        do {
+            return try await sendOperation(
+                tool: tool, arguments: arguments, operationID: operationID)
+        } catch is CancellationError {
+            if mutation { throw unknownMutationResultError("caller cancellation during retry") }
+            throw CancellationError()
+        } catch {
+            if mutation { throw unknownMutationResultError("retry transport failure: \(error)") }
+            throw error
+        }
     }
 
     private func sendOperation(
@@ -314,6 +330,12 @@ actor DaemonClient {
             continuation.resume(throwing: error)
         }
     }
+}
+
+private func unknownMutationResultError(_ reason: String) -> ToolError {
+    ToolError.failed(
+        "Daemon mutation result is unknown (\(reason)); inspect fresh app state before retrying."
+    )
 }
 
 func daemonRetryAllowed(

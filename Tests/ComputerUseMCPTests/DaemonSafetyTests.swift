@@ -287,21 +287,30 @@ import Testing
         #expect(textContent(result) == "daemon list_apps")
     }
 
-    @Test func externalRoutePreservesCancellationWithoutRetryAdvice() async {
-        let result = await dispatchToolThroughDaemon(
+    @Test func externalRouteTreatsMutationCancellationAsUnknown() async {
+        let mutation = await dispatchToolThroughDaemon(
             name: "click", arguments: [:],
             daemonCall: { _, _ in throw CancellationError() })
 
-        #expect(result.isError == true)
-        #expect(textContent(result) == "Tool \"click\" was cancelled.")
-        #expect(result._meta?["computer-use-mcp/error"] == nil)
+        #expect(mutation.isError == true)
+        guard case .object(let metadata)? = mutation._meta?["computer-use-mcp/error"] else {
+            Issue.record("Missing unknown-result metadata")
+            return
+        }
+        #expect(metadata["code"] == .string("DAEMON_RESULT_UNKNOWN"))
+
+        let read = await dispatchToolThroughDaemon(
+            name: "list_apps", arguments: [:],
+            daemonCall: { _, _ in throw CancellationError() })
+        #expect(textContent(read) == "Tool \"list_apps\" was cancelled.")
+        #expect(read._meta?["computer-use-mcp/error"] == nil)
     }
 
     @Test(arguments: [
         ("Unauthorized daemon request.", "DAEMON_UNAUTHORIZED"),
         ("Engine daemon is newer (0.5.0); upgrade this CLI", "DAEMON_VERSION_MISMATCH"),
         (
-            "Daemon restarted after an ambiguous mutation result; refusing to replay the operation.",
+            "Daemon mutation result is unknown (daemon restart); inspect fresh app state before retrying.",
             "DAEMON_RESULT_UNKNOWN"
         ),
     ])

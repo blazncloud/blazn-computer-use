@@ -21,6 +21,12 @@ func dispatchToolThroughDaemon(
     do {
         return try await daemonCall(name, arguments)
     } catch is CancellationError {
+        if isMutatingTool(name) {
+            return codedErrorResult(
+                "Daemon mutation result is unknown after caller cancellation; inspect fresh app state before retrying.",
+                code: .daemonResultUnknown
+            )
+        }
         return codedErrorResult("Tool \"\(name)\" was cancelled.", code: nil)
     } catch {
         if let code = toolErrorCode(for: error) {
