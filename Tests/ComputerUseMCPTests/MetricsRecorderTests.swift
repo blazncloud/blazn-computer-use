@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import MCP
 import Testing
@@ -41,8 +40,8 @@ import Testing
     #expect(aggregate.contextBytes == MetricCounter(count: 1, total: 2048))
   }
 
-  @Test func recorderSerializesConcurrentWritesAndPersistsSummary() async throws {
-    try await withRecorder { recorder, configuration in
+  @Test func concurrentRecordCallsPersistValidJSONLinesAndSummary() async throws {
+    try await withRecorder(batchSize: 17) { recorder, configuration in
       await withTaskGroup(of: Void.self) { group in
         for index in 0..<100 {
           group.addTask {
@@ -50,6 +49,7 @@ import Testing
           }
         }
       }
+      await recorder.flush()
 
       let lines = try String(contentsOfFile: configuration.eventsPath, encoding: .utf8)
         .split(separator: "\n")
@@ -64,25 +64,39 @@ import Testing
     }
   }
 
-  @Test func independentRecordersMergeConcurrentWritesWithoutLostCounts() async throws {
-    try await withTemporaryDirectory { directory in
-      let configuration = recorderConfiguration(directory: directory)
-      let first = MetricsRecorder(configuration: configuration)
-      let second = MetricsRecorder(configuration: configuration)
-      await withTaskGroup(of: Void.self) { group in
-        for index in 0..<100 {
-          group.addTask {
-            await (index.isMultiple(of: 2) ? first : second).record(
-              operationEvent(index: index))
-          }
-        }
-      }
+  @Test func thresholdFlushPersistsWithoutExplicitFlush() async throws {
+    try await withRecorder(batchSize: 3, flushIntervalMilliseconds: 10_000) {
+      recorder, configuration in
+      await recorder.record(operationEvent(index: 1))
+      await recorder.record(operationEvent(index: 2))
+      #expect(!FileManager.default.fileExists(atPath: configuration.eventsPath))
+      await recorder.record(operationEvent(index: 3))
+
+      #expect(await waitForPersistedEvents(configuration, count: 3))
+    }
+  }
+
+  @Test func timerFlushPersistsBelowThreshold() async throws {
+    try await withRecorder(batchSize: 100, flushIntervalMilliseconds: 40) {
+      recorder, configuration in
+      await recorder.record(operationEvent(index: 1))
+
+      // Dispatch scheduling is not exact, so allow a bounded 2-second window.
+      #expect(await waitForPersistedEvents(configuration, count: 1))
+    }
+  }
+
+  @Test func explicitFlushPersistsBelowThresholdDeterministically() async throws {
+    try await withRecorder(batchSize: 100, flushIntervalMilliseconds: 10_000) {
+      recorder, configuration in
+      await recorder.record(operationEvent(index: 1))
+      #expect(!FileManager.default.fileExists(atPath: configuration.eventsPath))
+
+      await recorder.flush()
 
       let events = try decodeEvents(paths: [configuration.eventsPath])
-      #expect(events.count == 100)
-      #expect(MetricsAggregateSnapshot.read(atPath: configuration.summaryPath)?.events == 100)
-      #expect(await first.snapshot().events <= 100)
-      #expect(await second.snapshot().events <= 100)
+      #expect(events.count == 1)
+      #expect(MetricsAggregateSnapshot.read(atPath: configuration.summaryPath)?.events == 1)
     }
   }
 
@@ -92,6 +106,7 @@ import Testing
       for index in 0..<20 {
         await recorder.record(operationEvent(index: index))
       }
+      await recorder.flush()
 
       let manager = FileManager.default
       #expect(manager.fileExists(atPath: configuration.eventsPath))
@@ -110,53 +125,21 @@ import Testing
     }
   }
 
-  @Test func independentRecordersKeepRotatedJSONLinesParseable() async throws {
-    try await withTemporaryDirectory { directory in
-      let configuration = recorderConfiguration(
-        directory: directory, maxFileBytes: 450, retainedFiles: 3)
-      let first = MetricsRecorder(configuration: configuration)
-      let second = MetricsRecorder(configuration: configuration)
+  @Test func concurrentExplicitFlushesDoNotDuplicateEvents() async throws {
+    try await withRecorder(batchSize: 100, flushIntervalMilliseconds: 10_000) {
+      recorder, configuration in
+      for index in 0..<10 {
+        await recorder.record(operationEvent(index: index))
+      }
       await withTaskGroup(of: Void.self) { group in
-        for index in 0..<30 {
-          group.addTask {
-            await (index.isMultiple(of: 2) ? first : second).record(
-              operationEvent(index: index))
-          }
+        for _ in 0..<10 {
+          group.addTask { await recorder.flush() }
         }
       }
 
-      let paths = ["", ".1", ".2", ".3"].map { configuration.eventsPath + $0 }
-      let events = try decodeEvents(
-        paths: paths.filter { FileManager.default.fileExists(atPath: $0) })
-      #expect(!events.isEmpty)
-      #expect(MetricsAggregateSnapshot.read(atPath: configuration.summaryPath)?.events == 30)
-      #expect(!FileManager.default.fileExists(atPath: "\(configuration.eventsPath).4"))
-    }
-  }
-
-  @Test func heldCrossProcessLockDropsMetricWithinBoundWithoutMutation() async throws {
-    try await withTemporaryDirectory { directory in
-      let configuration = recorderConfiguration(
-        directory: directory, lockTimeoutMilliseconds: 20)
-      let lockFD = open(configuration.lockPath, O_CREAT | O_WRONLY, 0o600)
-      #expect(lockFD >= 0)
-      guard lockFD >= 0 else { return }
-      defer {
-        flock(lockFD, LOCK_UN)
-        close(lockFD)
-      }
-      #expect(flock(lockFD, LOCK_EX | LOCK_NB) == 0)
-
-      let recorder = MetricsRecorder(configuration: configuration)
-      let clock = ContinuousClock()
-      let elapsed = await clock.measure {
-        await recorder.record(operationEvent(index: 1))
-      }
-
-      #expect(elapsed < .milliseconds(250))
-      #expect(!FileManager.default.fileExists(atPath: configuration.eventsPath))
-      #expect(!FileManager.default.fileExists(atPath: configuration.summaryPath))
-      #expect(await recorder.snapshot().events == 0)
+      let events = try decodeEvents(paths: [configuration.eventsPath])
+      #expect(events.count == 10)
+      #expect(MetricsAggregateSnapshot.read(atPath: configuration.summaryPath)?.events == 10)
     }
   }
 
@@ -268,13 +251,19 @@ import Testing
     )
     let production = MetricsRecorderConfiguration.runtime(
       environment: [:],
-      arguments: ["/Applications/Computer Use MCP.app/Contents/MacOS/computer-use-mcp"],
+      arguments: ["/Applications/Computer Use MCP.app/Contents/MacOS/computer-use-mcp", "daemon"],
+      productionDirectory: "/tmp/production-metrics"
+    )
+    let serve = MetricsRecorderConfiguration.runtime(
+      environment: [:],
+      arguments: ["/Applications/Computer Use MCP.app/Contents/MacOS/computer-use-mcp", "serve"],
       productionDirectory: "/tmp/production-metrics"
     )
 
     #expect(xctest.enabled == false)
     #expect(swiftTesting.enabled == false)
     #expect(production.enabled == true)
+    #expect(serve.enabled == false)
     #expect(production.eventsPath == "/tmp/production-metrics/metrics.jsonl")
     #expect(!xctest.eventsPath.contains("/Library/Caches/computer-use-mcp/"))
     #expect(!swiftTesting.summaryPath.contains("/Library/Caches/computer-use-mcp/"))
@@ -300,16 +289,17 @@ import Testing
       let configuration = MetricsRecorderConfiguration(
         eventsPath: events.path,
         summaryPath: summary.path,
-        lockPath: directory.appendingPathComponent("sentinel.lock").path,
-        lockTimeoutMilliseconds: 50,
         maxFileBytes: 100,
         retainedFiles: 1,
+        batchSize: 1,
+        flushIntervalMilliseconds: 10,
         enabled: false
       )
 
       let recorder = MetricsRecorder(configuration: configuration)
       #expect(await recorder.snapshot().events == 0)
       await recorder.record(operationEvent(index: 1))
+      await recorder.flush()
 
       #expect(!FileManager.default.fileExists(atPath: events.path))
       #expect(try Data(contentsOf: summary) == sentinel)
@@ -322,13 +312,16 @@ import Testing
   private func withRecorder(
     maxFileBytes: Int = 1_000_000,
     retainedFiles: Int = 2,
+    batchSize: Int = 32,
+    flushIntervalMilliseconds: Int = 10_000,
     enabled: Bool = true,
     body: (MetricsRecorder, MetricsRecorderConfiguration) async throws -> Void
   ) async throws {
     try await withTemporaryDirectory { directory in
       let configuration = recorderConfiguration(
         directory: directory, maxFileBytes: maxFileBytes,
-        retainedFiles: retainedFiles, enabled: enabled)
+        retainedFiles: retainedFiles, batchSize: batchSize,
+        flushIntervalMilliseconds: flushIntervalMilliseconds, enabled: enabled)
       try await body(MetricsRecorder(configuration: configuration), configuration)
     }
   }
@@ -337,18 +330,35 @@ import Testing
     directory: URL,
     maxFileBytes: Int = 1_000_000,
     retainedFiles: Int = 2,
-    lockTimeoutMilliseconds: Int = 50,
+    batchSize: Int = 32,
+    flushIntervalMilliseconds: Int = 10_000,
     enabled: Bool = true
   ) -> MetricsRecorderConfiguration {
     MetricsRecorderConfiguration(
       eventsPath: directory.appendingPathComponent("metrics.jsonl").path,
       summaryPath: directory.appendingPathComponent("summary.json").path,
-      lockPath: directory.appendingPathComponent("metrics.lock").path,
-      lockTimeoutMilliseconds: lockTimeoutMilliseconds,
       maxFileBytes: maxFileBytes,
       retainedFiles: retainedFiles,
+      batchSize: batchSize,
+      flushIntervalMilliseconds: flushIntervalMilliseconds,
       enabled: enabled
     )
+  }
+
+  private func waitForPersistedEvents(
+    _ configuration: MetricsRecorderConfiguration, count: Int
+  ) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(2))
+    while clock.now < deadline {
+      let lines = (try? String(contentsOfFile: configuration.eventsPath, encoding: .utf8))?
+        .split(separator: "\n").count ?? 0
+      let summaryEvents = MetricsAggregateSnapshot.read(
+        atPath: configuration.summaryPath)?.events
+      if lines == count, summaryEvents == count { return true }
+      try? await Task.sleep(for: .milliseconds(10))
+    }
+    return false
   }
 
   private func decodeEvents(paths: [String]) throws -> [MetricsEvent] {

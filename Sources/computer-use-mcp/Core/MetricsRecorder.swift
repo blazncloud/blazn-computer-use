@@ -1,4 +1,3 @@
-import Darwin
 import Dispatch
 import Foundation
 import MCP
@@ -329,10 +328,10 @@ private func clampedInt(_ value: Int64) -> Int {
 struct MetricsRecorderConfiguration: Sendable {
   let eventsPath: String
   let summaryPath: String
-  let lockPath: String
-  let lockTimeoutMilliseconds: Int
   let maxFileBytes: Int
   let retainedFiles: Int
+  let batchSize: Int
+  let flushIntervalMilliseconds: Int
   let enabled: Bool
 
   static func runtime(
@@ -342,7 +341,8 @@ struct MetricsRecorderConfiguration: Sendable {
       createRuntimeDirectory: true
     ).directory
   ) -> MetricsRecorderConfiguration {
-    let enabled = !isMetricsTestProcess(environment: environment, arguments: arguments)
+    let enabled = arguments.dropFirst().first == "daemon"
+      && !isMetricsTestProcess(environment: environment, arguments: arguments)
     let directory: String
     if enabled {
       directory = productionDirectory()
@@ -361,19 +361,18 @@ struct MetricsRecorderConfiguration: Sendable {
       eventsPath: URL(fileURLWithPath: directory).appendingPathComponent("metrics.jsonl").path,
       summaryPath: URL(fileURLWithPath: directory).appendingPathComponent("metrics-summary.json")
         .path,
-      lockPath: URL(fileURLWithPath: directory).appendingPathComponent("metrics.lock").path,
-      lockTimeoutMilliseconds: 50,
       maxFileBytes: 1_048_576,
       retainedFiles: 3,
+      batchSize: 32,
+      flushIntervalMilliseconds: 250,
       enabled: enabled
     )
   }
 }
 
-/// Swift Testing runs inside an XCTest bundle. Tests frequently exercise the
-/// real dispatch funnel, so the process-level recorder must not treat those
-/// calls as production activity. Explicitly constructed recorders remain
-/// enabled for persistence tests.
+/// Swift Testing runs inside an XCTest bundle. Explicitly constructed
+/// recorders remain enabled for persistence tests; the process-level recorder
+/// writes only in the daemon process.
 func isMetricsTestProcess(environment: [String: String], arguments: [String]) -> Bool {
   if environment["XCTestConfigurationFilePath"] != nil
     || environment["XCTestBundlePath"] != nil
@@ -388,49 +387,50 @@ actor MetricsRecorder {
   static let shared = MetricsRecorder(configuration: .runtime())
 
   private let configuration: MetricsRecorderConfiguration
+  private let writer: MetricsFileWriter
   private var aggregate: MetricsAggregateSnapshot
-  private let encoder: JSONEncoder
+  private var bufferedEvents: [MetricsEvent] = []
+  private var flushTask: Task<Void, Never>?
+  private var timerTask: Task<Void, Never>?
+  private var timerGeneration: UInt64 = 0
 
   init(configuration: MetricsRecorderConfiguration) {
     self.configuration = configuration
-    encoder = JSONEncoder()
-    encoder.dateEncodingStrategy = .secondsSince1970
-    encoder.outputFormatting = [.sortedKeys]
+    let writer = MetricsFileWriter()
+    self.writer = writer
     aggregate =
       configuration.enabled
-      ? MetricsAggregateSnapshot.read(atPath: configuration.summaryPath)
+      ? writer.readSummary(atPath: configuration.summaryPath)
         ?? MetricsAggregateSnapshot()
       : MetricsAggregateSnapshot()
   }
 
   func record(_ event: MetricsEvent) {
     guard configuration.enabled else { return }
-    guard let encoded = try? encoder.encode(event) else { return }
-    var line = encoded
-    line.append(0x0A)
-    guard
-      let lockFD = acquireMetricsFileLock(
-        atPath: configuration.lockPath,
-        timeoutMilliseconds: configuration.lockTimeoutMilliseconds)
-    else {
-      return
+    bufferedEvents.append(event)
+    aggregate.record(event)
+    if bufferedEvents.count >= max(1, configuration.batchSize) {
+      timerTask?.cancel()
+      timerTask = nil
+      beginFlushIfNeeded()
+    } else {
+      scheduleTimerIfNeeded()
     }
-    defer {
-      flock(lockFD, LOCK_UN)
-      close(lockFD)
-    }
-    do {
-      // Another process may have persisted events since this actor's last
-      // write. Reload while holding the cross-process lock before merging.
-      aggregate =
-        MetricsAggregateSnapshot.read(atPath: configuration.summaryPath)
-        ?? MetricsAggregateSnapshot()
-      try rotateIfNeeded(addingBytes: line.count)
-      try append(line)
-      aggregate.record(event)
-      try aggregate.write(toPath: configuration.summaryPath)
-    } catch {
-      // Metrics are best effort and must never fail an operation.
+  }
+
+  /// Persist every event accepted before this call returns. Intended for
+  /// deterministic tests and reliable daemon shutdown points.
+  func flush() async {
+    guard configuration.enabled else { return }
+    timerTask?.cancel()
+    timerTask = nil
+    while true {
+      if let active = flushTask {
+        await active.value
+        continue
+      }
+      guard !bufferedEvents.isEmpty else { return }
+      beginFlushIfNeeded()
     }
   }
 
@@ -438,12 +438,88 @@ actor MetricsRecorder {
     aggregate
   }
 
-  private func append(_ data: Data) throws {
+  private func beginFlushIfNeeded() {
+    guard flushTask == nil, !bufferedEvents.isEmpty else { return }
+    let events = bufferedEvents
+    bufferedEvents.removeAll(keepingCapacity: true)
+    let aggregate = aggregate
+    let configuration = configuration
+    let writer = writer
+    flushTask = Task {
+      await writer.persist(events: events, aggregate: aggregate, configuration: configuration)
+      self.flushFinished()
+    }
+  }
+
+  private func flushFinished() {
+    flushTask = nil
+    if bufferedEvents.count >= max(1, configuration.batchSize) {
+      beginFlushIfNeeded()
+    } else {
+      scheduleTimerIfNeeded()
+    }
+  }
+
+  private func scheduleTimerIfNeeded() {
+    guard timerTask == nil, flushTask == nil, !bufferedEvents.isEmpty else { return }
+    timerGeneration &+= 1
+    let generation = timerGeneration
+    let delay = max(1, configuration.flushIntervalMilliseconds)
+    timerTask = Task {
+      try? await Task.sleep(for: .milliseconds(delay))
+      guard !Task.isCancelled else { return }
+      self.timerFired(generation: generation)
+    }
+  }
+
+  private func timerFired(generation: UInt64) {
+    guard generation == timerGeneration else { return }
+    timerTask = nil
+    beginFlushIfNeeded()
+  }
+}
+
+/// Daemon-owned disk writer. Every Foundation file operation runs on this
+/// private serial queue, never on the MetricsRecorder actor executor.
+private final class MetricsFileWriter: @unchecked Sendable {
+  private let queue = DispatchQueue(label: "computer-use-mcp.metrics-writer")
+
+  func readSummary(atPath path: String) -> MetricsAggregateSnapshot? {
+    queue.sync { MetricsAggregateSnapshot.read(atPath: path) }
+  }
+
+  func persist(
+    events: [MetricsEvent],
+    aggregate: MetricsAggregateSnapshot,
+    configuration: MetricsRecorderConfiguration
+  ) async {
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      queue.async {
+        defer { continuation.resume() }
+        do {
+          let encoder = JSONEncoder()
+          encoder.dateEncodingStrategy = .secondsSince1970
+          encoder.outputFormatting = [.sortedKeys]
+          for event in events {
+            var line = try encoder.encode(event)
+            line.append(0x0A)
+            try self.rotateIfNeeded(addingBytes: line.count, configuration: configuration)
+            try self.append(line, atPath: configuration.eventsPath)
+          }
+          try aggregate.write(toPath: configuration.summaryPath)
+        } catch {
+          // Metrics are best effort and must never fail a tool operation.
+        }
+      }
+    }
+  }
+
+  private func append(_ data: Data, atPath path: String) throws {
     let manager = FileManager.default
-    let url = URL(fileURLWithPath: configuration.eventsPath)
+    let url = URL(fileURLWithPath: path)
     try manager.createDirectory(
       at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-    if !manager.fileExists(atPath: url.path) {
+    if !manager.fileExists(atPath: path) {
       try data.write(to: url, options: .atomic)
       return
     }
@@ -453,7 +529,9 @@ actor MetricsRecorder {
     try handle.write(contentsOf: data)
   }
 
-  private func rotateIfNeeded(addingBytes: Int) throws {
+  private func rotateIfNeeded(
+    addingBytes: Int, configuration: MetricsRecorderConfiguration
+  ) throws {
     let manager = FileManager.default
     let path = configuration.eventsPath
     let currentSize =
@@ -465,8 +543,7 @@ actor MetricsRecorder {
       try? manager.removeItem(atPath: path)
       return
     }
-    let oldest = "\(path).\(configuration.retainedFiles)"
-    try? manager.removeItem(atPath: oldest)
+    try? manager.removeItem(atPath: "\(path).\(configuration.retainedFiles)")
     if configuration.retainedFiles > 1 {
       for index in stride(from: configuration.retainedFiles - 1, through: 1, by: -1) {
         let source = "\(path).\(index)"
@@ -478,43 +555,6 @@ actor MetricsRecorder {
     }
     try manager.moveItem(atPath: path, toPath: "\(path).1")
   }
-}
-
-/// Correctness lock for the JSONL + summary transaction. Unlike the
-/// best-effort ScreenCaptureKit lock, failure to acquire this lock skips the
-/// metric rather than risking corruption or lost aggregate counts.
-private func acquireMetricsFileLock(
-  atPath path: String,
-  timeoutMilliseconds: Int
-) -> Int32? {
-  let url = URL(fileURLWithPath: path)
-  do {
-    try FileManager.default.createDirectory(
-      at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-  } catch {
-    return nil
-  }
-  let fd = open(path, O_CREAT | O_WRONLY, 0o600)
-  guard fd >= 0 else { return nil }
-  let timeoutNanoseconds = UInt64(max(0, timeoutMilliseconds)) * 1_000_000
-  let start = DispatchTime.now().uptimeNanoseconds
-  let deadline = start.addingReportingOverflow(timeoutNanoseconds)
-  let deadlineNanoseconds = deadline.overflow ? UInt64.max : deadline.partialValue
-  while flock(fd, LOCK_EX | LOCK_NB) != 0 {
-    guard DispatchTime.now().uptimeNanoseconds < deadlineNanoseconds else {
-      close(fd)
-      return nil
-    }
-    if errno == EINTR {
-      continue
-    }
-    guard errno == EWOULDBLOCK || errno == EAGAIN else {
-      close(fd)
-      return nil
-    }
-    usleep(1_000)
-  }
-  return fd
 }
 
 extension MetricsAggregateSnapshot {

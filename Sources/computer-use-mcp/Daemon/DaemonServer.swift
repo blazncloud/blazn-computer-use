@@ -659,8 +659,9 @@ func mutationSerializationKey(
 /// Newer clients then spawn a fresh daemon.
 private func requestDaemonDrainAndExit() {
     DaemonState.shared.beginDrain()
-    Thread.detachNewThread {
-        Thread.sleep(forTimeInterval: 0.35)
+    Task {
+        try? await Task.sleep(for: .milliseconds(350))
+        await MetricsRecorder.shared.flush()
         daemonLog("shutdown drain complete")
         exit(0)
     }
@@ -750,8 +751,13 @@ private func scheduleIdleExit() {
         while true {
             Thread.sleep(forTimeInterval: 60)
             if DaemonState.shared.isIdle {
-                daemonLog("idle exit")
-                exit(0)
+                DaemonState.shared.beginDrain()
+                Task {
+                    await MetricsRecorder.shared.flush()
+                    daemonLog("idle exit")
+                    exit(0)
+                }
+                return
             }
         }
     }
