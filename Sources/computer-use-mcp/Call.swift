@@ -31,12 +31,10 @@ func runCall(_ args: [String]) async {
     }
 
     // Route through the shared daemon (same engine state as live agent
-    // sessions). Mutating tools fail closed if the daemon cannot arbitrate;
-    // no_daemon is the explicit opt-in for in-process actions.
-    let result = await dispatchToolWithDaemonPolicy(
+    // sessions). Daemon failures fail fast; tools never run in this process.
+    let result = await dispatchToolThroughDaemon(
         name: toolName,
-        arguments: arguments,
-        useDaemon: Config.bool("no_daemon") != true
+        arguments: arguments
     )
 
     for content in result.content {

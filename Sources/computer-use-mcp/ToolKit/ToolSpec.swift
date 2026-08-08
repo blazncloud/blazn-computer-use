@@ -18,8 +18,8 @@ extension ToolSpec {
 }
 
 /// Tools with side effects on apps, windows, the system clipboard, launched
-/// processes, or URL/file handlers. These must go through the daemon unless
-/// the user explicitly opts into in-process operation with no_daemon.
+/// processes, or URL/file handlers. External calls always go through the
+/// daemon; this set drives daemon-side coordination and safety gates.
 let mutatingToolNames: Set<String> = [
     "click", "type_text", "press_key", "scroll", "drag", "set_value",
     "select_text", "perform_secondary_action", "open_app", "open_url",

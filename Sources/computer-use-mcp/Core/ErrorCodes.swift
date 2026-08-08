@@ -25,6 +25,7 @@ enum ToolErrorCode: String, Sendable, CaseIterable {
     case offscreenTarget = "OFFSCREEN_TARGET"
     case appLeaseHeld = "APP_LEASE_HELD"
     case daemonUnauthorized = "DAEMON_UNAUTHORIZED"
+    case daemonUnavailable = "DAEMON_UNAVAILABLE"
 
     /// One-line, agent-directed next step for this failure class.
     var recovery: String {
@@ -53,6 +54,8 @@ enum ToolErrorCode: String, Sendable, CaseIterable {
             return "Wait for the other agent session's app lease to expire, or target a different app."
         case .daemonUnauthorized:
             return "Reconnect with a current CLI that can authenticate to the local engine daemon."
+        case .daemonUnavailable:
+            return "Retry after the local engine daemon is available."
         }
     }
 }

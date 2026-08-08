@@ -3,16 +3,12 @@
 // By default serve is a thin shim: tool calls are forwarded to the shared
 // engine daemon (one per user, spawned on demand), so any number of
 // concurrent agent sessions go through a single process that owns screen
-// capture, accessibility, input delivery, and the cursor — collisions between
-// sessions are impossible by construction. Set no_daemon /
-// COMPUTER_USE_MCP_NO_DAEMON=1 to run the engine in-process instead.
+// capture, accessibility, input delivery, and the cursor.
 
 import Foundation
 import MCP
 
 func runServe() async {
-    let useDaemon = Config.bool("no_daemon") != true
-
     let server = Server(
         name: "computer-use-mcp",
         version: version,
@@ -27,7 +23,7 @@ func runServe() async {
 
     await server.withMethodHandler(CallTool.self) { params in
         let arguments = params.arguments ?? [:]
-        return await dispatchToolWithDaemonPolicy(name: params.name, arguments: arguments, useDaemon: useDaemon)
+        return await dispatchToolThroughDaemon(name: params.name, arguments: arguments)
     }
 
     do {

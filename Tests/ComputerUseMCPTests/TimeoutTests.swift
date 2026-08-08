@@ -3,8 +3,8 @@ import Testing
 @testable import computer_use_mcp
 
 @Suite struct TimeoutTests {
-    /// The regression guard for the no_daemon capture hang: a cold
-    /// ScreenCaptureKit/replayd capture can suspend forever and ignore
+    /// Regression guard for a cold ScreenCaptureKit/replayd capture that can
+    /// suspend forever and ignore
     /// cancellation. withTimeout must still return by its deadline instead of
     /// waiting on the wedged operation (the old task-group form implicitly
     /// awaited the un-cancellable child and hung indefinitely).

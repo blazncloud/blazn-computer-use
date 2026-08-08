@@ -252,69 +252,39 @@ import Testing
 
     @Test func mutatingToolClassifierCoversSystemSideEffects() {
         for name in ["click", "type_text", "open_app", "open_url", "manage_window", "write_clipboard"] {
-            #expect(isMutatingTool(name), "\(name) should fail closed when daemon arbitration is unavailable")
+            #expect(isMutatingTool(name), "\(name) should be coordinated as mutating")
         }
         for name in ["list_apps", "get_app_state", "find", "list_windows", "read_clipboard", "wait_for", "read_text"] {
-            #expect(!isMutatingTool(name), "\(name) should be eligible for read-only in-process fallback")
+            #expect(!isMutatingTool(name), "\(name) should remain classified as read-only")
         }
     }
 
-    @Test func mutatingFallbackFailsClosedWhenDaemonUnavailable() async {
-        let probe = LocalDispatchProbe()
-        let result = await dispatchToolWithDaemonPolicy(
-            name: "click",
+    @Test(arguments: ["click", "read_clipboard", "get_app_state"])
+    func everyToolFailsFastWhenDaemonUnavailable(name: String) async {
+        let result = await dispatchToolThroughDaemon(
+            name: name,
             arguments: [:],
-            useDaemon: true,
-            daemonCall: { _, _ in throw ToolError.failed("boom") },
-            localDispatch: { name, arguments in await probe.dispatch(name: name, arguments: arguments) }
+            daemonCall: { _, _ in throw ToolError.failed("boom") }
         )
 
         #expect(result.isError == true)
-        #expect(textContent(result).contains("refusing to run mutating tool \"click\" in-process"))
-        #expect(await probe.wasCalled() == false)
+        #expect(textContent(result).contains("tool \"\(name)\" was not run"))
+        guard case .object(let metadata)? = result._meta?["computer-use-mcp/error"] else {
+            Issue.record("Missing structured daemon failure metadata")
+            return
+        }
+        #expect(metadata["code"] == .string("DAEMON_UNAVAILABLE"))
     }
 
-    @Test func readOnlyFallbackMayRunInProcessWhenDaemonUnavailable() async {
-        let probe = LocalDispatchProbe()
-        let result = await dispatchToolWithDaemonPolicy(
-            name: "read_clipboard",
+    @Test func successfulExternalRouteReturnsOnlyDaemonResult() async {
+        let result = await dispatchToolThroughDaemon(
+            name: "list_apps",
             arguments: [:],
-            useDaemon: true,
-            daemonCall: { _, _ in throw ToolError.failed("boom") },
-            localDispatch: { name, arguments in await probe.dispatch(name: name, arguments: arguments) }
+            daemonCall: { name, _ in .text("daemon \(name)") }
         )
 
         #expect(result.isError != true)
-        #expect(textContent(result) == "local read_clipboard")
-        #expect(await probe.wasCalled())
-    }
-
-    @Test func noDaemonAllowsExplicitMutatingInProcessDispatch() async {
-        let probe = LocalDispatchProbe()
-        let result = await dispatchToolWithDaemonPolicy(
-            name: "click",
-            arguments: [:],
-            useDaemon: false,
-            daemonCall: { _, _ in throw ToolError.failed("should not call daemon") },
-            localDispatch: { name, arguments in await probe.dispatch(name: name, arguments: arguments) }
-        )
-
-        #expect(result.isError != true)
-        #expect(textContent(result) == "local click")
-        #expect(await probe.wasCalled())
-    }
-}
-
-private actor LocalDispatchProbe {
-    private var called = false
-
-    func dispatch(name: String, arguments: [String: Value]) -> CallTool.Result {
-        called = true
-        return .text("local \(name)")
-    }
-
-    func wasCalled() -> Bool {
-        called
+        #expect(textContent(result) == "daemon list_apps")
     }
 }
 

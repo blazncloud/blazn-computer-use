@@ -36,8 +36,7 @@ func overlayLockPath() -> String {
     (overlayDirectory() as NSString).appendingPathComponent("overlay.lock")
 }
 
-/// Session id used when no daemon connection context is available (no_daemon /
-/// local dispatch). Keeps a single default cursor for that path.
+/// Session id used when no daemon connection context is available in tests.
 let overlayDefaultSessionID = "local"
 
 /// Fixed palette cycled by session id so concurrent agents stay visually distinct.
