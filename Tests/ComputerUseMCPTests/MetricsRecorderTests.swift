@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import MCP
 import Testing
 
 @testable import computer_use_mcp
@@ -191,6 +192,61 @@ import Testing
     #expect(metric.executionLatencyMs == 0)
   }
 
+  @Test func resultMetadataSupportsOperationOnlyMetrics() {
+    let original = CallTool.Result.text("ok")
+    let result = original.withOperationMetric(operationMetric())
+
+    guard case .object(let envelope)? = result._meta?[metricsMetaKey] else {
+      Issue.record("Missing metrics envelope")
+      return
+    }
+    #expect(envelope["schema_version"] == .int(1))
+    #expect(envelope["operation"] == operationMetric().value)
+    #expect(envelope["perception"] == nil)
+    #expect(result.content == original.content)
+  }
+
+  @Test func resultMetadataSupportsPerceptionOnlyMetrics() {
+    let result = CallTool.Result.text("ok").withPerceptionMetric(perceptionMetric())
+
+    guard case .object(let envelope)? = result._meta?[metricsMetaKey] else {
+      Issue.record("Missing metrics envelope")
+      return
+    }
+    #expect(envelope["schema_version"] == .int(1))
+    #expect(envelope["operation"] == nil)
+    #expect(envelope["perception"] == perceptionMetric().value)
+  }
+
+  @Test func addingOperationMetricPreservesPerceptionMetric() {
+    let result = CallTool.Result(
+      content: [.text(text: "ok", annotations: nil, _meta: nil)],
+      _meta: Metadata(additionalFields: ["unrelated": .string("preserve-me")])
+    )
+      .withPerceptionMetric(perceptionMetric())
+      .withOperationMetric(operationMetric())
+
+    guard case .object(let envelope)? = result._meta?[metricsMetaKey] else {
+      Issue.record("Missing metrics envelope")
+      return
+    }
+    #expect(envelope["schema_version"] == .int(1))
+    #expect(envelope["operation"] == operationMetric().value)
+    #expect(envelope["perception"] == perceptionMetric().value)
+    #expect(result._meta?["unrelated"] == .string("preserve-me"))
+  }
+
+  @Test func addingMetricPreservesUnrelatedMetadata() {
+    let result = CallTool.Result(
+      content: [.text(text: "ok", annotations: nil, _meta: nil)],
+      isError: false,
+      _meta: Metadata(additionalFields: ["unrelated": .string("preserve-me")])
+    ).withPerceptionMetric(perceptionMetric())
+
+    #expect(result._meta?["unrelated"] == .string("preserve-me"))
+    #expect(result._meta?[metricsMetaKey] != nil)
+  }
+
   @Test func summaryRoundTripsForCrossProcessHealthRead() throws {
     try withTemporaryDirectory { directory in
       let path = directory.appendingPathComponent("summary.json").path
@@ -356,4 +412,32 @@ private func perceptionEvent(index: Int) -> MetricsEvent {
         diff: true,
         contextBytes: 2048
       )))
+}
+
+private func operationMetric() -> OperationMetric {
+  OperationMetric(
+    operation: "operation-1",
+    tool: "click",
+    appBundleIdentifier: "com.example.fixture",
+    axRole: "AXButton",
+    attemptedDeliveryStrategies: ["ax_press", "pid_event"],
+    finalDeliveryStrategy: "ax_press",
+    effectOutcome: "verified",
+    queueLatencyMs: 3,
+    executionLatencyMs: 11
+  )
+}
+
+private func perceptionMetric() -> PerceptionMetric {
+  PerceptionMetric(
+    operation: "operation-1",
+    tool: "get_app_state",
+    appBundleIdentifier: "com.example.fixture",
+    elapsedMs: 22,
+    elementsVisited: 50,
+    elementsReturned: 20,
+    partial: true,
+    diff: true,
+    contextBytes: 2048
+  )
 }

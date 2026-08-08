@@ -1,6 +1,10 @@
 import Darwin
 import Dispatch
 import Foundation
+import MCP
+
+let metricsMetaKey = "computer-use-mcp/metrics"
+private let metricsSchemaVersion = 1
 
 /// Privacy-safe, daemon-wide operational metrics. This schema intentionally has
 /// no fields for accessibility labels/values, screenshots, tree text, typed
@@ -94,6 +98,69 @@ struct PerceptionMetric: Codable, Equatable, Sendable {
     self.partial = partial
     self.diff = diff
     self.contextBytes = max(0, contextBytes)
+  }
+}
+
+extension OperationMetric {
+  var value: Value {
+    var fields: [String: Value] = [
+      "operation": .string(operation),
+      "tool": .string(tool),
+      "attempted_delivery_strategies": .array(
+        attemptedDeliveryStrategies.map(Value.string)),
+      "queue_latency_ms": .int(Int(clamping: queueLatencyMs)),
+      "execution_latency_ms": .int(Int(clamping: executionLatencyMs)),
+    ]
+    if let appBundleIdentifier {
+      fields["app_bundle_identifier"] = .string(appBundleIdentifier)
+    }
+    if let axRole { fields["ax_role"] = .string(axRole) }
+    if let finalDeliveryStrategy {
+      fields["final_delivery_strategy"] = .string(finalDeliveryStrategy)
+    }
+    if let effectOutcome { fields["effect_outcome"] = .string(effectOutcome) }
+    return .object(fields)
+  }
+}
+
+extension PerceptionMetric {
+  var value: Value {
+    var fields: [String: Value] = [
+      "operation": .string(operation),
+      "tool": .string(tool),
+      "elapsed_ms": .int(Int(clamping: elapsedMs)),
+      "elements_visited": .int(elementsVisited),
+      "elements_returned": .int(elementsReturned),
+      "partial": .bool(partial),
+      "diff": .bool(diff),
+      "context_bytes": .int(contextBytes),
+    ]
+    if let appBundleIdentifier {
+      fields["app_bundle_identifier"] = .string(appBundleIdentifier)
+    }
+    return .object(fields)
+  }
+}
+
+extension CallTool.Result {
+  func withOperationMetric(_ metric: OperationMetric) -> CallTool.Result {
+    withMetric("operation", value: metric.value)
+  }
+
+  func withPerceptionMetric(_ metric: PerceptionMetric) -> CallTool.Result {
+    withMetric("perception", value: metric.value)
+  }
+
+  private func withMetric(_ name: String, value: Value) -> CallTool.Result {
+    var envelope: [String: Value]
+    if case .object(let existing)? = _meta?[metricsMetaKey] {
+      envelope = existing
+    } else {
+      envelope = [:]
+    }
+    envelope["schema_version"] = .int(metricsSchemaVersion)
+    envelope[name] = value
+    return mergingMetaField(metricsMetaKey, .object(envelope))
   }
 }
 

@@ -413,19 +413,19 @@ func stateResult(
         ActionTransactionContext.currentOperationID
         ?? DaemonSessionContext.operationID
         ?? UUID()
-    await MetricsRecorder.shared.record(
-        MetricsEvent(payload: .perception(PerceptionMetric(
-            operation: operationID.uuidString,
-            tool: metricTool,
-            appBundleIdentifier: app.bundleIdentifier,
-            elapsedMs: elapsedMilliseconds,
-            elementsVisited: tree.elementsVisited,
-            elementsReturned: tree.elements.count,
-            partial: tree.isPartial,
-            diff: diff != nil,
-            contextBytes: text.utf8.count
-        ))))
-    return result
+    let metric = PerceptionMetric(
+        operation: operationID.uuidString,
+        tool: metricTool,
+        appBundleIdentifier: app.bundleIdentifier,
+        elapsedMs: elapsedMilliseconds,
+        elementsVisited: tree.elementsVisited,
+        elementsReturned: tree.elements.count,
+        partial: tree.isPartial,
+        diff: diff != nil,
+        contextBytes: text.utf8.count
+    )
+    await MetricsRecorder.shared.record(MetricsEvent(payload: .perception(metric)))
+    return result.withPerceptionMetric(metric)
 }
 
 /// Guidance when a synthetic background-event delivery produced no visible

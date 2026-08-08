@@ -58,7 +58,7 @@ func dispatchTool(name: String, arguments: [String: Value]) async -> CallTool.Re
         if var transaction {
             (transaction, result) = abortedTransaction(
                 transaction: transaction, result: result, cancellationRequested: false)
-            await recordOperationMetric(
+            result = await recordingOperationMetric(
                 transaction: transaction, tool: name, result: result,
                 appBundleIdentifier: metricAppBundleIdentifier, since: start)
         }
@@ -70,10 +70,10 @@ func dispatchTool(name: String, arguments: [String: Value]) async -> CallTool.Re
         let result: CallTool.Result
         (transaction, result) = abortedTransaction(
             transaction: transaction, result: cancelled, cancellationRequested: true)
-        await recordOperationMetric(
+        let measuredResult = await recordingOperationMetric(
             transaction: transaction, tool: name, result: result,
             appBundleIdentifier: metricAppBundleIdentifier, since: start)
-        return result
+        return measuredResult
     }
     let result: CallTool.Result
     var cancelledBeforeDelivery = false
@@ -109,7 +109,7 @@ func dispatchTool(name: String, arguments: [String: Value]) async -> CallTool.Re
             (transaction, finalResult) = abortedTransaction(
                 transaction: transaction, result: result,
                 cancellationRequested: safeCancellationAbort)
-            await recordOperationMetric(
+            finalResult = await recordingOperationMetric(
                 transaction: transaction, tool: name, result: finalResult,
                 appBundleIdentifier: metricAppBundleIdentifier, since: start)
             logToolCall(name, isError: true, since: start)
@@ -127,7 +127,7 @@ func dispatchTool(name: String, arguments: [String: Value]) async -> CallTool.Re
         try? transaction.advance(to: .commit)
         try? transaction.recordCommit(commitStatus(for: result, tool: name))
         finalResult = result.withActionTransaction(transaction)
-        await recordOperationMetric(
+        finalResult = await recordingOperationMetric(
             transaction: transaction, tool: name, result: finalResult,
             appBundleIdentifier: metricAppBundleIdentifier, since: start)
     }
@@ -262,31 +262,32 @@ private func deliveryMetricFields(
     return (attempted, final)
 }
 
-private func recordOperationMetric(
+private func recordingOperationMetric(
     transaction: ActionTransaction,
     tool: String,
     result: CallTool.Result,
     appBundleIdentifier: String?,
     since start: ContinuousClock.Instant
-) async {
+) async -> CallTool.Result {
     let elapsed = start.duration(to: .now)
     let milliseconds =
         elapsed.components.seconds * 1000
         + elapsed.components.attoseconds / 1_000_000_000_000_000
     let delivery = deliveryMetricFields(for: result)
-    await MetricsRecorder.shared.record(
-        MetricsEvent(payload: .operation(OperationMetric(
-            operation: transaction.operationID.uuidString,
-            tool: tool,
-            appBundleIdentifier: appBundleIdentifier,
-            axRole: nil,
-            attemptedDeliveryStrategies: delivery.attempted,
-            finalDeliveryStrategy: delivery.final,
-            effectOutcome: transaction.effectStatus.rawValue,
-            queueLatencyMs: Int64(
-                max(0, DaemonSessionContext.queueLatencyMilliseconds ?? 0).rounded()),
-            executionLatencyMs: milliseconds
-        ))))
+    let metric = OperationMetric(
+        operation: transaction.operationID.uuidString,
+        tool: tool,
+        appBundleIdentifier: appBundleIdentifier,
+        axRole: nil,
+        attemptedDeliveryStrategies: delivery.attempted,
+        finalDeliveryStrategy: delivery.final,
+        effectOutcome: transaction.effectStatus.rawValue,
+        queueLatencyMs: Int64(
+            max(0, DaemonSessionContext.queueLatencyMilliseconds ?? 0).rounded()),
+        executionLatencyMs: milliseconds
+    )
+    await MetricsRecorder.shared.record(MetricsEvent(payload: .operation(metric)))
+    return result.withOperationMetric(metric)
 }
 
 /// The gates every tool call passes before its handler runs: screen-lock
