@@ -37,11 +37,18 @@ struct PointTarget {
 }
 
 func resolvePointTarget(_ args: [String: Value], app: ResolvedApp, allowGlobalCursor: Bool = false) async throws -> PointTarget {
+    let syntheticPreference = try diagnosticSyntheticDeliveryPreference(args)
+    if allowGlobalCursor, syntheticPreference == .perPidOnly {
+        throw ToolError.invalidArguments(
+            "_diagnostic_delivery_tier cannot be combined with allow_global_cursor."
+        )
+    }
     if let elementID = args.string("element_id") {
         let target = try await resolveMutationTarget(app: app, elementID: elementID)
         let context = pointDeliveryContext(
             pid: app.pid, windowNumber: target.snapshot.lineage?.windowID,
-            windowFrame: target.window.frame, allowGlobalCursor: allowGlobalCursor)
+            windowFrame: target.window.frame, allowGlobalCursor: allowGlobalCursor,
+            syntheticPreference: syntheticPreference)
         let point = axFrame(target.element).map { CGPoint(x: $0.midX, y: $0.midY) }
         return PointTarget(
             element: target.element, snapshotElement: target.snapshotElement, point: point,
@@ -56,7 +63,8 @@ func resolvePointTarget(_ args: [String: Value], app: ResolvedApp, allowGlobalCu
         let window = try resolveMutationWindow(snapshot: snapshot, app: app)
         let context = pointDeliveryContext(
             pid: app.pid, windowNumber: snapshot.lineage?.windowID,
-            windowFrame: window.frame, allowGlobalCursor: allowGlobalCursor)
+            windowFrame: window.frame, allowGlobalCursor: allowGlobalCursor,
+            syntheticPreference: syntheticPreference)
         let point = try screenPoint(x: x, y: y, snapshot: snapshot)
         let element = accessibilityElement(at: point, pid: app.pid)
         return PointTarget(
@@ -68,13 +76,29 @@ func resolvePointTarget(_ args: [String: Value], app: ResolvedApp, allowGlobalCu
     throw ToolError.invalidArguments("Provide element_id, or x and y screenshot coordinates.")
 }
 
+/// Hidden from the MCP catalog: this exists only for local CLI diagnosis of a
+/// single delivery rung and therefore cannot be selected by an MCP model.
+func diagnosticSyntheticDeliveryPreference(
+    _ args: [String: Value]
+) throws -> SyntheticDeliveryPreference {
+    guard args["_diagnostic_delivery_tier"] != nil else { return .automatic }
+    guard let raw = args.string("_diagnostic_delivery_tier"), raw == "tier3" else {
+        throw ToolError.invalidArguments(
+            "_diagnostic_delivery_tier only supports \"tier3\"."
+        )
+    }
+    return .perPidOnly
+}
+
 /// Pure delivery-context constructor used to prove exact window affinity
 /// independently of live AX resolution.
 func pointDeliveryContext(
     pid: pid_t, windowNumber: CGWindowID?, windowFrame: CGRect?,
-    allowGlobalCursor: Bool
+    allowGlobalCursor: Bool,
+    syntheticPreference: SyntheticDeliveryPreference = .automatic
 ) -> DeliveryContext {
     DeliveryContext(
         pid: pid, windowNumber: windowNumber,
-        windowFrame: windowFrame, allowGlobalCursor: allowGlobalCursor)
+        windowFrame: windowFrame, allowGlobalCursor: allowGlobalCursor,
+        syntheticPreference: syntheticPreference)
 }

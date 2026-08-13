@@ -49,6 +49,15 @@ enum KeyDeliveryMode: String, Equatable {
     case globalSessionTap = "tier4-global-session-tap"
 }
 
+/// Internal delivery selection used by diagnostics. Normal tool calls use the
+/// automatic ladder; the CLI self-test can select the public per-pid CGEvent
+/// path directly so one delivery strategy can be evaluated without risking a
+/// duplicate click from an automatic retry.
+enum SyntheticDeliveryPreference: Equatable {
+    case automatic
+    case perPidOnly
+}
+
 /// Why the ladder skipped a higher-priority tier for this delivery. Pure
 /// telemetry — the tier actually chosen is unchanged; these only explain it,
 /// so a caller (and the agent reading _meta) knows whether the event took the
@@ -76,6 +85,9 @@ enum FallbackReason: String, Equatable, Sendable {
     /// The caller opted into the guarded global-cursor path (Tier 4),
     /// bypassing the background-safe tiers.
     case globalCursorRequested = "global-cursor-requested"
+    /// CLI-only diagnostic selected Tier 3 directly. This is not a failure of
+    /// Tier 2; the earlier tiers were intentionally skipped for isolation.
+    case diagnosticTier3Forced = "diagnostic-tier3-forced"
     /// scroll only: no scrollable container was found on the target's AX
     /// ancestor chain, so the wheel was posted at the raw hit point.
     case noScrollContainerFound = "no-scroll-container-found"
@@ -143,6 +155,19 @@ struct DeliveryContext {
     /// Target window's global frame (top-left origin), for coordinate conversion.
     let windowFrame: CGRect?
     let allowGlobalCursor: Bool
+    let syntheticPreference: SyntheticDeliveryPreference
+
+    init(
+        pid: pid_t, windowNumber: CGWindowID?, windowFrame: CGRect?,
+        allowGlobalCursor: Bool,
+        syntheticPreference: SyntheticDeliveryPreference = .automatic
+    ) {
+        self.pid = pid
+        self.windowNumber = windowNumber
+        self.windowFrame = windowFrame
+        self.allowGlobalCursor = allowGlobalCursor
+        self.syntheticPreference = syntheticPreference
+    }
 }
 
 enum MouseButtonKind {
@@ -206,7 +231,9 @@ func deliverClick(
         pairs.append((down, up))
     }
 
-    if let windowNumber = context.windowNumber, let frame = context.windowFrame {
+    if context.syntheticPreference == .automatic,
+        let windowNumber = context.windowNumber, let frame = context.windowFrame
+    {
         let bridgedPairs = pairs.compactMap { pair -> (down: CGEvent, up: CGEvent)? in
             guard
                 let localDown = bridgedWindowEvent(from: pair.down, point: point, windowNumber: windowNumber, windowFrame: frame),
@@ -228,16 +255,29 @@ func deliverClick(
         }
     }
 
-    let status = skyLightStatus(LiveSkyLightEventPosting.shared)
-    let postedSkyLight = postSkyLightMouseClick(
-        point: point, button: button, clickCount: clickCount, context: context)
-    if postedSkyLight {
+    if context.syntheticPreference == .automatic {
+        let status = skyLightStatus(LiveSkyLightEventPosting.shared)
+        let postedSkyLight = postSkyLightMouseClick(
+            point: point, button: button, clickCount: clickCount, context: context)
+        if postedSkyLight {
+            return DeliveryOutcome(
+                tier: .skyLight,
+                fallbackReasons: syntheticFallbackReasons(
+                    context: context, bridgeSucceeded: false, skyLightStatus: .available)
+            )
+        }
+        let finalSkyLightStatus: SkyLightAttemptStatus = status == .available ? .unavailable : status
+
+        for pair in pairs {
+            pair.down.postToPid(context.pid)
+            pair.up.postToPid(context.pid)
+        }
         return DeliveryOutcome(
-            tier: .skyLight,
-            fallbackReasons: syntheticFallbackReasons(context: context, bridgeSucceeded: false, skyLightStatus: .available)
+            tier: .perPid,
+            fallbackReasons: syntheticFallbackReasons(
+                context: context, bridgeSucceeded: false, skyLightStatus: finalSkyLightStatus)
         )
     }
-    let finalSkyLightStatus: SkyLightAttemptStatus = status == .available ? .unavailable : status
 
     for pair in pairs {
         pair.down.postToPid(context.pid)
@@ -245,7 +285,7 @@ func deliverClick(
     }
     return DeliveryOutcome(
         tier: .perPid,
-        fallbackReasons: syntheticFallbackReasons(context: context, bridgeSucceeded: false, skyLightStatus: finalSkyLightStatus)
+        fallbackReasons: [.diagnosticTier3Forced]
     )
 }
 

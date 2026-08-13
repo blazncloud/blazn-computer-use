@@ -1,4 +1,5 @@
 import CoreGraphics
+import MCP
 import Testing
 
 @testable import computer_use_mcp
@@ -53,6 +54,15 @@ import Testing
 
     @Test func deliveryOutcomeDefaultsToNoFallbackReasons() {
         #expect(DeliveryOutcome(tier: .perWindow).fallbackReasons.isEmpty)
+    }
+
+    @Test func diagnosticTier3SelectionDefaultsToAutomatic() throws {
+        #expect(try diagnosticSyntheticDeliveryPreference([:]) == .automatic)
+    }
+
+    @Test func diagnosticTier3SelectionCanForcePerPidOnly() throws {
+        let args: [String: Value] = ["_diagnostic_delivery_tier": .string("tier3")]
+        #expect(try diagnosticSyntheticDeliveryPreference(args) == .perPidOnly)
     }
 
     // MARK: Telemetry surfacing
