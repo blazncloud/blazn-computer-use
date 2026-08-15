@@ -18,8 +18,8 @@ guidance instead of silently switching to a foreground path.
 
 ## Tool Requirements
 
-- `get_app_state`, `find`, `read_text`, `list_apps`, `list_windows`, and
-  `read_clipboard` are read-only and must not change foreground focus.
+- `get_app_state`, `list_apps`, `list_windows`, `read_clipboard`, and
+  `health_report` are read-only and must not change foreground focus.
 - `set_value`, `type_text` with `element_id`, `select_text`, AX button presses,
   and AX secondary actions should stay background safe when the target app
   implements the relevant Accessibility contract.
@@ -42,10 +42,6 @@ guidance instead of silently switching to a foreground path.
   the browser or document handler.
 - `manage_window raise` requires `allow_focus_change`. Other window actions may
   change visible state and still report telemetry so clients can recover.
-- `batch` and `run_skill` dispatch each step through the same funnel as the
-  underlying tool, so every step inherits that tool's background guarantees
-  and per-step gates; neither tool grants an escalation its steps could not
-  request individually.
 
 ## Result Telemetry
 

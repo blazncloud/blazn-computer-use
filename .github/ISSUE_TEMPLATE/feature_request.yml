@@ -23,7 +23,7 @@ body:
       label: Area
       description: Which part of the system does this touch?
       options:
-        - Perception (get_app_state / find / read_text)
+        - Perception (get_app_state / OCR / scoped state)
         - Action tools (click / type / scroll / drag / set_value)
         - Skills (teach / replay)
         - Safety / policy

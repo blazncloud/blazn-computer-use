@@ -49,32 +49,6 @@ without hijacking your cursor or stealing focus.**
   </tr>
 </table>
 
-<!--
-  SECOND MEDIA PLACEHOLDER — teach-mode record → replay, assets/teach-replay.gif.
-  Same rule: do NOT record yet; a later pass records both against the release
-  build (capture via ScreenCaptureKit through the real server — a plain
-  `screencapture` shell-out cannot see the agent-cursor overlay).
-  This clip should show, in one take:
-    1. record_skill_start, then the user (or agent) demonstrates a short task.
-    2. record_skill_stop → the task is saved as a named skill.
-    3. run_skill replays it at engine speed, resolving each role+label locator,
-       with the agent cursor gliding through the replayed steps.
-  The point: teach once, replay deterministically with no model in the loop.
--->
-
-<table align="center" width="100%">
-  <tr>
-    <td align="center" height="240">
-      <h3>🎓 Teach → replay — coming soon</h3>
-      <p><em>Placeholder for <code>assets/teach-replay.gif</code></em></p>
-      <p>Record a task once (<code>record_skill_start</code> → demonstrate →
-      <code>record_skill_stop</code>), then <code>run_skill</code> replays it at
-      engine speed — resolving each role+label locator, no model in the loop.</p>
-    </td>
-  </tr>
-</table>
-
----
 
 ## Table of contents
 
@@ -323,32 +297,18 @@ source map lives in
 ## Tools
 
 **Perceive** `get_app_state` (with `scope_element_id`/`max_elements` for huge
-windows, `skeleton: true` for a shallow overview of a large tree, `ocr: true` for
-apps that draw their own UI) · `find` (search elements by text — the fast way to
-locate a control) · `list_apps` · `list_windows` · `read_text` · `wait_for`
+windows, `skeleton: true` for a shallow overview of a large tree, and `ocr: true`
+for apps that draw their own UI) · `list_apps` · `list_windows`
 
 **Act** `click` · `type_text` · `press_key` · `scroll` · `drag` · `set_value` ·
-`select_text` · `perform_secondary_action` · `click_menu_item` · `page` (CSS
-selector web interaction with DOM verification where available) · `batch` (a
-short action sequence in one round-trip, stopping at the first failure)
+`select_text` · `perform_secondary_action`
 
 **System** `open_app` · `open_url` · `manage_window` · `read_clipboard` ·
 `write_clipboard` · `health_report`
 
-**Skills** `save_skill` · `run_skill` · `list_skills` · `get_skill` ·
-`delete_skill` · `record_skill_start` · `record_skill_stop` — teach/replay:
-capture a task once (the agent performs it, **or** the user demonstrates it with
-the recorder) and save it as a named, parameterized skill; element anchors are
-frozen into durable role + label locators that resolve uniquely on every run,
-so the skill survives app restarts and replays at engine speed with no model
-in the loop. Each replayed step passes the same per-step safety gates as a live
-action, steps can assert their effect (`expect`, in `wait_for` terms) and extract
-data (`read_text` steps return their text in the run result), and a step that is
-missing or ambiguous stops the run with a report naming the nearest candidates — fix that step, re-save (or
-resume with `start_at_step`), run again.
-
-Every interaction tool accepts **either** a stable element id **or** raw
-screenshot coordinates.
+Element actions use ids from `get_app_state`; coordinate-capable tools also
+accept raw screenshot coordinates. The intentionally small surface keeps
+perception, delivery, and verification in one inspectable path.
 
 Action results return a reduced-resolution screenshot to keep the agent loop fast,
 and skip resending the element tree when the action changed nothing (existing ids
@@ -409,8 +369,8 @@ Two ways to keep large windows from blowing up the tree:
   viewport-frame intersection — instead of a blind first-N prefix that ignores
   scroll position. Off-window items are summarised as a count on the container's
   line (never silently dropped), and materialised rows retain live-handle identity
-  while the app keeps the same AX objects. `find` and skill replay opt out and see
-  every element.
+  while the app keeps the same AX objects. Use `scope_element_id` to inspect a
+  specific retained container with the full element budget.
 
 ## Requirements
 
@@ -459,7 +419,6 @@ key in `~/.config/computer-use-mcp.json` (env wins):
 | `ax_timeout` | Per-call accessibility timeout in seconds (default 2). |
 | `ax_element_timeout` | Per-element AX messaging timeout during tree traversal (default 0.25s). |
 | `viewport_probe_timeout` | Tighter AX timeout for dense-collection viewport frame probes (default 0.05s). |
-| `read_text_visible_threshold` | Character count above which `read_text` auto-switches to the visible-range path (default 50000). |
 | `no_app_lease` | Disable per-app session arbitration. |
 | `app_lease_seconds` | How long an app stays leased to a session after its last action (default 10). |
 | `no_interference_yield` | Disable yielding to real user input (yield is on by default). |

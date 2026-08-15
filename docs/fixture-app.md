@@ -85,33 +85,8 @@ Verified (launched while Finder was frontmost):
 | Heading | `Fixture Web Heading` (AXHeading) | Web-AX heading is reachable via skeleton traversal. |
 | Link | `Fixture Web Link` (AXLink, Press) | Web link exposes an actionable Press. |
 | DOM-mutate button | `Mutate DOM` (AXButton, Press) | Read-act-read across the web boundary: pressing it changes the `unmutated` paragraph's text to `mutated`, observable as a web-AX value change. |
-| Article | 40 `Article paragraph N` static texts | Long scrollable web content for scroll + visible-range read tests. |
+| Article | 40 `Article paragraph N` static texts | Long scrollable web content for scroll and scoped-state tests. |
 
-### Page tool live check
-
-Workers must not launch or drive the fixture without explicit approval. The
-orchestrator can verify the `page` tool against the WKWebView pane with the
-release/debug binary and meta output enabled:
-
-```bash
-swift build
-.build/debug/ComputerUseFixture
-COMPUTER_USE_MCP_SHOW_META=1 .build/debug/computer-use-mcp call page '{"app":"ComputerUseFixture","selector":"#web-mutate-button","verify_selector":"#mutable","include_screenshot":false}'
-COMPUTER_USE_MCP_SHOW_META=1 .build/debug/computer-use-mcp call get_app_state '{"app":"ComputerUseFixture","include_screenshot":false,"skeleton":true}'
-```
-
-Expected `page` result for the fixture WKWebView path:
-
-- The action note says it clicked `#web-mutate-button` through AX fallback.
-- `_meta["computer-use-mcp/outcome"].classification` is
-  `effect_not_verified`, with `failure_domain` `verification`, because only AX
-  fallback evidence is available and the tool cannot prove the DOM through JS in
-  WKWebView.
-- `_meta["computer-use-mcp/outcome"].verification.notes` includes
-  `Only AX fallback evidence was available; DOM verification was not possible.`
-- The follow-up state read shows the web pane text changed from `unmutated` to
-  `mutated`, proving the fixture-side effect for the orchestrator without
-  overstating the tool's own DOM verifier.
 
 ## Window resize clamp
 

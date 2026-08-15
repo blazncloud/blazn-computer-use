@@ -25,8 +25,8 @@ Keep this file in sync with the README when capabilities change.
 
 > An open, agent-agnostic MCP server that lets any client see and operate the apps
 > on your Mac — in the background, without hijacking the cursor or stealing focus.
-> Accessibility-first with pixel fallback, verified action outcomes, teach/replay
-> skills, a visible agent cursor, and multi-session safety.
+> Accessibility-first with pixel fallback, verified action outcomes, a visible
+> agent cursor, and multi-session safety.
 
 ## Long description
 
@@ -42,9 +42,8 @@ Keep this file in sync with the README when capabilities change.
 > focus, so you keep working while the agent works.
 >
 > Every mutating action re-reads its target and reports whether the effect actually
-> occurred (not just whether the call returned). Tasks can be taught once — by the
-> agent or by user demonstration — and replayed at engine speed as durable,
-> self-healing skills. A shared engine daemon with per-app leases keeps concurrent
+> occurred (not just whether the call returned). A shared engine daemon with
+> per-app leases keeps concurrent
 > agents from colliding, a visible self-drawn cursor lets you watch what the agent
 > does, and server-side safety gates (destructive-action confirmation, browser URL
 > policy, human-interference yield, screen-lock pause) run independent of the
@@ -53,18 +52,15 @@ Keep this file in sync with the README when capabilities change.
 ## Categories / tags
 
 `computer-use`, `macos`, `automation`, `accessibility`, `desktop`, `gui`, `agent`,
-`skills`, `screen-capture`
+`screen-capture`
 
 ## Tools (surface)
 
-- **Perceive:** `get_app_state`, `find`, `list_apps`, `list_windows`, `read_text`,
-  `wait_for`
+- **Perceive:** `get_app_state`, `list_apps`, `list_windows`
 - **Act:** `click`, `type_text`, `press_key`, `scroll`, `drag`, `set_value`,
-  `select_text`, `perform_secondary_action`, `click_menu_item`, `batch`
+  `select_text`, `perform_secondary_action`
 - **System:** `open_app`, `open_url`, `manage_window`, `read_clipboard`,
-  `write_clipboard`
-- **Skills:** `save_skill`, `run_skill`, `list_skills`, `get_skill`,
-  `delete_skill`, `record_skill_start`, `record_skill_stop`
+  `write_clipboard`, `health_report`
 
 ## Config snippet (generic MCP client)
 

@@ -57,7 +57,7 @@ All of these are **UNKNOWN-STATIC**; the "Predicted" column is the expected runt
 | Freedom | com.80pct.FreedomPlatform | AppKit; `LSUIElement=true` | RICH (menu-bar only) |
 | GarageBand | com.apple.garageband10 | AppKit (37 Apple frameworks) | RICH structurally; heavy custom-drawn controls may need OCR |
 | General Work | io.fant.colleague | Electron Framework | SPARSE-ENABLEABLE |
-| Ghostty | com.mitchellh.ghostty | Native Swift/AppKit shell, GPU-rendered terminal surface | RICH chrome; terminal grid likely sparse → OCR/read_text fallback |
+| Ghostty | com.mitchellh.ghostty | Native Swift/AppKit shell, GPU-rendered terminal surface | RICH chrome; terminal grid likely sparse → OCR or scoped-state fallback |
 | Google Chrome | com.google.Chrome | Chromium (Google Chrome Framework) | SPARSE-ENABLEABLE (canonical opt-in responder) |
 | Keynote Creator Studio | com.apple.Keynote | AppKit (renamed Keynote) | RICH |
 | Ledger Wallet | com.ledger.live | Electron Framework | SPARSE-ENABLEABLE |

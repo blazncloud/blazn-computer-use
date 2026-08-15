@@ -123,12 +123,11 @@
   <a href="#outcome">7 · Verifier-first outcomes</a>
   <a href="#gates">8 · Safety gates</a>
   <a href="#overlay">9 · Agent cursor overlay</a>
-  <a href="#skills">10 · Skills & batch</a>
   <div class="grp">Reference</div>
-  <a href="#tools">11 · Tool catalog</a>
-  <a href="#map">12 · Source map</a>
-  <a href="#contracts">13 · The contracts</a>
-  <a href="#mental">14 · Mental model recap</a>
+  <a href="#tools">10 · Tool catalog</a>
+  <a href="#map">11 · Source map</a>
+  <a href="#contracts">12 · The contracts</a>
+  <a href="#mental">13 · Mental model recap</a>
 </nav>
 
 <main>
@@ -141,7 +140,7 @@
     <span class="pill">Accessibility + ScreenCaptureKit + CoreGraphics</span>
     <span class="pill">Shared per-user daemon</span>
     <span class="pill">~13k LOC</span>
-    <span class="pill">30 tools</span>
+    <span class="pill">17 tools</span>
   </div>
 </header>
 
@@ -251,7 +250,7 @@
   <p>Coordinate actions <em>require</em> a prior snapshot (it carries window origin, scale, pixel bounds). Out-of-bounds coordinates are rejected, not clipped. <span class="fp">Core/HitTest.swift</span></p>
 
   <h3>Cheap loops: diffs, not re-sends</h3>
-  <p>After a mutating action, the result returns <em>reduced</em> fresh state. If the tree didn't change, it says "existing ids remain valid" instead of resending. If it did, it returns a compact <strong>diff</strong> — changed (<span class="mono">~</span>), appeared (<span class="mono">+</span>), disappeared (<span class="mono">−</span>) — falling back to the full tree only when &gt;50% churned. Fallbacks for sparse UIs: <code>find</code> (walks a deeper tree, up to 5000 elements, no new screenshot), <code>read_text</code> (long AX values), and <code>ocr:true</code> (Vision OCR boxes when AX is thin). <span class="fp">Core/TreeBuilder.swift · Core/OCR.swift</span></p>
+  <p>After a mutating action, the result returns <em>reduced</em> fresh state. If the tree didn't change, it says "existing ids remain valid" instead of resending. If it did, it returns a compact <strong>diff</strong> — changed (<span class="mono">~</span>), appeared (<span class="mono">+</span>), disappeared (<span class="mono">−</span>) — falling back to the full tree only when &gt;50% churned. For sparse UIs, use <code>ocr:true</code>; for truncated trees, scope <code>get_app_state</code> to a retained container. <span class="fp">Core/TreeBuilder.swift · Core/OCR.swift</span></p>
 </section>
 
 <!-- 6 -->
@@ -309,25 +308,10 @@
   <div class="callout warn"><span class="lbl">Verification gotcha</span>A plain <code>screencapture</code> shell-out <em>cannot see</em> this overlay. To prove the cursor renders, capture via ScreenCaptureKit through the real server.</div>
 </section>
 
-<!-- 10 -->
-<section id="skills">
-  <h2><span class="n">10</span>Skills &amp; batch — teach once, replay with no model</h2>
-  <div class="grid2">
-    <div class="card">
-      <h4>batch</h4>
-      <p>Up to 10 app-scoped actions (plus <code>wait_for</code>) against <em>one</em> app in a single round-trip. Every step passes the normal funnel and per-step gates. All steps validated before any runs; execution stops at the first failure and reports which already ran. Intermediate steps skip state for speed; the final step returns fresh state. Can't nest itself or <code>run_skill</code>. <span class="fp">Tools/BatchTool.swift</span></p>
-    </div>
-    <div class="card">
-      <h4>Skills (record → replay)</h4>
-      <p><code>save_skill</code> freezes a performed task into a role + stable-label anchor. <code>run_skill</code> requires exactly one live match and replays through the same per-step gates <em>with no model in the loop</em>. <code>{{param}}</code> placeholders substitute into string args; steps may assert with <code>expect</code>. A missing or ambiguous anchor stops the run and names it. <span class="fp">Skills/Skill.swift · SkillStore.swift · SkillTools.swift · Recorder.swift · ReplayVerdict.swift</span></p>
-    </div>
-  </div>
-  <p>Both are just deterministic re-drivers of the underlying tools: neither grants an escalation its steps couldn't request individually. Skills persist as validated JSON under Application Support; <code>record_skill_start</code>/<code>stop</code> capture a demonstration live.</p>
-</section>
 
 <!-- 11 -->
 <section id="tools">
-  <h2><span class="n">11</span>Tool catalog — 30 tools</h2>
+  <h2><span class="n">10</span>Tool catalog — 17 tools</h2>
   <p>Schemas + model-facing descriptions live in <span class="fp">Tools/Catalog.swift</span>; handlers in the sibling <span class="fp">Tools/*.swift</span>. Mutating tools (red) pass the full gate stack and fail closed without a daemon; read-only tools (green) can fall back in-process.</p>
   <div class="legend">
     <span><span class="sw" style="background:#1e1615;border:1px solid #3a2b2b"></span> mutating — gated, needs daemon</span>
@@ -335,43 +319,38 @@
   </div>
   <h4>Perception (read-only)</h4>
   <div class="toollist">
-    <span class="tchip ro">get_app_state</span><span class="tchip ro">find</span><span class="tchip ro">read_text</span><span class="tchip ro">list_apps</span><span class="tchip ro">list_windows</span><span class="tchip ro">read_clipboard</span><span class="tchip ro">wait_for</span><span class="tchip ro">get_skill</span><span class="tchip ro">list_skills</span><span class="tchip ro">health_report</span>
+    <span class="tchip ro">get_app_state</span><span class="tchip ro">list_apps</span><span class="tchip ro">list_windows</span><span class="tchip ro">read_clipboard</span><span class="tchip ro">health_report</span>
   </div>
   <h4>Interaction (mutating)</h4>
   <div class="toollist">
-    <span class="tchip mut">click</span><span class="tchip mut">type_text</span><span class="tchip mut">set_value</span><span class="tchip mut">press_key</span><span class="tchip mut">scroll</span><span class="tchip mut">drag</span><span class="tchip mut">select_text</span><span class="tchip mut">click_menu_item</span><span class="tchip mut">perform_secondary_action</span><span class="tchip mut">page</span><span class="tchip mut">write_clipboard</span>
+    <span class="tchip mut">click</span><span class="tchip mut">type_text</span><span class="tchip mut">set_value</span><span class="tchip mut">press_key</span><span class="tchip mut">scroll</span><span class="tchip mut">drag</span><span class="tchip mut">select_text</span><span class="tchip mut">perform_secondary_action</span><span class="tchip mut">write_clipboard</span>
   </div>
   <h4>Apps, windows &amp; navigation (mutating)</h4>
   <div class="toollist">
     <span class="tchip mut">open_app</span><span class="tchip mut">open_url</span><span class="tchip mut">manage_window</span>
   </div>
-  <h4>Orchestration &amp; skills (mutating)</h4>
-  <div class="toollist">
-    <span class="tchip mut">batch</span><span class="tchip mut">run_skill</span><span class="tchip mut">save_skill</span><span class="tchip mut">delete_skill</span><span class="tchip mut">record_skill_start</span><span class="tchip mut">record_skill_stop</span>
-  </div>
-  <p class="fp" style="margin-top:14px">Exact mutating set: click, type_text, set_value, press_key, scroll, drag, select_text, click_menu_item, perform_secondary_action, page, write_clipboard, open_app, open_url, manage_window, save_skill, delete_skill, record_skill_start, record_skill_stop, run_skill, batch — see <span class="fp">ToolKit/ToolSpec.swift:23</span> (<code>mutatingToolNames</code>).</p>
+  <p class="fp" style="margin-top:14px">Exact mutating set: click, type_text, set_value, press_key, scroll, drag, select_text, perform_secondary_action, write_clipboard, open_app, open_url, manage_window — see <span class="fp">ToolKit/ToolSpec.swift</span> (<code>mutatingToolNames</code>).</p>
 </section>
 
 <!-- 12 -->
 <section id="map">
-  <h2><span class="n">12</span>Source map — where to look</h2>
+  <h2><span class="n">11</span>Source map — where to look</h2>
   <p>Everything is under <span class="fp">Sources/computer-use-mcp/</span>. Four layers:</p>
   <table>
     <tr><th>Layer</th><th>Files</th><th>What lives here</th></tr>
     <tr><td><strong>Entry / wiring</strong></td><td class="fp">main.swift · Serve.swift · Dispatch.swift · Call.swift · Doctor.swift · HealthReport.swift · Version.swift</td><td>Subcommand routing, the shared dispatch funnel, rate limiter, per-call logging.</td></tr>
     <tr><td><strong>ToolKit</strong></td><td class="fp">ToolKit/ToolSpec.swift · Schema.swift</td><td>Tool-spec type, mutating-tool set, typed argument accessors, JSON schema helpers.</td></tr>
-    <tr><td><strong>Tools</strong> <span class="fp">(the public surface)</span></td><td class="fp">Tools/Catalog.swift · Perception.swift · ClickTool.swift · InputTools.swift · TextTools.swift · SystemTools.swift · PageTool.swift · BatchTool.swift · FindTool.swift · Handlers.swift · HealthReportTool.swift</td><td>Schemas + handlers for all 30 tools. <span class="fp">Catalog.swift</span> (818 loc) and <span class="fp">PageTool.swift</span> (977 loc) are the big ones.</td></tr>
-    <tr><td><strong>Core</strong> <span class="fp">(the engine)</span></td><td class="fp">Core/Snapshot.swift · TreeBuilder.swift · AX.swift · Input.swift · SkyLightInput.swift · Screenshot.swift · HitTest.swift · ActionOutcome.swift · FocusTelemetry.swift · MetricsRecorder.swift · InterferenceGuard.swift · URLPolicy.swift · SafetyPolicy.swift · SessionPower.swift · Window.swift · WindowMotion.swift · ScrollRouting.swift · AppResolver.swift · Target.swift · Keymap.swift · OCR.swift · TextExtraction.swift · GeometrySanitization.swift · Telemetry.swift · Config.swift · CrossProcessLock.swift · ErrorCodes.swift · ActionChains.swift · PointTarget.swift</td><td>Perception, the dispatch ladder, verification, safety, coordinate math, telemetry. This is the real substance of the project.</td></tr>
+    <tr><td><strong>Tools</strong> <span class="fp">(the public surface)</span></td><td class="fp">Tools/Catalog.swift · Perception.swift · ClickTool.swift · InputTools.swift · TextTools.swift · SystemTools.swift · Handlers.swift · HealthReportTool.swift</td><td>Schemas + handlers for the focused 17-tool surface.</td></tr>
+    <tr><td><strong>Core</strong> <span class="fp">(the engine)</span></td><td class="fp">Core/Snapshot.swift · TreeBuilder.swift · AX.swift · Input.swift · SkyLightInput.swift · Screenshot.swift · HitTest.swift · ActionOutcome.swift · FocusTelemetry.swift · MetricsRecorder.swift · InterferenceGuard.swift · URLPolicy.swift · SafetyPolicy.swift · SessionPower.swift · Window.swift · WindowMotion.swift · ScrollRouting.swift · AppResolver.swift · Target.swift · Keymap.swift · OCR.swift · GeometrySanitization.swift · Telemetry.swift · Config.swift · CrossProcessLock.swift · ErrorCodes.swift · PointTarget.swift</td><td>Perception, the dispatch ladder, verification, safety, coordinate math, telemetry. This is the real substance of the project.</td></tr>
     <tr><td><strong>Daemon</strong></td><td class="fp">Daemon/DaemonServer.swift · DaemonClient.swift · DaemonProtocol.swift · AppLeases.swift</td><td>Socket server, auth handshake, framing/limits, per-app leases.</td></tr>
     <tr><td><strong>Overlay</strong></td><td class="fp">Overlay/OverlayHelper.swift · AgentCursor.swift · OverlayTransport.swift</td><td>The cosmetic agent-cursor helper process + FIFO transport.</td></tr>
-    <tr><td><strong>Skills</strong></td><td class="fp">Skills/SkillStore.swift · SkillTools.swift · Recorder.swift · Skill.swift · ReplayVerdict.swift</td><td>Teach/replay: persistence, validation, templating, unique semantic anchoring.</td></tr>
   </table>
   <p>Plus: <span class="fp">Sources/ComputerUseFixture/</span> — a deterministic AppKit GUI fixture with stable AX identifiers, for the end-to-end "truth suite"; <span class="fp">Tests/ComputerUseMCPTests/</span>; <span class="fp">scripts/</span> (live/CI eval harnesses like <code>live_background_eval.py</code>); <span class="fp">docs/</span> (the contracts below); <span class="fp">packaging/homebrew/</span>.</p>
 </section>
 
 <!-- 13 -->
 <section id="contracts">
-  <h2><span class="n">13</span>The contracts — read these next</h2>
+  <h2><span class="n">12</span>The contracts — read these next</h2>
   <p>This repo is unusually spec-driven: the behaviour is written down as <em>contracts</em> that tests, tool docs, and evals all reference. If you read nothing else after this page, read these two.</p>
   <div class="grid2">
     <div class="card"><h4><a href="architecture/modality-contract.md">Modality Contract</a></h4>The production bible. A surface-by-surface matrix (observation, capture scope, element identity, dispatch ladder, leases, safety) with default contract + escape hatch + failure language for each. Every claim ends with a source anchor.</div>
@@ -386,7 +365,7 @@
 
 <!-- 14 -->
 <section id="mental">
-  <h2><span class="n">14</span>Mental model recap</h2>
+  <h2><span class="n">13</span>Mental model recap</h2>
   <ol>
     <li><strong>One binary, three roles.</strong> N thin <code>serve</code> shims → one <code>daemon</code> engine → one <code>overlay</code> cursor. The daemon owning all shared state is why concurrent agents can't collide.</li>
     <li><strong>One funnel.</strong> Every call — from any entry point — passes the same gates in <code>dispatchTool</code>. Uniform guarantees come from that single chokepoint.</li>
@@ -395,7 +374,7 @@
     <li><strong>Never lie.</strong> Background delivery has no OS success signal, so the server <em>verifies the effect</em> and reports a four-value verdict + focus telemetry instead of claiming success.</li>
     <li><strong>Yield to the human.</strong> Interference guard, screen-lock pause, URL policy, confirmation gating — all server-side, all recoverable errors, none the agent can casually disable.</li>
   </ol>
-  <div class="callout key"><span class="lbl">Where to poke next</span>Tell me a thread you want to pull — e.g. "walk me through a <code>click</code> end to end", "how does live-handle validation work in <span class="fp">Snapshot.swift</span>", "show me the daemon auth handshake", or "how does <code>page</code> decide Chromium vs WKWebView" — and we'll go deep from here.</div>
+  <div class="callout key"><span class="lbl">Where to poke next</span>Tell me a thread you want to pull — e.g. "walk me through a <code>click</code> end to end", "how does live-handle validation work in <span class="fp">Snapshot.swift</span>", "show me the daemon auth handshake", or "how does scoped state preserve identity" — and we'll go deep from here.</div>
 </section>
 
 <footer>

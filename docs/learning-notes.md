@@ -444,9 +444,9 @@ Important differences:
 - **Consent/packaging:** Codex uses a separately signed TCC-owning service,
   sender authorization, and app approval state. We primarily use one
   multipurpose binary, deterministic policy, and `confirm:true`.
-- **Tools:** Codex exposes roughly nine focused primitives and leaves workflow
-  orchestration to the agent. Our roughly thirty tools include browser `page`,
-  find/wait, batching, and record/save/replay workflow features.
+- **Tools:** both systems expose focused computer-use primitives and leave
+  workflow orchestration to the agent. Our public surface is 17 tools: ten
+  perception/action primitives plus seven app, system, and diagnostic tools.
 
 Highest-priority ideas to adopt:
 
@@ -491,8 +491,6 @@ Highest-priority ideas to adopt:
 - `Sources/computer-use-mcp/Core/InterferenceGuard.swift`
 - `Sources/computer-use-mcp/Overlay/AgentCursor.swift`
 - `Sources/computer-use-mcp/Overlay/OverlayHelper.swift`
-- `Sources/computer-use-mcp/Skills/Recorder.swift`
-- `Sources/computer-use-mcp/Skills/SkillTools.swift`
 
 Detailed visual guide:
 [Computer Use MCP architecture guide](/Users/matthewlam/.codex/artifacts/reports/2026-07-25-computer-use-mcp-architecture-guide.html)

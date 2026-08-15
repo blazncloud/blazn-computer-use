@@ -35,11 +35,6 @@ safety-sensitive even when they look like ordinary Swift edits.
   local real-surface verification plan.
 - `Sources/computer-use-mcp/Tools/`: MCP tool handlers and catalog. Keep schemas
   stable and verify CLI/MCP smoke behavior when changing contracts.
-- `Sources/computer-use-mcp/Skills/`: teach/replay surface —
-  `Skill.swift` (model + name validation), `SkillStore.swift` (Application
-  Support JSON persistence), `SkillTools.swift` (save/run/list/get/delete
-  handlers), `Recorder.swift` (listen-only event-tap teach mode),
-  `ReplayVerdict.swift` (per-step structured replay outcomes).
 - `Sources/computer-use-mcp/Daemon/`: shared engine process, socket protocol,
   and app leases. Verify multi-session and daemon fail-fast assumptions before
   claiming concurrency safety; when touching leases or the socket path, confirm

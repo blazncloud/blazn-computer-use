@@ -20,9 +20,6 @@ As-built notes (where the code deviates from this design):
   window actions emit no outcome block (settle-poll + already-in-state depth is
   window-verify task #6). Scroll extent detection is best-effort off the
   container's own scroll bar (fuller ranking is scroll task #7).
-- `batch` aggregation (§8) is not yet implemented: each sub-action verifies
-  individually through dispatch, but the batch result carries only the final
-  step's outcome block.
 - The verifier is always on. It shipped behind a temporary `COMPUTER_USE_MCP_VERIFY`
   flag to A/B the latency overhead (~3% median on a click); the flag has since been
   removed and the reread runs unconditionally.
@@ -342,7 +339,6 @@ the whole-window bit. Reread failure ⇒ at worst `verifier_ambiguous`.
 | **set_value** | `value` (numeric-aware), `selected` for toggles | `renderedTextChanged` | `after.value` equals requested (or toggle reached desired) |
 | **scroll** | — (container) | `scrollPositionChanged` (AXScrollBar value or first-visible-child identity), `renderedTextChanged` | scroll position moved OR visible children changed |
 | **manage_window** | — | `windowFrameChanged` (AXPosition/AXSize) | frame reached requested within tolerance (§3.4) |
-| **click_menu_item** | — | `renderedTextChanged`, `focusedElementChanged` | tree changed after the menu action fired |
 
 Scroll's "visible children changed" uses the same `treeFingerprint` machinery
 scoped to the scroll container — no new capture primitive. Window frame diff
@@ -462,18 +458,14 @@ Window verification depends on the settle-poll + clamp detection from task #6;
 this contract defines the *classification*, that task provides the *observed
 frame after settling*.
 
-### 4.6 click_menu_item and perform_secondary_action
+### 4.6 perform_secondary_action
 
 | Scenario | Correct classification | Predicate |
 |---|---|---|
-| Menu item fires, UI changes | `success` | rendered text or focused element changed after the action |
-| Menu item is a no-op toggle already in state (e.g. "Show Sidebar" already shown) | `verifier_ambiguous` | menu items rarely expose readable state; if no window change and we can't read the item's mark → ambiguous, note it |
-| Menu item disabled | `unsupported` (unsupported) | `AXEnabled == false` on the item |
 | Secondary action (right-click / AXShowMenu) opens context menu | `success` | a menu element appeared in the tree (focused element / new AXMenu) |
 
-Menus are the family most prone to `verifier_ambiguous`, and that's correct:
-menu semantics are frequently unobservable via AX, and we must not fabricate
-either success or failure. Ambiguous-but-dispatched is the honest answer.
+Secondary actions are prone to `verifier_ambiguous`: context-menu semantics are
+often hard to observe via AX, and the runtime must not fabricate success.
 
 ### 4.7 The decision procedure (pseudocode)
 
@@ -620,8 +612,8 @@ neither worker hard-codes the other's JSON path.
    note text stay green; new tests assert the added sentence).
 4. **The focus block is preserved byte-for-byte** unless §6's `delivery` split
    is adopted, which is a coordinated Wave-1/Wave-2 change with its own tests.
-5. **Read-only tools stay unverified.** `get_app_state`, `find`, `read_text`,
-   `read_clipboard`, `list_apps`, `list_windows`, `wait_for` never produce an
+5. **Read-only tools stay unverified.** `get_app_state`, `read_clipboard`,
+   `list_apps`, `list_windows`, and `health_report` never produce an
    `outcome` block — there's no effect to verify. Only the `appScopedToolNames`
    mutating set (`ToolSpec.swift:30-34`) plus `open_app`/`open_url` opt in.
 
@@ -647,16 +639,12 @@ riskiest reduction logic (click) is proven first on the fixture.
    container ranking (share the container resolution).
 6. **`manage_window`** — depends on window-verify task #6 for the settled frame;
    this contract consumes its clamp/settle signal.
-7. **`click_menu_item`, `perform_secondary_action`, `drag`** — highest
+7. **`perform_secondary_action`, `drag`** — highest
    `verifier_ambiguous` rate; land last, accept ambiguity as the honest default.
 
 **Stays unverified:** all read-only tools (§7.5); `press_key` with no target
 element (global key — nothing to reread; may still get whole-window `ui_changed`
-but no `outcome` block); `write_clipboard`/`read_clipboard`; skill record/replay
-tools (`run_skill` verifies per-step through the tools it drives, not as a unit).
-`batch` aggregates: it surfaces each sub-action's `outcome` in an array under its
-own `_meta`, and the batch's own classification is `success` iff every sub-action
-is `success`/`verifier_ambiguous` (no `effect_not_verified`).
+but no `outcome` block); `write_clipboard`/`read_clipboard`.
 
 ---
 
@@ -746,7 +734,6 @@ field set is the thing to trim.
 | `Tools/TextTools.swift` | set_value/type_text: formalize existing readback into the contract; coercion → `unsupported` |
 | `Tools/InputTools.swift` | scroll: extent detection + verifier |
 | `Tools/SystemTools.swift` | manage_window: consume settle/clamp signal from task #6 |
-| `Tools/BatchTool.swift` | aggregate sub-outcomes |
 | `Core/FocusTelemetry.swift` | (if §6 split adopted) move `delivery_tier`/`ui_changed` to new `delivery` block |
 | `Tests/…` | reducer unit tests (§9.1); fixture E2E (§9.2); regression guards (§9.3) |
 </content>

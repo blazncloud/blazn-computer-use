@@ -16,13 +16,11 @@ window metadata, and a shared local daemon in one trusted user session.
 
 | Surface | Default contract | Fallback or escape hatch | Primary failure language |
 | --- | --- | --- | --- |
-| Observation | `get_app_state` returns one target window's Accessibility tree plus a ScreenCaptureKit screenshot. Element boxes and coordinate inputs are in the returned screenshot's pixel space. | `find` searches a deeper AX tree without a new screenshot. `read_text` returns long AX values. `ocr:true` adds Vision OCR boxes when AX is sparse. | Missing Accessibility permission, missing Screen Recording permission, no running app, no queryable window, no capturable on-screen window, ScreenCaptureKit timeout. |
+| Observation | `get_app_state` returns one target window's Accessibility tree plus a ScreenCaptureKit screenshot. Element boxes and coordinate inputs are in the returned screenshot's pixel space. | `scope_element_id` drills into a retained subtree; `ocr:true` adds Vision OCR boxes when AX is sparse. | Missing Accessibility permission, missing Screen Recording permission, no running app, no queryable window, no capturable on-screen window, ScreenCaptureKit timeout. |
 | Capture scope | Window capture is desktop-independent for the target app window and does not foreground the app. It requires the window to be on screen and capturable by ScreenCaptureKit. | `include_screenshot:false` keeps tree-only action results. `include_state:false` returns only a confirmation note. | "Screenshot unavailable" may be returned with a usable AX tree; capture timeout includes `replayd` recovery guidance. |
 | Action target | Interaction tools target a running app by name or bundle id. A window title may select a specific window for perception and some window operations. | `open_app` can launch an app without activation by default. `list_windows` disambiguates windows. | Unknown or non-running app, no matching window title, app quit or crashed after resolution. |
 | Element identity | `element_id` values are generation-tagged per pid, for example `e12@s3`, but validity is membership in the current in-memory snapshot. A surviving `AXUIElement` handle carries its id forward. Before acting, the daemon proves that exact handle is live, still has the captured semantic identity, and remains attached to the captured process/window. | Call `get_app_state` or use the state/diff returned after an action. Use `scope_element_id` when the tree was truncated. | A recreated, detached, missing, semantically changed, or ambiguously attached element produces a clear retry-with-fresh-state error. |
 | Post-action state | Mutating tools return reduced-detail fresh state. An unchanged tree is not resent (existing ids remain valid); a changed tree returns a compact diff of changed, appeared, and disappeared elements, with surviving elements keeping their ids. | `include_state:false` or `include_screenshot:false` reduce the result further. `get_app_state` always returns the full tree and full-detail pixels. | Diffs fall back to the full tree when more than half the elements changed. Scoped snapshots are never diffed against. |
-| Batched actions | `batch` runs up to 10 app-scoped actions (plus `wait_for`) against one app in one round-trip. Every step passes the normal dispatch funnel and server-side gates. All steps are validated before any runs. | Intermediate steps skip state for speed; the final step returns fresh state, which composes with diffs. | Execution stops at the first failure and reports which steps already ran. `batch` cannot nest itself or `run_skill`. |
-| Saved skills | `save_skill` freezes an element anchor as role plus stable label; `run_skill` requires exactly one live match and replays through the same per-step gates with no model in the loop. `list_skills` and `delete_skill` manage the store. | `{{param}}` placeholders substitute into string arguments; steps may assert their effect with `expect` (in `wait_for` terms). | Unlabeled or duplicate role+label controls cannot be replayed safely and fail instead of guessing. A missing anchor or failed expectation stops the run with the step and reason. `delete_skill` requires `confirm`. |
 | Coordinate identity | Raw `x` and `y` are screenshot pixels from the latest snapshot for that app. They are bounds-checked, converted to global screen points, then optionally hit-tested back to an AX element for labels and safety gates. | Use coordinates when the target is absent from AX, custom drawn, or found by OCR. | Coordinates outside the latest screenshot are rejected; coordinates require a prior state capture. |
 | Dispatch ladder | Left click prefers AX actions first, then window-routed process events, then per-pid CoreGraphics events. AX-backed text/value/menu/window operations use Accessibility directly. Scroll and drag use targeted event delivery. | `allow_global_cursor:true` enables the real-cursor/session-tap path for clicks. `press_key` can use global keyboard delivery only when the target app is already foreground. | Background event posting is app-dependent and has no reliable success signal, so global escalation is explicit rather than automatic. |
 | Foreground guarantee | Default pointer and key delivery does not activate the target app, move the real cursor, or steal user focus. `open_app` also avoids activation by default. | `open_app activate:true`, `manage_window raise`, or explicit global cursor/keyboard modes can affect focus or visible ordering. | Global keyboard delivery fails if requested while the target app is not foreground. Apps that require real focus may ignore background events. |
@@ -52,10 +50,6 @@ carries a compact diff — changed (`~`), appeared (`+`), and disappeared (`-`)
 elements — instead of a full re-send. Diffs fall back to the full tree when
 more than half the elements changed; `get_app_state` always returns the full
 tree, and scoped snapshots are never diffed against.
-
-`find` is a search surface, not a capture surface. It walks up to 5000 AX
-elements and persists fresh ids, but it keeps coordinates in the last screenshot
-scale because it does not capture a new screenshot.
 
 `ocr:true` is a fallback for custom-drawn or sparse AX UIs. OCR boxes are still
 reported in screenshot pixels and should normally be used with coordinate
@@ -92,7 +86,7 @@ coordinates outside the latest screenshot rather than clipping or guessing.
 Dispatch is intentionally AX-first and event-last:
 
 1. **AX action or attribute**: `AXPress`, `AXShowMenu`, value setting, text
-   selection, menu selection, and window attributes. This is precise,
+   selection and window attributes. This is precise,
    background-capable, and posts no input event.
 2. **Per-window event**: when the target AX window can be mapped to a
    `CGWindowID`, the server bridges an `NSEvent` with that `windowNumber` and
@@ -113,37 +107,6 @@ global-cursor/focus-change retry. AX-tier actions fail loudly and get no hint.
 The caller inspects the returned state and chooses whether to retry with an
 escape hatch.
 
-## Batched Actions
-
-`batch` runs up to 10 app-scoped actions (plus `wait_for`) against one app in
-a single round-trip. Every step goes through the normal dispatch funnel, so
-safety confirmation, interference yield, and the URL policy apply per step.
-All steps are validated before any runs; execution stops at the first failure
-and reports which steps already ran — an invalid element id is the built-in
-brake when the UI does something unexpected. Intermediate steps skip state for
-speed; the final step returns fresh state, which composes with state diffs
-into a few lines for the whole sequence. One app per batch keeps lease
-arbitration coherent, and `batch` cannot nest itself.
-
-## Skills: Save And Replay
-
-`save_skill`, `run_skill`, `list_skills`, and `delete_skill` form a
-teach/replay surface. An agent performs a task once and saves it as a named,
-parameterized skill; `element_id` anchors are frozen as role plus stable label
-at save time, and every run requires one unique role+label match in the live
-tree, so skills can survive app restarts without inheriting the runtime's live
-AX handles. `{{param}}`
-placeholders substitute into any string argument, and steps may assert their
-effect with `expect` (in `wait_for` terms).
-
-Replay dispatches each step through the normal funnel, so per-step safety
-confirmation, interference yield, and the URL policy all apply, and no model
-runs between steps. `run_skill` is app-scoped for leases and gates like any
-mutating action. A step that cannot resolve or whose expectation fails stops
-the run with a report naming the step and reason — the repair loop is one
-`save_skill` away. Skills are JSON files under Application Support; names are
-validated, steps are limited to the batchable tool set (never `batch` or
-`run_skill`), and `delete_skill` requires `confirm`.
 
 ## App And Window Targeting
 
@@ -272,8 +235,8 @@ Public failures should be recoverable and specific:
   the diff returned by the last action) and use a fresh id;
 - missing app/window: call `list_apps`, `open_app`, or `list_windows`;
 - coordinate out of bounds: use coordinates from the latest screenshot;
-- sparse tree: retry `get_app_state` with `ocr:true`, use `find`, or target by
-  coordinates;
+- sparse tree: retry `get_app_state` with `ocr:true`, scope a retained
+  container, or target by coordinates;
 - background action did not land: focus telemetry reports `ui_changed`, a
   no-visible-change background delivery appends a dropped-event hint, and the
   caller retries with an explicit global or foreground path when acceptable;
@@ -285,12 +248,11 @@ Public failures should be recoverable and specific:
   available;
 - daemon unavailable: every tool fails fast with `DAEMON_UNAVAILABLE`; restore
   the daemon and retry;
-- app lease denied: retry after the reported lease expiry;
-- skill step failed: fix the named step, `save_skill` again, and re-run.
+- app lease denied: retry after the reported lease expiry.
 
 Avoid ambiguous success claims. If the server cannot observe the post-action
-effect, the caller should use returned state or `wait_for` as the verification
-surface.
+effect, the caller should inspect the returned state or call `get_app_state`
+again before deciding whether to retry.
 
 ## Future Test Harness Hooks
 
@@ -341,11 +303,6 @@ coverage.
   policy.
 - `Sources/computer-use-mcp/Core/SessionPower.swift`: sleep assertion and
   screen-lock pause.
-- `Sources/computer-use-mcp/Tools/BatchTool.swift`: batch validation and
-  stop-at-first-failure execution.
-- `Sources/computer-use-mcp/Skills/SkillStore.swift` and
-  `Sources/computer-use-mcp/Skills/SkillTools.swift`: skill persistence,
-  validation, templating, unique semantic anchoring, and replay.
 - `Sources/computer-use-mcp/Core/HitTest.swift`: screenshot-pixel to
   global-point conversion and coordinate bounds.
 - `Sources/computer-use-mcp/Core/Input.swift`: dispatch ladder, per-window and
