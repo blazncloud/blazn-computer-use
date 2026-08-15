@@ -12,19 +12,29 @@ import Foundation
 struct BuiltTree {
     let text: String
     let elements: [SnapshotElement]
-    let isPartial: Bool
+    let coverage: SnapshotCoverage
+    var isPartial: Bool { !coverage.isComplete }
     /// Nodes whose full facts were read during traversal, including structural
     /// wrappers that were inspected but omitted from the returned outline.
     let elementsVisited: Int
 
     init(
         text: String, elements: [SnapshotElement], isPartial: Bool = false,
+        coverage: SnapshotCoverage? = nil,
         elementsVisited: Int? = nil
     ) {
         self.text = text
         self.elements = elements
-        self.isPartial = isPartial
+        self.coverage = coverage ?? (isPartial ? .partial : .complete)
         self.elementsVisited = max(0, elementsVisited ?? elements.count)
+    }
+
+    func withCoverage(_ additionalCoverage: SnapshotCoverage, note: String? = nil) -> BuiltTree {
+        let combined = SnapshotCoverage.combining(coverage, additionalCoverage)
+        let combinedText = note.map { text.isEmpty ? $0 : text + "\n" + $0 } ?? text
+        return BuiltTree(
+            text: combinedText, elements: elements, coverage: combined,
+            elementsVisited: elementsVisited)
     }
 }
 
@@ -130,6 +140,31 @@ struct TreeNodeAccessors<Node> {
     /// Identity, for mapping a visible child back to its index among all
     /// children.
     let equals: (Node, Node) -> Bool
+    /// Coverage learned while reading nodes. Test accessors default to complete.
+    let coverage: () -> SnapshotCoverage
+    let coverageDiagnostic: () -> String?
+
+    init(
+        facts: @escaping (Node) -> NodeFacts,
+        role: @escaping (Node) -> String,
+        frame: @escaping (Node) -> CGRect?,
+        children: @escaping (Node) -> [Node],
+        visibleCollectionChildren: @escaping (Node) -> [Node]?,
+        collectionTotal: @escaping (Node) -> Int?,
+        equals: @escaping (Node, Node) -> Bool,
+        coverage: @escaping () -> SnapshotCoverage = { .complete },
+        coverageDiagnostic: @escaping () -> String? = { nil }
+    ) {
+        self.facts = facts
+        self.role = role
+        self.frame = frame
+        self.children = children
+        self.visibleCollectionChildren = visibleCollectionChildren
+        self.collectionTotal = collectionTotal
+        self.equals = equals
+        self.coverage = coverage
+        self.coverageDiagnostic = coverageDiagnostic
+    }
 }
 
 // MARK: - Dense-collection viewport windowing
@@ -351,9 +386,14 @@ func buildTreeCore<Node>(
                 + "scope_element_id set to the deepest visible container to expand further."
         )
     }
+    var coverage: SnapshotCoverage = coveragePartial || depthTruncated ? .partial : .complete
+    coverage = SnapshotCoverage.combining(coverage, accessors.coverage())
+    if let diagnostic = accessors.coverageDiagnostic() {
+        lines.append(diagnostic)
+    }
     return BuiltTree(
         text: lines.joined(separator: "\n"), elements: elements,
-        isPartial: coveragePartial || depthTruncated,
+        coverage: coverage,
         elementsVisited: elementsVisited)
 }
 
@@ -365,50 +405,155 @@ struct AXNode: @unchecked Sendable {
     let element: AXUIElement
 }
 
+final class AXTreeReadCoverageRecorder {
+    private(set) var failedReads = 0
+
+    var coverage: SnapshotCoverage { failedReads == 0 ? .complete : .degraded }
+
+    var diagnostic: String? {
+        guard failedReads > 0 else { return nil }
+        return "… accessibility coverage degraded: \(failedReads) AX read(s) failed unexpectedly; "
+            + "the tree may omit elements. Re-read app state before acting on absence."
+    }
+
+    func record(_ failure: AXReadFailure, required: Bool) {
+        if required || failure.degradesOptionalRead { failedReads += 1 }
+    }
+
+    func read<T>(
+        _ result: AXReadResult<CFTypeRef>, required: Bool = false,
+        transform: (CFTypeRef) -> T?
+    ) -> T? {
+        switch result {
+        case .failure(let failure):
+            record(failure, required: required)
+            return nil
+        case .value(let raw):
+            guard let value = transform(raw) else {
+                record(.typeMismatch, required: required)
+                return nil
+            }
+            return value
+        }
+    }
+
+    func readElements(
+        _ result: AXReadResult<[AXUIElement]>, required: Bool = false
+    ) -> [AXUIElement]? {
+        switch result {
+        case .value(let elements): return elements
+        case .failure(let failure):
+            record(failure, required: required)
+            return nil
+        }
+    }
+
+    func readActions(_ result: AXReadResult<[String]>) -> [String] {
+        switch result {
+        case .value(let actions): return actions
+        case .failure(let failure):
+            record(failure, required: false)
+            return []
+        }
+    }
+}
+
 func axTreeAccessors() -> TreeNodeAccessors<AXNode> {
-    TreeNodeAccessors<AXNode>(
+    let recorder = AXTreeReadCoverageRecorder()
+
+    func string(_ element: AXUIElement, _ attribute: String, required: Bool = false) -> String? {
+        recorder.read(axReadAttribute(element, attribute), required: required) { value in
+            if let string = value as? String { return string }
+            if let number = value as? NSNumber { return number.stringValue }
+            if CFGetTypeID(value) == CFBooleanGetTypeID() {
+                return (value as! CFBoolean) == kCFBooleanTrue ? "true" : "false"
+            }
+            if let attributed = value as? NSAttributedString { return attributed.string }
+            if let url = value as? URL { return url.absoluteString }
+            return nil
+        }
+    }
+
+    func bool(_ element: AXUIElement, _ attribute: String) -> Bool? {
+        recorder.read(axReadAttribute(element, attribute)) { value in
+            guard CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
+            return (value as! CFBoolean) == kCFBooleanTrue
+        }
+    }
+
+    func frame(_ element: AXUIElement) -> CGRect? {
+        let position: CGPoint? = recorder.read(
+            axReadAttribute(element, kAXPositionAttribute),
+            transform: { value in
+                guard CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+                var point = CGPoint.zero
+                return AXValueGetValue(value as! AXValue, .cgPoint, &point) ? point : nil
+            })
+        let size: CGSize? = recorder.read(
+            axReadAttribute(element, kAXSizeAttribute),
+            transform: { value in
+                guard CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+                var size = CGSize.zero
+                return AXValueGetValue(value as! AXValue, .cgSize, &size) ? size : nil
+            })
+        guard let position, let size else { return nil }
+        return sanitizedRect(CGRect(origin: position, size: size))
+    }
+
+    func label(_ element: AXUIElement, role: String) -> String? {
+        string(element, kAXTitleAttribute)
+            ?? string(element, kAXDescriptionAttribute)
+            ?? string(element, "AXPlaceholderValue")
+            ?? informativeRoleDescription(
+                role: role, description: string(element, kAXRoleDescriptionAttribute))
+    }
+
+    return TreeNodeAccessors<AXNode>(
         facts: { node in
             let element = node.element
             AXUIElementSetMessagingTimeout(element, perElementAXTimeout)
-            let role = axRole(element)
+            let role = string(element, kAXRoleAttribute, required: true) ?? "AXUnknown"
             return NodeFacts(
                 role: role,
-                label: snapshotLabel(element, role: role),
-                identifier: axString(element, "AXIdentifier"),
-                value: axString(element, kAXValueAttribute),
-                selectedText: axString(element, kAXSelectedTextAttribute),
-                enabled: axBool(element, kAXEnabledAttribute),
-                focused: axBool(element, kAXFocusedAttribute),
-                selected: axBool(element, kAXSelectedAttribute),
-                actions: axActionNames(element),
-                frame: axFrame(element)
+                label: label(element, role: role),
+                identifier: string(element, "AXIdentifier"),
+                value: string(element, kAXValueAttribute),
+                selectedText: string(element, kAXSelectedTextAttribute),
+                enabled: bool(element, kAXEnabledAttribute),
+                focused: bool(element, kAXFocusedAttribute),
+                selected: bool(element, kAXSelectedAttribute),
+                actions: recorder.readActions(axReadActionNames(element)),
+                frame: frame(element)
             )
         },
         role: { node in
             AXUIElementSetMessagingTimeout(node.element, perElementAXTimeout)
-            return axRole(node.element)
+            return string(node.element, kAXRoleAttribute, required: true) ?? "AXUnknown"
         },
         frame: { node in
             AXUIElementSetMessagingTimeout(node.element, viewportProbeAXTimeout)
-            return axFrame(node.element)
+            return frame(node.element)
         },
         children: { node in
             AXUIElementSetMessagingTimeout(node.element, perElementAXTimeout)
-            return axElements(node.element, kAXChildrenAttribute).map(AXNode.init)
+            return (recorder.readElements(axReadElements(node.element, kAXChildrenAttribute)) ?? [])
+                .map(AXNode.init)
         },
         visibleCollectionChildren: { node in
             for attribute in ["AXVisibleRows", "AXVisibleChildren"] {
-                let visible = axElements(node.element, attribute)
+                let visible = recorder.readElements(axReadElements(node.element, attribute)) ?? []
                 if !visible.isEmpty { return visible.map(AXNode.init) }
             }
             return nil
         },
         collectionTotal: { node in
-            guard let value = axAttribute(node.element, "AXRows"), let array = value as? [AnyObject]
-            else { return nil }
-            return array.count
+            recorder.read(axReadAttribute(node.element, "AXRows")) { value in
+                (value as? [AnyObject])?.count
+            }
         },
-        equals: { CFEqual($0.element, $1.element) }
+        equals: { CFEqual($0.element, $1.element) },
+        coverage: { recorder.coverage },
+        coverageDiagnostic: { recorder.diagnostic }
     )
 }
 

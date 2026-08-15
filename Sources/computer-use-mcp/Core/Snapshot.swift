@@ -129,9 +129,16 @@ struct AppSnapshot: Codable {
     /// of truncation, skeleton depth, or collection windowing. Partial
     /// snapshots must not invalidate ids they did not observe.
     var partial: Bool? = nil
+    /// Rich coverage state. Optional so snapshots written by older versions
+    /// remain decodable; `partial` is retained as the compatibility bit.
+    var coverage: SnapshotCoverage? = nil
     /// Optional so snapshots written by older versions remain decodable.
     var lineage: SnapshotLineage? = nil
     let elements: [SnapshotElement]
+
+    var effectiveCoverage: SnapshotCoverage {
+        coverage ?? (partial == true ? .partial : .complete)
+    }
 
     func element(withID id: String) -> SnapshotElement? {
         elements.first { $0.id == id }
@@ -188,6 +195,7 @@ actor SnapshotStore {
         windowOrigin: CGPoint, pixelsPerPoint: Double, windowSize: [Double]?, createdAt: Date,
         lineageOverrideForTesting: SnapshotLineage? = nil,
         scoped: Bool = false,
+        revision: (() -> UInt64)? = nil,
         buildTree: (String) -> BuiltTree
     ) -> (snapshot: AppSnapshot, tree: BuiltTree, unchanged: Bool, diff: TreeDiff?) {
         // Always consult disk, not just on first touch: other server
@@ -201,7 +209,8 @@ actor SnapshotStore {
         let next = max(counters[pid] ?? 0, diskGeneration) + 1
         counters[pid] = next
         let generation = "s\(next)"
-        var tree = buildTree(generation)
+        var tree = buildTreeWithRevisionRetry(
+            generation: generation, revision: revision, build: buildTree)
         let fingerprint = treeFingerprint(tree.text)
         let lineage =
             lineageOverrideForTesting
@@ -220,8 +229,8 @@ actor SnapshotStore {
             scoped: scoped
         )
         if let previous,
-            !tree.isPartial,
-            previous.partial != true,
+            tree.coverage.isComplete,
+            previous.effectiveCoverage.isComplete,
             previous.treeFingerprint == fingerprint,
             previous.windowTitle == windowTitle,
             previous.windowOrigin == [windowOrigin.x, windowOrigin.y],
@@ -243,8 +252,8 @@ actor SnapshotStore {
         }
 
         var diff: TreeDiff?
-        if let previous, !scoped, !tree.isPartial,
-            previous.scoped != true, previous.partial != true,
+        if let previous, !scoped, tree.coverage.isComplete,
+            previous.scoped != true, previous.effectiveCoverage.isComplete,
             previous.bundleIdentifier == bundleIdentifier,
             previous.windowTitle == windowTitle,
             previous.windowOrigin == [windowOrigin.x, windowOrigin.y],
@@ -262,7 +271,8 @@ actor SnapshotStore {
             windowOrigin: [windowOrigin.x, windowOrigin.y], pixelsPerPoint: pixelsPerPoint,
             windowSize: windowSize, createdAt: createdAt, generation: generation,
             treeFingerprint: fingerprint, treeText: tree.text, scoped: scoped,
-            partial: tree.isPartial, lineage: lineage, elements: tree.elements
+            partial: tree.isPartial, coverage: tree.coverage,
+            lineage: lineage, elements: tree.elements
         )
         cache[pid] = snapshot
         remember(snapshot)
@@ -328,6 +338,7 @@ actor SnapshotStore {
             if merged.treeText == nil { merged.treeText = existing.treeText }
             if merged.scoped == nil { merged.scoped = existing.scoped }
             if merged.partial == nil { merged.partial = existing.partial }
+            if merged.coverage == nil { merged.coverage = existing.coverage }
             if merged.lineage == nil { merged.lineage = existing.lineage }
             snapshots[existingIndex] = merged
         } else {
@@ -359,7 +370,7 @@ actor SnapshotStore {
                     && $0.pixelsPerPoint == pixelsPerPoint
                     && snapshotLineagesAreCompatible($0.lineage, lineage)
                     && ($0.scoped == true) == scoped
-                    && $0.partial != true
+                    && $0.effectiveCoverage.isComplete
             }
             .max { Self.parseGeneration($0) < Self.parseGeneration($1) }
     }
@@ -484,7 +495,7 @@ actor SnapshotStore {
                 current = (newer, stableIDElement)
                 continue
             }
-            guard newer.scoped != true, newer.partial != true else { continue }
+            guard newer.scoped != true, newer.effectiveCoverage.isComplete else { continue }
             guard let candidateFingerprint = candidate.treeFingerprint,
                 let newerFingerprint = newer.treeFingerprint,
                 candidateFingerprint == newerFingerprint
@@ -524,12 +535,12 @@ actor SnapshotStore {
             }
             return BuiltTree(
                 text: lines.joined(separator: "\n"), elements: snapshot.elements,
-                isPartial: snapshot.partial == true,
+                coverage: snapshot.effectiveCoverage,
                 elementsVisited: freshTree.elementsVisited)
         }
         return BuiltTree(
             text: text, elements: snapshot.elements,
-            isPartial: snapshot.partial == true,
+            coverage: snapshot.effectiveCoverage,
             elementsVisited: freshTree.elementsVisited)
     }
 }

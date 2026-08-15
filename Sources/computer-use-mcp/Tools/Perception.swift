@@ -247,6 +247,11 @@ func stateResult(
     // render web content into the accessibility tree.
     await AssistiveAccess.shared.enable(pid: app.pid)
 
+    // Observer notifications detect a tree that changed while it was being
+    // walked. They do not supply state and are not trusted as proof of change.
+    let invalidationMonitor = AXTreeInvalidationMonitor(
+        pid: app.pid, application: app.axApplication, window: window.element)
+
     func captureSnapshot() async -> (snapshot: AppSnapshot, tree: BuiltTree, unchanged: Bool, diff: TreeDiff?) {
         await SnapshotStore.shared.capture(
             pid: app.pid,
@@ -257,7 +262,8 @@ func stateResult(
             pixelsPerPoint: pixelsPerPoint,
             windowSize: [window.frame.width * pixelsPerPoint, window.frame.height * pixelsPerPoint],
             createdAt: Date(),
-            scoped: scope != nil
+            scoped: scope != nil,
+            revision: invalidationMonitor.map { monitor in { monitor.revision } }
         ) { generation in
             buildTree(
                 window: scope?.root ?? window.element,
@@ -322,6 +328,9 @@ func stateResult(
         text += " — screenshot omitted (element boxes stay in the previous screenshot's pixel scale)"
     }
     text += "\n"
+    text += "AX coverage: \(tree.coverage.rawValue)"
+    if scope != nil { text += " for requested scope" }
+    text += "\n"
     if let captureNote {
         text += captureNote + "\n"
     }
@@ -372,14 +381,19 @@ func stateResult(
     }
 
     var enrichedTelemetry = handlerTelemetry
-    enrichedTelemetry?.uiChanged = !unchanged
+    // An incomplete tree cannot truthfully prove a UI change: missing nodes
+    // may be read failures or a mid-capture race rather than real removals.
+    let treeChanged = observedTreeChange(unchanged: unchanged, coverage: tree.coverage)
+    enrichedTelemetry?.uiChanged = treeChanged
 
     // Re-read the acted-on element and reduce to an outcome. The reread never
     // throws — a failure degrades the classification, never the tool call.
     var actionOutcome: ActionOutcome?
     if let verifier {
         actionOutcome = await verifier.finalize(
-            windowElement: window.element, treeChanged: !unchanged, diff: diff, afterWindowTitle: window.title)
+            windowElement: window.element,
+            treeChanged: treeChanged == true,
+            diff: diff, afterWindowTitle: window.title)
     }
     if let sentence = actionOutcome?.humanSentence {
         // A verified non-success verdict, in plain language for the transcript.

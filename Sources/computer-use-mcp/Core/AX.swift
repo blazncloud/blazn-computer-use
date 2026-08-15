@@ -186,12 +186,45 @@ func targetIsInWebArea(_ element: AXUIElement?, snapshotElement: SnapshotElement
     return false
 }
 
-func axAttribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
-    var value: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else {
+enum AXReadFailure: Equatable {
+    case api(AXError)
+    case typeMismatch
+
+    /// Missing or unsupported optional attributes are normal AX sparsity.
+    /// Transport/runtime failures mean the tree may have silently omitted data.
+    var degradesOptionalRead: Bool {
+        switch self {
+        case .api(.noValue), .api(.attributeUnsupported), .api(.actionUnsupported),
+            .api(.notImplemented):
+            return false
+        case .api, .typeMismatch:
+            return true
+        }
+    }
+}
+
+enum AXReadResult<Value> {
+    case value(Value)
+    case failure(AXReadFailure)
+
+    var value: Value? {
+        if case .value(let value) = self { return value }
         return nil
     }
-    return value
+}
+
+func axReadAttribute(_ element: AXUIElement, _ name: String) -> AXReadResult<CFTypeRef> {
+    var value: CFTypeRef?
+    let error = AXUIElementCopyAttributeValue(element, name as CFString, &value)
+    guard error == .success else {
+        return .failure(.api(error))
+    }
+    guard let value else { return .failure(.api(.noValue)) }
+    return .value(value)
+}
+
+func axAttribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+    axReadAttribute(element, name).value
 }
 
 func axString(_ element: AXUIElement, _ name: String) -> String? {
@@ -221,11 +254,20 @@ func axElement(_ element: AXUIElement, _ name: String) -> AXUIElement? {
 }
 
 func axElements(_ element: AXUIElement, _ name: String) -> [AXUIElement] {
-    guard let value = axAttribute(element, name), let array = value as? [AnyObject] else {
-        return []
-    }
-    return array.compactMap {
-        CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil
+    axReadElements(element, name).value ?? []
+}
+
+func axReadElements(_ element: AXUIElement, _ name: String) -> AXReadResult<[AXUIElement]> {
+    switch axReadAttribute(element, name) {
+    case .failure(let failure):
+        return .failure(failure)
+    case .value(let value):
+        guard let array = value as? [AnyObject] else { return .failure(.typeMismatch) }
+        let elements = array.compactMap {
+            CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil
+        }
+        guard elements.count == array.count else { return .failure(.typeMismatch) }
+        return .value(elements)
     }
 }
 
@@ -307,11 +349,15 @@ func axWebAreaAttributedString(_ element: AXUIElement) -> NSAttributedString? {
 }
 
 func axActionNames(_ element: AXUIElement) -> [String] {
+    axReadActionNames(element).value ?? []
+}
+
+func axReadActionNames(_ element: AXUIElement) -> AXReadResult<[String]> {
     var names: CFArray?
-    guard AXUIElementCopyActionNames(element, &names) == .success,
-        let array = names as? [String]
-    else { return [] }
-    return array
+    let error = AXUIElementCopyActionNames(element, &names)
+    guard error == .success else { return .failure(.api(error)) }
+    guard let names, let array = names as? [String] else { return .failure(.typeMismatch) }
+    return .value(array)
 }
 
 func axRole(_ element: AXUIElement) -> String {
