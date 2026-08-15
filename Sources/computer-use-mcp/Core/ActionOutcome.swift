@@ -200,7 +200,7 @@ let deliveryVerificationTimeout: Duration = .seconds(1)
 /// interval because a notification is only a wake hint, never completion proof.
 @discardableResult
 func waitForDeliveryVerification(
-    observer: AXDeliveryObserver?, baselineRevision: UInt64?,
+    observer: (any DeliveryChangeObserving)?, baselineRevision: UInt64?,
     timeout: Duration = deliveryVerificationTimeout,
     predicate: (() async -> Bool)?
 ) async -> Bool {

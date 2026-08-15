@@ -173,32 +173,32 @@ private func leftClick(_ target: PointTarget, clickCount: Int) async throws -> I
     let pressable = target.element.flatMap {
         selfOrAncestor(of: $0, supporting: kAXPressAction as String)
     }
-    switch clickDeliveryRoute(hasPressableElement: pressable != nil) {
-    case .axPress:
-        guard let pressable else { preconditionFailure("AXPress route requires an action owner") }
-        try await performRepeatedAXPress(
-            count: clickCount,
-            primitive: { AXUIElementPerformAction(pressable, kAXPressAction as CFString) },
-            betweenPresses: { try? await Task.sleep(for: .milliseconds(80)) },
-            failureMessage: "AXPress failed on \(target.description)")
-        let verb = clickCount > 1 ? "Double-pressed" : "Pressed"
-        return InputActionOutcome(
-            note: "\(verb) \(target.description) via accessibility [tier1-ax-action].",
-            deliveryTier: .accessibilityAction,
-            landedRung: "ax-press"
-        )
-    case .synthetic:
-        // AXPress was unsupported before dispatch, so one synthetic route is safe.
-        let delivery = try deliverClick(
-            at: target.requirePoint(), button: .left,
-            clickCount: clickCount, context: target.deliveryContext)
-        let verb = clickCount > 1 ? "Double-clicked" : "Clicked"
-        return InputActionOutcome(
-            note: "\(verb) \(target.description) [\(delivery.tier.rawValue)].",
-            deliveryTier: delivery.tier,
-            fallbackReasons: [.axActionUnsupported] + delivery.fallbackReasons
-        )
-    }
+    return try await deliverSelectedClick(
+        hasPressableElement: pressable != nil,
+        axPress: {
+            guard let pressable else { preconditionFailure("AXPress route requires an action owner") }
+            try await performRepeatedAXPress(
+                count: clickCount,
+                primitive: { AXUIElementPerformAction(pressable, kAXPressAction as CFString) },
+                betweenPresses: { try? await Task.sleep(for: .milliseconds(80)) },
+                failureMessage: "AXPress failed on \(target.description)")
+            let verb = clickCount > 1 ? "Double-pressed" : "Pressed"
+            return InputActionOutcome(
+                note: "\(verb) \(target.description) via accessibility [tier1-ax-action].",
+                deliveryTier: .accessibilityAction,
+                landedRung: "ax-press")
+        },
+        synthetic: {
+            // AXPress was unsupported before dispatch, so one synthetic route is safe.
+            let delivery = try deliverClick(
+                at: target.requirePoint(), button: .left,
+                clickCount: clickCount, context: target.deliveryContext)
+            let verb = clickCount > 1 ? "Double-clicked" : "Clicked"
+            return InputActionOutcome(
+                note: "\(verb) \(target.description) [\(delivery.tier.rawValue)].",
+                deliveryTier: delivery.tier,
+                fallbackReasons: [.axActionUnsupported] + delivery.fallbackReasons)
+        })
 }
 
 func performRepeatedAXPress(

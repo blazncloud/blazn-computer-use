@@ -150,7 +150,12 @@ final class AXTreeInvalidationMonitor: @unchecked Sendable {
 
 /// Short-lived notification source for one mutation. It is installed before
 /// dispatch and removed after verification. The counter is a wake signal only.
-final class AXDeliveryObserver: @unchecked Sendable {
+protocol DeliveryChangeObserving: Sendable {
+    var revision: UInt64 { get }
+    func waitForChange(after baseline: UInt64, timeout: Duration) async -> Bool
+}
+
+final class AXDeliveryObserver: DeliveryChangeObserving, @unchecked Sendable {
     private let monitor: AXNotificationMonitor
 
     var revision: UInt64 { monitor.revision }
