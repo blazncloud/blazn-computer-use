@@ -113,8 +113,8 @@ func clickImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 }
 
 /// The intended effect of a click, for the outcome verifier. A single left click
-/// focuses text fields and toggles checkboxes with known state. Other clicks are
-/// generic activations whose effect is an observed change.
+/// focuses text fields, toggles checkboxes, and selects rows/cells with known
+/// state. Other clicks are generic activations whose effect is an observed change.
 func clickIntent(
     role: String?, button: String, clickCount: Int, beforeSelected: Bool?
 ) -> ActionIntent {
@@ -155,7 +155,7 @@ private struct InputActionOutcome {
     let note: String
     let deliveryTier: InputTier
     let fallbackReasons: [FallbackReason]
-    /// The AX chain rung whose verified effect landed the click (tier 1 only).
+    /// The semantic AX route that delivered the click (tier 1 only).
     let landedRung: String?
 
     init(
