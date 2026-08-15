@@ -19,28 +19,10 @@ private final class AXRevisionCounter: @unchecked Sendable {
     }
 }
 
-private final class AXObserverRunLoopState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var runLoop: CFRunLoop?
-
-    func install(_ runLoop: CFRunLoop) {
-        lock.lock()
-        self.runLoop = runLoop
-        lock.unlock()
-    }
-
-    func stop() {
-        lock.lock()
-        let current = runLoop
-        lock.unlock()
-        if let current { CFRunLoopStop(current) }
-    }
-}
-
-/// Notification-backed dirty counter for one app/window capture session.
-/// Notifications are only wake/race hints; every result still comes from an
-/// authoritative AX reread.
-final class AXTreeInvalidationMonitor: @unchecked Sendable {
+/// Shared AX notification plumbing. Notifications only wake readers; callers
+/// must reread authoritative AX attributes before deciding that anything
+/// happened.
+private final class AXNotificationMonitor: @unchecked Sendable {
     private let counter: AXRevisionCounter
     private let observer: AXObserver
     private let runLoopState: AXObserverRunLoopState
@@ -51,7 +33,7 @@ final class AXTreeInvalidationMonitor: @unchecked Sendable {
 
     var revision: UInt64 { counter.revision }
 
-    init?(pid: pid_t, application: AXUIElement, window: AXUIElement) {
+    init?(pid: pid_t, requestedRegistrations: [(AXUIElement, [String])]) {
         let counter = AXRevisionCounter()
         var createdObserver: AXObserver?
         let createError = AXObserverCreate(
@@ -63,22 +45,9 @@ final class AXTreeInvalidationMonitor: @unchecked Sendable {
             &createdObserver)
         guard createError == .success, let observer = createdObserver else { return nil }
 
-        let appNotifications = [
-            "AXFocusedUIElementChanged", "AXFocusedWindowChanged",
-            "AXMainWindowChanged", "AXWindowCreated",
-        ]
-        let windowNotifications = [
-            "AXUIElementDestroyed", "AXMoved", "AXResized", "AXLayoutChanged",
-            "AXValueChanged", "AXSelectedChildrenChanged", "AXSelectedRowsChanged",
-            "AXRowCountChanged",
-        ]
         var registrations: [(AXUIElement, String)] = []
-        // The callback refcon owns its counter independently until the run-loop
-        // thread has stopped, so a queued callback cannot outlive its target.
         let refcon = Unmanaged.passRetained(counter).toOpaque()
-        for (element, notifications) in [
-            (application, appNotifications), (window, windowNotifications),
-        ] {
+        for (element, notifications) in requestedRegistrations {
             for notification in notifications {
                 if AXObserverAddNotification(
                     observer, element, notification as CFString, refcon) == .success
@@ -130,5 +99,117 @@ final class AXTreeInvalidationMonitor: @unchecked Sendable {
         threadFinished.wait()
         Unmanaged<AXRevisionCounter>.fromOpaque(callbackRefcon).release()
         _ = thread
+    }
+}
+
+private final class AXObserverRunLoopState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var runLoop: CFRunLoop?
+
+    func install(_ runLoop: CFRunLoop) {
+        lock.lock()
+        self.runLoop = runLoop
+        lock.unlock()
+    }
+
+    func stop() {
+        lock.lock()
+        let current = runLoop
+        lock.unlock()
+        if let current { CFRunLoopStop(current) }
+    }
+}
+
+/// Notification-backed dirty counter for one app/window capture session.
+/// Notifications are only wake/race hints; every result still comes from an
+/// authoritative AX reread.
+final class AXTreeInvalidationMonitor: @unchecked Sendable {
+    private let monitor: AXNotificationMonitor
+
+    var revision: UInt64 { monitor.revision }
+
+    init?(pid: pid_t, application: AXUIElement, window: AXUIElement) {
+        let appNotifications = [
+            "AXFocusedUIElementChanged", "AXFocusedWindowChanged",
+            "AXMainWindowChanged", "AXWindowCreated",
+        ]
+        let windowNotifications = [
+            "AXUIElementDestroyed", "AXMoved", "AXResized", "AXLayoutChanged",
+            "AXValueChanged", "AXSelectedChildrenChanged", "AXSelectedRowsChanged",
+            "AXRowCountChanged",
+        ]
+        guard let monitor = AXNotificationMonitor(
+            pid: pid,
+            requestedRegistrations: [
+                (application, appNotifications), (window, windowNotifications),
+            ])
+        else { return nil }
+        self.monitor = monitor
+    }
+}
+
+/// Short-lived notification source for one mutation. It is installed before
+/// dispatch and removed after verification. The counter is a wake signal only.
+final class AXDeliveryObserver: @unchecked Sendable {
+    private let monitor: AXNotificationMonitor
+
+    var revision: UInt64 { monitor.revision }
+
+    init?(
+        pid: pid_t, application: AXUIElement, window: AXUIElement,
+        target: AXUIElement?, family: ActionFamily
+    ) {
+        var registrations: [(AXUIElement, [String])] = []
+        switch family {
+        case .click, .type:
+            registrations.append((application, [
+                "AXFocusedUIElementChanged", "AXFocusedWindowChanged",
+            ]))
+        case .setValue, .scroll, .window, .menu, .secondaryAction, .drag:
+            break
+        }
+        registrations.append((window, [
+            "AXUIElementDestroyed", "AXLayoutChanged", "AXMoved", "AXResized",
+        ]))
+        if let target {
+            let targetNotifications: [String]
+            switch family {
+            case .type:
+                targetNotifications = [
+                    "AXUIElementDestroyed", "AXValueChanged", "AXSelectedTextChanged",
+                ]
+            case .click, .setValue:
+                targetNotifications = ["AXUIElementDestroyed", "AXValueChanged"]
+            case .scroll:
+                targetNotifications = [
+                    "AXUIElementDestroyed", "AXValueChanged", "AXLayoutChanged",
+                    "AXSelectedRowsChanged", "AXRowCountChanged",
+                ]
+            case .window, .menu, .secondaryAction, .drag:
+                targetNotifications = ["AXUIElementDestroyed", "AXValueChanged"]
+            }
+            registrations.append((target, targetNotifications))
+        }
+        guard let monitor = AXNotificationMonitor(
+            pid: pid, requestedRegistrations: registrations)
+        else { return nil }
+        self.monitor = monitor
+    }
+
+    /// Wait until a notification advances the counter or the bounded timeout
+    /// expires. Polling only the in-process counter avoids blocking Swift's
+    /// cooperative executor; AX state itself is not polled here.
+    func waitForChange(after baseline: UInt64, timeout: Duration) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if revision != baseline { return true }
+            do {
+                try await Task.sleep(for: .milliseconds(20))
+            } catch {
+                return false
+            }
+        }
+        return revision != baseline
     }
 }

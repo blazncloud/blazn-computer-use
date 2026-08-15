@@ -93,11 +93,16 @@ func rankedScrollContainers(from element: AXUIElement, maxHops: Int = 8) -> [AXU
 /// container does not swallow a scroll an inner one could still take. Falls back
 /// to the top-ranked container; nil when nothing ranks as scrollable.
 func chooseScrollContainer(_ ranked: [AXUIElement], deltaX: Int, deltaY: Int) -> AXUIElement? {
-    guard let top = ranked.first else { return nil }
-    for candidate in ranked where scrollAtExtent(container: candidate, deltaX: deltaX, deltaY: deltaY) != true {
-        return candidate
-    }
-    return top
+    let extents = ranked.map { scrollAtExtent(container: $0, deltaX: deltaX, deltaY: deltaY) }
+    return scrollOwnerCandidateIndices(atExtents: extents).first.map { ranked[$0] }
+}
+
+/// Candidate owners for one semantic scroll route. Skip ancestors known to be
+/// pinned; if every candidate is pinned, retain only the innermost one so the
+/// caller can truthfully return already-at-extent.
+func scrollOwnerCandidateIndices(atExtents: [Bool?]) -> [Int] {
+    let movable = atExtents.indices.filter { atExtents[$0] != true }
+    return movable.isEmpty ? Array(atExtents.indices.prefix(1)) : movable
 }
 
 /// The scroll-bar fill (0…1) for an axis, read off the container's own bar.

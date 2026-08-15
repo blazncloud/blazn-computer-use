@@ -42,9 +42,21 @@ func pressKeyImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         windowFrame: window?.frame,
         allowGlobalCursor: allowGlobalKeyboard
     )
+    let verifyEffect = args.bool("include_state") != false
+    let deliveryObserver = verifyEffect ? window.flatMap {
+        AXDeliveryObserver(
+            pid: app.pid, application: app.axApplication, window: $0.element,
+            target: axElement(app.axApplication, kAXFocusedUIElementAttribute),
+            family: .secondaryAction)
+    } : nil
+    let deliveryRevision = deliveryObserver?.revision
     let targetAppIsActive = NSRunningApplication(processIdentifier: app.pid)?.isActive == true
     let deliveryMode = try deliverKey(chord, context: context, targetAppIsActive: targetAppIsActive)
-    try? await Task.sleep(for: .milliseconds(80))
+    if verifyEffect {
+        await waitForDeliveryVerification(
+            observer: deliveryObserver, baselineRevision: deliveryRevision,
+            predicate: nil)
+    }
 
     return try await recaptureAfterPressKey { windowTitle, windowID in
         try await stateResult(
@@ -64,6 +76,14 @@ func recaptureAfterPressKey<T>(
 
 func pressKeyRequiresSnapshotIdentity(storedSnapshotExists _: Bool) -> Bool {
     false
+}
+
+private enum ScrollDeliveryPlan {
+    case alreadyAtExtent
+    case scrollBar(bar: AXUIElement, newValue: Double)
+    case pageAction(container: AXUIElement, action: String, count: Int)
+    case reveal(AXUIElement)
+    case wheel
 }
 
 func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
@@ -129,6 +149,71 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         point = try target.requirePoint()
     }
 
+    let pageCount = max(1, Int((args.number("pages") ?? 1).rounded()))
+    let plan: ScrollDeliveryPlan
+    if let direction {
+        let vertical = direction == "down" || direction == "up"
+        let barAttribute = vertical ? "AXVerticalScrollBar" : "AXHorizontalScrollBar"
+        let ownerIndices = scrollOwnerCandidateIndices(atExtents: ranked.map {
+            scrollAtExtent(container: $0, deltaX: deltaX, deltaY: deltaY)
+        })
+        // A collection often sits inside the AXScrollArea that owns its bar or
+        // page action. Resolve that owner before delivery, skipping an inner
+        // container already pinned in this direction. No route is attempted yet.
+        let owners = ownerIndices.map { ranked[$0] }
+        var semanticPlan: ScrollDeliveryPlan?
+        for owner in owners {
+            if let bar = axElement(owner, barAttribute),
+                let current = (axAttribute(bar, kAXValueAttribute) as? NSNumber)?.doubleValue,
+                try axAttributeIsSettable(bar, kAXValueAttribute as String)
+            {
+                let forward = direction == "down" || direction == "right"
+                let proportion = scrollBarPageProportion(bar, vertical: vertical) ?? 0.9
+                let newValue = scrolledBarValue(
+                    current: current, pageProportion: proportion,
+                    pages: args.number("pages") ?? 1, forward: forward)
+                semanticPlan = abs(newValue - current) <= 1e-6
+                    ? .alreadyAtExtent
+                    : .scrollBar(bar: bar, newValue: newValue)
+                break
+            }
+            if let actionName = scrollPageAction(for: direction),
+                axActionNames(owner).contains(actionName)
+            {
+                semanticPlan = .pageAction(
+                    container: owner, action: actionName, count: pageCount)
+                break
+            }
+        }
+        if let semanticPlan {
+            plan = semanticPlan
+        } else if let container,
+            let reveal = descendantToRevealForScroll(
+                container: container, direction: direction,
+                pages: args.number("pages") ?? 1,
+                windowFrame: target.deliveryContext.windowFrame)
+        {
+            plan = .reveal(reveal)
+        } else {
+            plan = .wheel
+        }
+    } else {
+        plan = .wheel
+    }
+
+    let observedScrollElement: AXUIElement?
+    switch plan {
+    case .scrollBar(let bar, _): observedScrollElement = bar
+    case .pageAction(let actionContainer, _, _): observedScrollElement = actionContainer
+    case .reveal: observedScrollElement = container
+    case .alreadyAtExtent, .wheel: observedScrollElement = container ?? target.element
+    }
+    let verifyEffect = args.bool("include_state") != false
+    let deliveryObserver = verifyEffect ? AXDeliveryObserver(
+        pid: app.pid, application: app.axApplication, window: target.windowElement,
+        target: observedScrollElement, family: .scroll) : nil
+    let deliveryRevision = deliveryObserver?.revision
+
     // Evidence read off the chosen container's own scroll bars: whether it is
     // already pinned in the scroll direction (so "no movement" is expected), and
     // a before/after position signature that confirms the content actually moved.
@@ -144,125 +229,66 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
     await AgentCursor.shared.glide(to: point, targetWindow: target.deliveryContext.windowNumber)
 
-    // Tier 1: drive the scroll through accessibility, which lands in the
-    // background where a SwiftUI List / WKWebView swallow a synthetic wheel. Two
-    // AX strategies for a semantic direction, each verified via the movement
-    // fingerprint; on no observed movement, fall through to the next, then to
-    // the wheel — the same chain philosophy as the click tier 1.
-    if let direction {
-        let pageCount = max(1, Int((args.number("pages") ?? 1).rounded()))
-        func tier1Success(via: String, positionChanged: Bool = false, contentChanged: Bool = true) async throws -> CallTool.Result {
-            if positionChanged { before.scrollPositionChanged = true }
-            if contentChanged { before.scrollContentChanged = true }
-            before.notes.append("Scrolled via \(via) (tier 1).")
-            let verifier = ActionVerifier(
-                family: .scroll, intent: .scrollContent,
-                deliveryTier: InputTier.accessibilityAction.rawValue,
-                dispatchSucceeded: true, hasTargetElement: false, snapshotElement: nil,
-                before: before, beforeWindowTitle: target.snapshot.windowTitle)
-            return try await stateResult(
-                app: app, windowTitle: target.snapshot.windowTitle,
-                windowID: target.deliveryContext.windowNumber,
-                note: "Scrolled \(direction)\(pageCount > 1 ? " \(pageCount) pages" : "") at \(target.description).",
-                screenshot: screenshotDetail(args),
-                focusTelemetry: focus.finish(
-                    deliveryTier: InputTier.accessibilityAction.rawValue, fallbackReasons: fallbackReasons),
-                verifier: verifier)
+    // Execute exactly the route selected from pre-dispatch capabilities. An AX
+    // acknowledgement is followed by observation, never another scroll route.
+    let tier: InputTier
+    let dispatched: Bool
+    switch plan {
+    case .alreadyAtExtent:
+        tier = .accessibilityAttribute
+        dispatched = false
+        before.scrollAtExtent = true
+        before.notes.append("The selected scroll bar is already at the requested extent.")
+    case .scrollBar(let bar, let newValue):
+        try checkCancellationBeforeDelivery()
+        let error = AXUIElementSetAttributeValue(
+            bar, kAXValueAttribute as CFString, NSNumber(value: newValue))
+        guard error == .success else {
+            throw ToolError.failed(
+                "Setting the scroll-bar position failed (\(axErrorDescription(error))).")
         }
-
-        // Strategy 1: set the container's scroll-bar value. NSScrollView-backed
-        // lists (AppKit tables, the fixture row-list) do NOT honor
-        // AXScrollDownByPage via perform (it returns attributeUnsupported), but
-        // their AXScrollBar value is settable and moves the content in the
-        // background — the most reliable native path. The bar lives on the
-        // AXScrollArea, so use the nearest ranked container that exposes it.
-        // Verified against the target element (not the bar we just set, which
-        // would be circular).
-        let vertical = direction == "down" || direction == "up"
-        let barAttribute = vertical ? "AXVerticalScrollBar" : "AXHorizontalScrollBar"
-        if let barContainer = ranked.first(where: { axElement($0, barAttribute) != nil }),
-            let bar = axElement(barContainer, barAttribute),
-            let current = (axAttribute(bar, kAXValueAttribute) as? NSNumber)?.doubleValue
-        {
-            let forward = direction == "down" || direction == "right"
-            let proportion = scrollBarPageProportion(bar, vertical: vertical) ?? 0.9
-            let newValue = scrolledBarValue(
-                current: current, pageProportion: proportion, pages: args.number("pages") ?? 1, forward: forward)
-            if abs(newValue - current) > 1e-6 {
-                try checkCancellationBeforeDelivery()
-                let ok =
-                    AXUIElementSetAttributeValue(bar, kAXValueAttribute as CFString, NSNumber(value: newValue))
-                    == .success
-                try? await Task.sleep(for: .milliseconds(80))
-                // The scroll took iff the bar now holds a different position: a
-                // container that honors the set moves and keeps the new value; one
-                // that ignores it leaves the old value in place. This reads the
-                // bar itself (not the target), so it works even when the caller
-                // scrolled via the container's own id, whose frame never moves.
-                let after = (axAttribute(bar, kAXValueAttribute) as? NSNumber)?.doubleValue ?? current
-                if ok, abs(after - current) > 1e-4 {
-                    return try await tier1Success(
-                        via: "setting the container's scroll-bar position",
-                        positionChanged: true, contentChanged: false)
-                }
-                if !fallbackReasons.contains(.scrollActionUnverified) {
-                    fallbackReasons.append(.scrollActionUnverified)
-                }
+        tier = .accessibilityAttribute
+        dispatched = true
+        before.notes.append("Selected the container's settable scroll bar before delivery.")
+    case .pageAction(let actionContainer, let action, let count):
+        try checkCancellationBeforeDelivery()
+        for _ in 0..<count {
+            let error = AXUIElementPerformAction(actionContainer, action as CFString)
+            guard error == .success else {
+                throw ToolError.failed("\(action) failed (\(axErrorDescription(error))).")
             }
         }
-
-        // Strategy 2: the container's own page-scroll action (some AppKit /
-        // custom scroll areas honor it, though NSScrollView reports it
-        // unsupported on perform). The action lives on the AXScrollArea, which
-        // may be an ancestor of the innermost qualifier, so use the nearest
-        // ranked container that advertises it.
-        if let action = scrollPageAction(for: direction),
-            let actionContainer = ranked.first(where: { axActionNames($0).contains(action) })
-        {
-            let fingerprint = scrollMovementFingerprint(container: actionContainer, target: target.element)
-            var performed = true
-            try checkCancellationBeforeDelivery()
-            for _ in 0..<pageCount where performed {
-                performed = AXUIElementPerformAction(actionContainer, action as CFString) == .success
-            }
-            try? await Task.sleep(for: .milliseconds(80))
-            let moved = scrollMovementChanged(
-                before: fingerprint,
-                after: scrollMovementFingerprint(container: actionContainer, target: target.element)) == true
-            if performed, moved {
-                return try await tier1Success(via: "the container's \(action) action")
-            }
-            fallbackReasons.append(.scrollActionUnverified)
+        tier = .accessibilityAction
+        dispatched = true
+        before.notes.append("Selected the container's advertised \(action) action before delivery.")
+    case .reveal(let reveal):
+        try checkCancellationBeforeDelivery()
+        let error = AXUIElementPerformAction(reveal, "AXScrollToVisible" as CFString)
+        guard error == .success else {
+            throw ToolError.failed(
+                "AXScrollToVisible failed (\(axErrorDescription(error))).")
         }
-
-        // Strategy 3: reveal an off-screen descendant. Web areas expose no
-        // settable scroll bar or page action, but their content supports
-        // AXScrollToVisible, and scrolling a descendant that sits ~pages
-        // viewports away into view advances the content by that much.
-        if let container,
-            let reveal = descendantToRevealForScroll(
-                container: container, direction: direction, pages: args.number("pages") ?? 1,
-                windowFrame: target.deliveryContext.windowFrame)
-        {
-            let fingerprint = scrollMovementFingerprint(container: container, target: target.element)
-            try checkCancellationBeforeDelivery()
-            let performed = AXUIElementPerformAction(reveal, "AXScrollToVisible" as CFString) == .success
-            try? await Task.sleep(for: .milliseconds(80))
-            let moved = scrollMovementChanged(
-                before: fingerprint,
-                after: scrollMovementFingerprint(container: container, target: target.element)) == true
-            if performed, moved {
-                return try await tier1Success(via: "revealing an off-screen element (AXScrollToVisible)")
-            }
-            if !fallbackReasons.contains(.scrollActionUnverified) {
-                fallbackReasons.append(.scrollActionUnverified)
-            }
-        }
+        tier = .accessibilityAction
+        dispatched = true
+        before.notes.append("Selected one off-screen descendant to reveal before delivery.")
+    case .wheel:
+        tier = try deliverScroll(
+            at: point, deltaX: deltaX, deltaY: deltaY,
+            context: target.deliveryContext)
+        dispatched = true
+        if direction != nil { fallbackReasons.insert(.axActionUnsupported, at: 0) }
     }
 
-    // Tier 2: synthetic wheel at the hit point.
-    let tier = try deliverScroll(at: point, deltaX: deltaX, deltaY: deltaY, context: target.deliveryContext)
-    try? await Task.sleep(for: .milliseconds(80))
+    if dispatched && verifyEffect {
+        await waitForDeliveryVerification(
+            observer: deliveryObserver, baselineRevision: deliveryRevision,
+            predicate: {
+                scrollMovementChanged(
+                    before: beforeMovement,
+                    after: scrollMovementFingerprint(
+                        container: container, target: target.element)) == true
+            })
+    }
 
     if let container, let beforeOffset, let afterOffset = scrollOffsetSignature(container) {
         before.scrollPositionChanged = beforeOffset != afterOffset
@@ -276,7 +302,7 @@ func scrollImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
     let verifier = ActionVerifier(
         family: .scroll, intent: .scrollContent, deliveryTier: tier.rawValue,
-        dispatchSucceeded: true, hasTargetElement: false, snapshotElement: nil,
+        dispatchSucceeded: dispatched, hasTargetElement: false, snapshotElement: nil,
         before: before, beforeWindowTitle: target.snapshot.windowTitle)
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle,
@@ -297,6 +323,7 @@ func dragImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         throw ToolError.failed("Call get_app_state for \(app.name) before dragging.")
     }
     let window = try resolveMutationWindow(snapshot: snapshot, app: app)
+    try requireFreshCoordinateGeometry(snapshot: snapshot, window: window)
     let from = try screenPoint(x: try args.requireNumber("from_x"), y: try args.requireNumber("from_y"), snapshot: snapshot)
     let to = try screenPoint(x: try args.requireNumber("to_x"), y: try args.requireNumber("to_y"), snapshot: snapshot)
 
@@ -312,10 +339,19 @@ func dragImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         windowFrame: window.frame,
         allowGlobalCursor: false
     )
+    let verifyEffect = args.bool("include_state") != false
+    let deliveryObserver = verifyEffect ? AXDeliveryObserver(
+        pid: app.pid, application: app.axApplication, window: window.element,
+        target: nil, family: .drag) : nil
+    let deliveryRevision = deliveryObserver?.revision
     await AgentCursor.shared.glide(to: from, targetWindow: context.windowNumber)
     let tier = try await deliverDrag(from: from, to: to, context: context)
     await AgentCursor.shared.pulse(at: to, targetWindow: context.windowNumber)
-    try? await Task.sleep(for: .milliseconds(80))
+    if verifyEffect {
+        await waitForDeliveryVerification(
+            observer: deliveryObserver, baselineRevision: deliveryRevision,
+            predicate: nil)
+    }
 
     // Drag is a coordinate gesture with no re-readable target: success on a
     // whole-window change, verifier_ambiguous otherwise (a drag with no visible

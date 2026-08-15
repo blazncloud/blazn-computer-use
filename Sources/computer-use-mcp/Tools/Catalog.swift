@@ -338,7 +338,7 @@ let toolCatalog: [ToolSpec] = [
         name: "set_value",
         description: """
             Set the complete value of an element directly (text fields, sliders, \
-            checkboxes, pickers). Replaces the current value — faster and more reliable \
+            pickers). Use click for checkbox and radio-button toggles. Replaces the current value — faster and more reliable \
             than clicking and typing when the element supports it. Returns fresh app state.
             """,
         inputSchema: objectSchema(
@@ -346,8 +346,8 @@ let toolCatalog: [ToolSpec] = [
                 "app": appParam,
                 "element_id": elementIDParam,
                 "value": stringParam(
-                    "New value. For checkboxes use \"true\"/\"false\"; for sliders a number. "
-                        + "Maximum \(ArgumentBounds.maxSetValueCharacters) characters."
+                    "New value. For sliders use a number. Maximum "
+                        + "\(ArgumentBounds.maxSetValueCharacters) characters."
                 ),
                 "include_screenshot": includeScreenshotParam,
                 "include_state": includeStateParam,

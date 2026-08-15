@@ -33,6 +33,15 @@ import Testing
             beforeSelected: true) == .toggle(false))
     }
 
+    @Test func clickIntentDerivesRadioSelection() {
+        #expect(clickIntent(
+            role: "AXRadioButton", button: "left", clickCount: 1,
+            beforeSelected: false) == .toggle(true))
+        #expect(clickIntent(
+            role: "AXRadioButton", button: "left", clickCount: 1,
+            beforeSelected: true) == .toggle(true))
+    }
+
     @Test func clickIntentDoesNotGuessWhenCheckboxStateIsUnknown() {
         #expect(clickIntent(
             role: "AXCheckBox", button: "left", clickCount: 1,
@@ -176,6 +185,27 @@ import Testing
         #expect(outcome.failureDomain == .coercion)
     }
 
+    @Test func secondaryIncrementRequiresNumericMovementInRequestedDirection() {
+        var increased = ActionVerification()
+        increased.beforeValuePreview = "4"
+        increased.afterValuePreview = "5"
+        let success = ActionVerifier.reduce(
+            family: .secondaryAction, intent: .incrementNumber,
+            verification: increased, rereadFailed: false,
+            dispatchSucceeded: true, deliveryTier: attrTier,
+            hasTargetElement: true)
+        #expect(success.classification == .success)
+
+        var unchanged = increased
+        unchanged.afterValuePreview = "4"
+        let unverified = ActionVerifier.reduce(
+            family: .secondaryAction, intent: .incrementNumber,
+            verification: unchanged, rereadFailed: false,
+            dispatchSucceeded: true, deliveryTier: attrTier,
+            hasTargetElement: true)
+        #expect(unverified.classification == .effectNotVerified)
+    }
+
     // MARK: type_text
 
     @Test func typedTextPresentIsSuccess() {
@@ -187,16 +217,27 @@ import Testing
         #expect(outcome.classification == .success)
     }
 
-    @Test func typedTextReflectedInSeparateReadoutIsSuccess() {
-        // Fixture keystroke-input: the acted element's value is read-only, but
-        // the echo readout changes the tree — that is the confirming signal.
+    @Test func textAlreadyPresentBeforeDeliveryDoesNotProveInsertion() {
+        var v = ActionVerification()
+        v.beforeValuePreview = "hello"
+        v.afterValuePreview = "hello"
+        let outcome = ActionVerifier.reduce(
+            family: .type, intent: .insertText("hello"), verification: v,
+            rereadFailed: false, dispatchSucceeded: true,
+            deliveryTier: attrTier, hasTargetElement: true)
+        #expect(outcome.classification == .effectNotVerified)
+    }
+
+    @Test func unrelatedTreeChangeDoesNotProveTypedText() {
+        // A separate readout may change for unrelated reasons. Only the exact
+        // target value proves type_text.
         var v = ActionVerification()
         v.afterValuePreview = ""
         v.renderedTextChanged = true
         let outcome = ActionVerifier.reduce(
             family: .type, intent: .insertText("hi"), verification: v,
             rereadFailed: false, dispatchSucceeded: true, deliveryTier: droppableTier, hasTargetElement: true)
-        #expect(outcome.classification == .success)
+        #expect(outcome.classification == .effectNotVerified)
     }
 
     @Test func typedTextIgnoredIsEffectNotVerified() {
@@ -242,7 +283,7 @@ import Testing
         #expect(!outcome.webAXEchoRisk)
     }
 
-    @Test func focusedWebAXTypeWindowChangeWithoutIndependentDiffIsDowngraded() {
+    @Test func focusedWebAXTypeWithoutTargetReadbackIsAmbiguous() {
         var v = ActionVerification()
         v.renderedTextChanged = true
         v.targetInWebArea = true
@@ -250,9 +291,9 @@ import Testing
         let outcome = ActionVerifier.reduce(
             family: .type, intent: .insertText("hello"), verification: v,
             rereadFailed: false, dispatchSucceeded: true, deliveryTier: attrTier, hasTargetElement: false)
-        #expect(outcome.classification == .effectNotVerified)
-        #expect(outcome.failureDomain == .web)
-        #expect(outcome.webAXEchoRisk)
+        #expect(outcome.classification == .verifierAmbiguous)
+        #expect(outcome.failureDomain == .verification)
+        #expect(!outcome.webAXEchoRisk)
     }
 
     @Test func webAXEchoTextMatchingIndependentDiffEarnsSuccess() {

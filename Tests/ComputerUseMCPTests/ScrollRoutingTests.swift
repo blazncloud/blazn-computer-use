@@ -3,6 +3,13 @@ import Testing
 @testable import computer_use_mcp
 
 @Suite struct ScrollRoutingTests {
+    @Test func semanticOwnerCandidatesSkipPinnedInnerContainer() {
+        #expect(scrollOwnerCandidateIndices(atExtents: [true, false]) == [1])
+        #expect(scrollOwnerCandidateIndices(atExtents: [nil, false]) == [0, 1])
+        #expect(scrollOwnerCandidateIndices(atExtents: [true, true]) == [0])
+        #expect(scrollOwnerCandidateIndices(atExtents: []) == [])
+    }
+
     private func features(
         _ role: String, vBar: Bool = false, hBar: Bool = false, scrollToVisible: Bool = false
     ) -> ScrollCandidateFeatures {

@@ -11,6 +11,7 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let app = try resolveApp(args.requireString("app"))
     try requireAccessibilityTrusted()
     let text = try args.requireString("text")
+    try validateTypeTextArgument(text)
     try ArgumentBounds.checkStringLength(text, argument: "text", maximum: ArgumentBounds.maxTypeTextCharacters)
     let confirmed = SafetyPolicy.confirmed(args)
     try SafetyPolicy.check(app: app, confirmed: confirmed)
@@ -21,6 +22,7 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     let snapshotElement: CapturedNode?
     let windowTitle: String?
     let actedWindowID: CGWindowID?
+    let actedWindowElement: AXUIElement
     if let elementID = args.string("element_id") {
         let target = try await resolveMutationTarget(app: app, elementID: elementID)
         element = target.element
@@ -28,6 +30,7 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         snapshotElement = target.snapshotElement
         windowTitle = target.snapshot.windowTitle
         actedWindowID = target.window.lineageWindowID
+        actedWindowElement = target.window.element
     } else {
         let window = try targetWindow(for: app, title: nil)
         guard let windowID = window.lineageWindowID else {
@@ -44,15 +47,39 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         snapshotElement = nil
         windowTitle = window.title
         actedWindowID = windowID
+        actedWindowElement = window.element
     }
 
     try SafetyPolicy.checkTyping(into: element, app: app, confirmed: confirmed)
+    let verifyEffect = args.bool("include_state") != false
+    let deliveryObserver = verifyEffect ? AXDeliveryObserver(
+        pid: app.pid, application: app.axApplication, window: actedWindowElement,
+        target: element, family: .type) : nil
+    let deliveryRevision = deliveryObserver?.revision
     // Read (before): capture the field's value before the insertion.
     let before = ActionVerifier.captureBefore(element, family: .type, snapshotElement: snapshotElement)
-    let tier = try insertText(text, into: element, app: app, described: described)
+    let tier = try await insertText(
+        text, into: element, app: app, described: described,
+        observer: deliveryObserver)
+    let intent = ActionIntent.insertText(text)
+    let predicate: () async -> Bool = {
+        if let snapshotElement {
+            return await retainedTargetSatisfies(
+                snapshotElement: snapshotElement, window: actedWindowElement,
+                family: .type, intent: intent, before: before)
+        }
+        var after = before
+        after.captureAfter(element, family: .type)
+        return intent.satisfiedByAfter(after).satisfied
+    }
+    if verifyEffect {
+        await waitForDeliveryVerification(
+            observer: deliveryObserver, baselineRevision: deliveryRevision,
+            predicate: predicate)
+    }
     let warning = readBackWarning(typed: text, element: element)
     let verifier = ActionVerifier(
-        family: .type, intent: .insertText(text), deliveryTier: tier.rawValue,
+        family: .type, intent: intent, deliveryTier: tier.rawValue,
         dispatchSucceeded: true, hasTargetElement: snapshotElement != nil,
         snapshotElement: snapshotElement, before: before, beforeWindowTitle: windowTitle)
     return try await stateResult(
@@ -63,6 +90,13 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         focusTelemetry: focus.finish(deliveryTier: tier.rawValue),
         verifier: verifier
     )
+}
+
+func validateTypeTextArgument(_ text: String) throws {
+    guard !text.isEmpty else {
+        throw ToolError.invalidArguments(
+            "\"text\" must not be empty; use set_value to clear a field.")
+    }
 }
 
 /// Read the element's value back after insertion and verify the typed text
@@ -94,58 +128,111 @@ func typedTextWarning(typed: String, currentValue: String?) -> String? {
 /// caret). Prefers the canonical kAXSelectedText replacement, then splicing the
 /// full value; if the element accepts neither (custom/web fields), falls back
 /// to background-safe synthetic Unicode key events. Returns the tier used.
-private func insertText(_ text: String, into element: AXUIElement, app: ResolvedApp, described: String) throws -> InputTier {
-    var settable = DarwinBoolean(false)
+private func insertText(
+    _ text: String, into element: AXUIElement, app: ResolvedApp, described: String,
+    observer: AXDeliveryObserver?
+) async throws -> InputTier {
 
-    // Preferred: replace the current selection.
-    try checkCancellationBeforeDelivery()
-    if AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable) == .success,
-        settable.boolValue,
-        AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) == .success
+    let selectedTextSettable = try axAttributeIsSettable(
+        element, kAXSelectedTextAttribute as String)
+    let valueSettable = selectedTextSettable
+        ? false
+        : try axAttributeIsSettable(element, kAXValueAttribute as String)
+    switch textDeliveryRoute(
+        selectedTextSettable: selectedTextSettable,
+        valueSettable: valueSettable)
     {
+    case .selectedText:
+        try checkCancellationBeforeDelivery()
+        let error = AXUIElementSetAttributeValue(
+            element, kAXSelectedTextAttribute as CFString, text as CFString)
+        guard error == .success else {
+            throw ToolError.failed(
+                "Could not replace the selected text in \(described) (\(axErrorDescription(error))).")
+        }
         return .accessibilityAttribute
-    }
 
-    // Next: splice into the full value at the selected range.
-    guard
-        AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success,
-        settable.boolValue
-    else {
-        // The element exposes no settable AX value. Focus it (best effort) so
+    case .synthetic:
+        // The element exposes no settable AX value. Focus it and prove the
         // synthetic keys land here, then type through Unicode key events posted
         // to the pid — same background-safe, pid-targeted discipline as the
         // click ladder, never a global post. The secure-field gate already ran
         // in typeTextImpl, so this path stays behind that confirmation.
         try checkCancellationBeforeDelivery()
-        AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        func ownsFocus() -> Bool {
+            guard let current = axElement(app.axApplication, kAXFocusedUIElementAttribute) else {
+                return false
+            }
+            return CFEqual(current, element)
+        }
+        let focusRevision = observer?.revision
+        if !ownsFocus() {
+            let focusError = AXUIElementSetAttributeValue(
+                element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+            guard focusError == .success else {
+                throw ToolError.failed(
+                    "Could not focus \(described) before synthetic typing "
+                        + "(\(axErrorDescription(focusError))).")
+            }
+        }
+        let focused = await waitForDeliveryVerification(
+            observer: observer, baselineRevision: focusRevision,
+            predicate: { ownsFocus() })
+        guard focused else {
+            throw ToolError.failed(
+                "Could not prove that \(described) received focus; no synthetic text was posted.")
+        }
         let context = DeliveryContext(pid: app.pid, windowNumber: nil, windowFrame: nil, allowGlobalCursor: false)
         return try typeUnicodeText(text, context: context)
-    }
 
-    let current = axString(element, kAXValueAttribute) ?? ""
-    let nsCurrent = current as NSString
-    var range = CFRange(location: nsCurrent.length, length: 0)
-    if let rangeValue = axAttribute(element, kAXSelectedTextRangeAttribute),
-        CFGetTypeID(rangeValue) == AXValueGetTypeID()
-    {
-        AXValueGetValue(rangeValue as! AXValue, .cfRange, &range)
-    }
-    let start = max(0, min(range.location, nsCurrent.length))
-    let length = max(0, min(range.length, nsCurrent.length - start))
-    let updated = nsCurrent.replacingCharacters(in: NSRange(location: start, length: length), with: text)
+    case .valueSplice:
+        let current = axString(element, kAXValueAttribute) ?? ""
+        let nsCurrent = current as NSString
+        var range = CFRange(location: nsCurrent.length, length: 0)
+        if let rangeValue = axAttribute(element, kAXSelectedTextRangeAttribute),
+            CFGetTypeID(rangeValue) == AXValueGetTypeID()
+        {
+            AXValueGetValue(rangeValue as! AXValue, .cfRange, &range)
+        }
+        let start = max(0, min(range.location, nsCurrent.length))
+        let length = max(0, min(range.length, nsCurrent.length - start))
+        let updated = nsCurrent.replacingCharacters(
+            in: NSRange(location: start, length: length), with: text)
 
-    try checkCancellationBeforeDelivery()
-    guard AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, updated as CFString) == .success
-    else {
-        throw ToolError.failed("Could not set the value of \(described).")
-    }
+        try checkCancellationBeforeDelivery()
+        let error = AXUIElementSetAttributeValue(
+            element, kAXValueAttribute as CFString, updated as CFString)
+        guard error == .success else {
+            throw ToolError.failed(
+                "Could not set the value of \(described) (\(axErrorDescription(error))).")
+        }
 
-    // Place the caret after the inserted text.
-    var caret = CFRange(location: start + (text as NSString).length, length: 0)
-    if let caretValue = AXValueCreate(.cfRange, &caret) {
-        AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, caretValue)
+        // Caret placement is best-effort bookkeeping after the single text
+        // delivery; failure cannot trigger another insertion route.
+        var caret = CFRange(location: start + (text as NSString).length, length: 0)
+        if let caretValue = AXValueCreate(.cfRange, &caret) {
+            AXUIElementSetAttributeValue(
+                element, kAXSelectedTextRangeAttribute as CFString, caretValue)
+        }
+        return .accessibilityAttribute
     }
-    return .accessibilityAttribute
+}
+
+/// Capability selection happens before delivery. Unsupported attributes permit
+/// another route; transport/runtime errors fail instead of silently changing
+/// delivery methods.
+func axAttributeIsSettable(_ element: AXUIElement, _ attribute: String) throws -> Bool {
+    var settable = DarwinBoolean(false)
+    let error = AXUIElementIsAttributeSettable(element, attribute as CFString, &settable)
+    switch error {
+    case .success:
+        return settable.boolValue
+    case .attributeUnsupported, .noValue, .notImplemented:
+        return false
+    default:
+        throw ToolError.failed(
+            "Could not determine whether \(attribute) is writable (\(axErrorDescription(error))).")
+    }
 }
 
 // MARK: - set_value
@@ -168,6 +255,11 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         currentValue: axString(target.element, kAXValueAttribute), newValue: value, app: app, confirmed: confirmed
     )
 
+    let verifyEffect = args.bool("include_state") != false
+    let deliveryObserver = verifyEffect ? AXDeliveryObserver(
+        pid: app.pid, application: app.axApplication, window: target.window.element,
+        target: target.element, family: .setValue) : nil
+    let deliveryRevision = deliveryObserver?.revision
     // Read (before): capture the target's fields before dispatch.
     let before = ActionVerifier.captureBefore(
         target.element, family: .setValue, snapshotElement: target.snapshotElement)
@@ -181,33 +273,7 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
             beforeWindowTitle: windowTitle, resolved: resolved)
     }
 
-    // Checkboxes and radio buttons: treat as semantic toggle.
-    if target.snapshotElement.role == "AXCheckBox" || target.snapshotElement.role == "AXRadioButton" {
-        guard let desired = Bool(value.lowercased()) ?? (value == "1" ? true : value == "0" ? false : nil)
-        else {
-            throw ToolError.invalidArguments("For \(target.snapshotElement.role), value must be true or false.")
-        }
-        // Already-satisfied is a success, not a wasted press: skip dispatch when
-        // the control is already in the requested state (the reducer classifies
-        // it success from the before-state).
-        let current = before.beforeSelected ?? false
-        if current != desired {
-            try performAXAction(kAXPressAction as String, on: target)
-        }
-        return try await stateResult(
-            app: app, windowTitle: windowTitle, windowID: target.window.lineageWindowID,
-            note: "Set \(describeTarget(target)) to \(desired).",
-            screenshot: screenshotDetail(args),
-            focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAction.rawValue),
-            verifier: verifier(intent: .toggle(desired), tier: .accessibilityAction, dispatched: current != desired)
-        )
-    }
-
-    var settable = DarwinBoolean(false)
-    guard
-        AXUIElementIsAttributeSettable(target.element, kAXValueAttribute as CFString, &settable) == .success,
-        settable.boolValue
-    else {
+    guard try axAttributeIsSettable(target.element, kAXValueAttribute as String) else {
         // No settable value: retrying won't help — classify unsupported rather
         // than throw (isError stays false, the agent learns to switch tools).
         return try await stateResult(
@@ -252,10 +318,29 @@ func setValueImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         intent = .setText(value)
     }
 
+    if intent.alreadySatisfied(by: before) {
+        return try await stateResult(
+            app: app, windowTitle: windowTitle, windowID: target.window.lineageWindowID,
+            note: "The value of \(describeTarget(target)) already matches the request.",
+            screenshot: screenshotDetail(args),
+            focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAttribute.rawValue),
+            verifier: verifier(intent: intent, tier: .accessibilityAttribute, dispatched: false)
+        )
+    }
+
     try checkCancellationBeforeDelivery()
     guard AXUIElementSetAttributeValue(target.element, kAXValueAttribute as CFString, newValue) == .success
     else {
         throw ToolError.failed("Setting the value of \(describeTarget(target)) failed.")
+    }
+    if verifyEffect {
+        await waitForDeliveryVerification(
+            observer: deliveryObserver, baselineRevision: deliveryRevision,
+            predicate: {
+                await retainedTargetSatisfies(
+                    snapshotElement: target.snapshotElement, window: target.window.element,
+                    family: .setValue, intent: intent, before: before)
+            })
     }
     return try await stateResult(
         app: app, windowTitle: windowTitle, windowID: target.window.lineageWindowID,
@@ -273,6 +358,11 @@ func selectTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     try requireAccessibilityTrusted()
     let focus = FocusChangeTracker.start()
     let target = try await resolveMutationTarget(app: app, elementID: args.requireString("element_id"))
+    let verifyEffect = args.bool("include_state") != false
+    let deliveryObserver = verifyEffect ? AXDeliveryObserver(
+        pid: app.pid, application: app.axApplication, window: target.window.element,
+        target: target.element, family: .setValue) : nil
+    let deliveryRevision = deliveryObserver?.revision
     let text = try args.requireString("text")
     let occurrence = max(1, args.integer("occurrence") ?? 1)
 
@@ -322,6 +412,14 @@ func selectTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     else {
         throw ToolError.failed("\(describeTarget(target)) did not accept the text selection.")
     }
+    if verifyEffect {
+        await waitForDeliveryVerification(
+            observer: deliveryObserver, baselineRevision: deliveryRevision,
+            predicate: {
+                guard let observed = selectedTextRange(of: target.element) else { return false }
+                return observed.location == range.location && observed.length == range.length
+            })
+    }
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle,
         windowID: target.window.lineageWindowID,
@@ -329,6 +427,15 @@ func selectTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         screenshot: screenshotDetail(args),
         focusTelemetry: focus.finish(deliveryTier: InputTier.accessibilityAttribute.rawValue)
     )
+}
+
+private func selectedTextRange(of element: AXUIElement) -> CFRange? {
+    guard let raw = axAttribute(element, kAXSelectedTextRangeAttribute),
+        CFGetTypeID(raw) == AXValueGetTypeID()
+    else { return nil }
+    var range = CFRange()
+    guard AXValueGetValue(raw as! AXValue, .cfRange, &range) else { return nil }
+    return range
 }
 
 // MARK: - read_text
@@ -413,13 +520,45 @@ func performSecondaryActionImpl(_ args: [String: Value]) async throws -> CallToo
     if activatingActions.contains(action) {
         try SafetyPolicy.checkClick(label: clickableLabel(target.element), app: app, confirmed: confirmed)
     }
+    let family: ActionFamily = action == "AXShowMenu" ? .menu : .secondaryAction
+    let intent: ActionIntent
+    switch action {
+    case "AXIncrement": intent = .incrementNumber
+    case "AXDecrement": intent = .decrementNumber
+    case "AXShowMenu": intent = .openMenu
+    default: intent = .activate
+    }
+    let verifyEffect = args.bool("include_state") != false
+    let deliveryObserver = verifyEffect ? AXDeliveryObserver(
+        pid: app.pid, application: app.axApplication, window: target.window.element,
+        target: target.element, family: family) : nil
+    let deliveryRevision = deliveryObserver?.revision
+    let before = ActionVerifier.captureBefore(
+        target.element, family: family, snapshotElement: target.snapshotElement)
     try performAXAction(action, on: target)
+    let predicate: (() async -> Bool)?
+    if intent == .incrementNumber || intent == .decrementNumber {
+        predicate = {
+            await retainedTargetSatisfies(
+                snapshotElement: target.snapshotElement, window: target.window.element,
+                family: family, intent: intent, before: before)
+        }
+    } else {
+        predicate = nil
+    }
+    if verifyEffect {
+        await waitForDeliveryVerification(
+            observer: deliveryObserver, baselineRevision: deliveryRevision,
+            predicate: predicate)
+    }
     // Secondary actions are usually menu-shaped: success when the tree changes
     // (a context menu appeared), verifier_ambiguous when nothing observable
     // followed — menu state is frequently unreadable via accessibility.
     let verifier = ActionVerifier(
-        family: .menu, intent: .openMenu, deliveryTier: InputTier.accessibilityAction.rawValue,
-        dispatchSucceeded: true, hasTargetElement: false, snapshotElement: nil,
+        family: family, intent: intent, deliveryTier: InputTier.accessibilityAction.rawValue,
+        dispatchSucceeded: true, hasTargetElement: family.readsTargetFields,
+        snapshotElement: family.readsTargetFields ? target.snapshotElement : nil,
+        before: before,
         beforeWindowTitle: target.snapshot.windowTitle)
     return try await stateResult(
         app: app, windowTitle: target.snapshot.windowTitle,

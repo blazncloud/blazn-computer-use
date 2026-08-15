@@ -91,21 +91,6 @@ enum FallbackReason: String, Equatable, Sendable {
     /// scroll only: no scrollable container was found on the target's AX
     /// ancestor chain, so the wheel was posted at the raw hit point.
     case noScrollContainerFound = "no-scroll-container-found"
-    /// scroll only: the container's AX page-scroll action fired but no movement
-    /// was observed, so delivery fell through to the synthetic wheel.
-    case scrollActionUnverified = "scroll-action-unverified"
-
-    // Multi-strategy AX chain rungs that fired but whose effect was not
-    // observed, so the chain fell through to the next rung. Surfaced so the
-    // agent sees which AX strategies were tried before the one that landed (or
-    // before delivery fell through to synthetic injection).
-    case chainAXPressUnverified = "chain-ax-press-unverified"
-    case chainAXConfirmUnverified = "chain-ax-confirm-unverified"
-    case chainAXOpenUnverified = "chain-ax-open-unverified"
-    case chainAXPickUnverified = "chain-ax-pick-unverified"
-    case chainSelectionRelayUnverified = "chain-selection-relay-unverified"
-    case chainChildActionUnverified = "chain-child-action-unverified"
-    case chainAncestorActionUnverified = "chain-ancestor-action-unverified"
 }
 
 /// The tier a delivery actually used plus, in tier order, why each

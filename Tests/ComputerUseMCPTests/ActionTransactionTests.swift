@@ -520,7 +520,7 @@ import Testing
         #expect(await task.value)
     }
 
-    @Test func cancelledSystemAndChainPrimitivesAreNotInvoked() async {
+    @Test func cancelledSystemAndAXPrimitivesAreNotInvoked() async {
         let system = Task {
             while !Task.isCancelled { await Task.yield() }
             var invoked = false
@@ -534,21 +534,21 @@ import Testing
         system.cancel()
         #expect(await system.value)
 
-        let chain = Task {
+        let axAction = Task {
             while !Task.isCancelled { await Task.yield() }
             var invoked = false
             do {
-                _ = try performChainPrimitive {
+                _ = try performAXActionPrimitive {
                     invoked = true
-                    return true
+                    return .success
                 }
                 return false
             } catch {
                 return !invoked && error is PreDeliveryCancellationError
             }
         }
-        chain.cancel()
-        #expect(await chain.value)
+        axAction.cancel()
+        #expect(await axAction.value)
     }
 
     @Test func confirmedSystemMutationOutcomeIsCommitted() {

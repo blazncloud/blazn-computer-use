@@ -19,6 +19,8 @@ struct PointTarget {
     let point: CGPoint?
     /// Snapshot the ids/coordinates came from.
     let snapshot: AppSnapshot
+    /// Exact retained and revalidated window that owns this mutation.
+    let windowElement: AXUIElement
     /// Human description for result notes.
     let description: String
     let deliveryContext: DeliveryContext
@@ -33,6 +35,61 @@ struct PointTarget {
             )
         }
         return point
+    }
+}
+
+enum CoordinateFreshnessDecision: Equatable {
+    case fresh
+    case stale(String)
+}
+
+/// Screenshot coordinates are valid only for the exact geometry they were
+/// captured from. AX handles use current live geometry and do not need this
+/// check; coordinate and drag tools do.
+func coordinateFreshnessDecision(
+    snapshotOrigin: [Double], snapshotSize: [Double]?, pixelsPerPoint: Double,
+    capturedDisplayScale: Double?, currentFrame: CGRect, currentDisplayScale: Double,
+    tolerance: Double = 0.5
+) -> CoordinateFreshnessDecision {
+    guard snapshotOrigin.count >= 2, let snapshotSize, snapshotSize.count >= 2,
+        pixelsPerPoint.isFinite, pixelsPerPoint > 0
+    else { return .stale("captured window geometry is incomplete") }
+    let capturedFrame = CGRect(
+        x: snapshotOrigin[0], y: snapshotOrigin[1],
+        width: snapshotSize[0] / pixelsPerPoint,
+        height: snapshotSize[1] / pixelsPerPoint)
+    let differences = [
+        abs(capturedFrame.minX - currentFrame.minX),
+        abs(capturedFrame.minY - currentFrame.minY),
+        abs(capturedFrame.width - currentFrame.width),
+        abs(capturedFrame.height - currentFrame.height),
+    ]
+    if differences.contains(where: { !$0.isFinite || $0 > tolerance }) {
+        return .stale("the window moved or resized after the screenshot")
+    }
+    if let capturedDisplayScale,
+        abs(capturedDisplayScale - currentDisplayScale) > 0.01
+    {
+        return .stale("the window's display scale changed after the screenshot")
+    }
+    return .fresh
+}
+
+func requireFreshCoordinateGeometry(snapshot: AppSnapshot, window: TargetWindow) throws {
+    let currentScale = displayScale(
+        atGlobalTopLeft: CGPoint(x: window.frame.midX, y: window.frame.midY))
+    switch coordinateFreshnessDecision(
+        snapshotOrigin: snapshot.screenshotWindowOrigin ?? [],
+        snapshotSize: snapshot.screenshotWindowSize,
+        pixelsPerPoint: snapshot.pixelsPerPoint,
+        capturedDisplayScale: snapshot.displayScale,
+        currentFrame: window.frame, currentDisplayScale: currentScale)
+    {
+    case .fresh:
+        return
+    case .stale(let reason):
+        throw ToolError.failed(
+            "Screenshot coordinates are stale because \(reason). Call get_app_state with a screenshot and retry.")
     }
 }
 
@@ -52,7 +109,8 @@ func resolvePointTarget(_ args: [String: Value], app: ResolvedApp, allowGlobalCu
         let point = axFrame(target.element).map { CGPoint(x: $0.midX, y: $0.midY) }
         return PointTarget(
             element: target.element, snapshotElement: target.snapshotElement, point: point,
-            snapshot: target.snapshot, description: describeTarget(target), deliveryContext: context
+            snapshot: target.snapshot, windowElement: target.window.element,
+            description: describeTarget(target), deliveryContext: context
         )
     }
 
@@ -61,6 +119,7 @@ func resolvePointTarget(_ args: [String: Value], app: ResolvedApp, allowGlobalCu
             throw ToolError.failed("Call get_app_state for \(app.name) before using coordinates.")
         }
         let window = try resolveMutationWindow(snapshot: snapshot, app: app)
+        try requireFreshCoordinateGeometry(snapshot: snapshot, window: window)
         let context = pointDeliveryContext(
             pid: app.pid, windowNumber: snapshot.lineage?.windowID,
             windowFrame: window.frame, allowGlobalCursor: allowGlobalCursor,
@@ -69,6 +128,7 @@ func resolvePointTarget(_ args: [String: Value], app: ResolvedApp, allowGlobalCu
         let element = accessibilityElement(at: point, pid: app.pid)
         return PointTarget(
             element: element, snapshotElement: nil, point: point, snapshot: snapshot,
+            windowElement: window.element,
             description: "(\(Int(x)),\(Int(y)))", deliveryContext: context
         )
     }

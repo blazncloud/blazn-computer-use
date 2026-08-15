@@ -122,6 +122,13 @@ struct AppSnapshot: @unchecked Sendable {
     let windowOrigin: [Double]
     /// Multiplier from window points to screenshot pixels.
     let pixelsPerPoint: Double
+    /// Physical backing scale of the display at capture time. Kept separate
+    /// from screenshot pixelsPerPoint, which may be downscaled for payload size.
+    let displayScale: Double?
+    /// Geometry provenance of the screenshot coordinates. Tree-only captures
+    /// update live tree geometry but carry these fields forward unchanged.
+    let screenshotWindowOrigin: [Double]?
+    let screenshotWindowSize: [Double]?
     /// Window size in screenshot pixels, for coordinate bounds checks (the
     /// element list may be scoped to a subtree).
     let windowSize: [Double]?
@@ -153,7 +160,10 @@ struct AppSnapshot: @unchecked Sendable {
 
     init(
         pid: Int32, bundleIdentifier: String, windowTitle: String?,
-        windowOrigin: [Double], pixelsPerPoint: Double, windowSize: [Double]?,
+        windowOrigin: [Double], pixelsPerPoint: Double, displayScale: Double? = nil,
+        screenshotWindowOrigin: [Double]? = nil,
+        screenshotWindowSize: [Double]? = nil,
+        windowSize: [Double]?,
         createdAt: Date, generation: String,
         treeFingerprint: String? = nil, treeText: String? = nil,
         scoped: Bool? = nil, partial: Bool? = nil,
@@ -166,6 +176,9 @@ struct AppSnapshot: @unchecked Sendable {
         self.windowTitle = windowTitle
         self.windowOrigin = windowOrigin
         self.pixelsPerPoint = pixelsPerPoint
+        self.displayScale = displayScale
+        self.screenshotWindowOrigin = screenshotWindowOrigin
+        self.screenshotWindowSize = screenshotWindowSize
         self.windowSize = windowSize
         self.createdAt = createdAt
         self.generation = generation
@@ -208,11 +221,36 @@ struct AppSnapshot: @unchecked Sendable {
 
     /// Convert a screenshot pixel coordinate to global screen points.
     func screenPoint(fromScreenshotX x: Double, y: Double) -> CGPoint {
-        CGPoint(
-            x: windowOrigin[0] + x / pixelsPerPoint,
-            y: windowOrigin[1] + y / pixelsPerPoint
+        let origin = screenshotWindowOrigin ?? windowOrigin
+        return CGPoint(
+            x: origin[0] + x / pixelsPerPoint,
+            y: origin[1] + y / pixelsPerPoint
         )
     }
+}
+
+struct ScreenshotGeometryProvenance: Equatable {
+    let origin: [Double]?
+    let size: [Double]?
+    let displayScale: Double?
+}
+
+/// A tree-only capture must not rewrite the geometry of the screenshot the
+/// model still sees. Preserve all coordinate provenance together or expose no
+/// usable screenshot coordinates.
+func screenshotGeometryProvenance(
+    hasNewScreenshot: Bool, currentOrigin: [Double], currentSize: [Double],
+    currentDisplayScale: Double, previous: AppSnapshot?
+) -> ScreenshotGeometryProvenance {
+    if hasNewScreenshot {
+        return ScreenshotGeometryProvenance(
+            origin: currentOrigin, size: currentSize,
+            displayScale: currentDisplayScale)
+    }
+    return ScreenshotGeometryProvenance(
+        origin: previous?.screenshotWindowOrigin,
+        size: previous?.screenshotWindowSize,
+        displayScale: previous?.displayScale)
 }
 
 private enum SnapshotWindowIdentity: Hashable {
@@ -254,7 +292,10 @@ actor SnapshotStore {
     func capture(
         pid: pid_t, bundleIdentifier: String, windowTitle: String?,
         windowID: CGWindowID?, windowElement: AXUIElement? = nil,
-        windowOrigin: CGPoint, pixelsPerPoint: Double, windowSize: [Double]?, createdAt: Date,
+        windowOrigin: CGPoint, pixelsPerPoint: Double, displayScale: Double? = nil,
+        screenshotWindowOrigin: [Double]? = nil,
+        screenshotWindowSize: [Double]? = nil,
+        windowSize: [Double]?, createdAt: Date,
         lineageOverrideForTesting: SnapshotLineage? = nil,
         scoped: Bool = false,
         revision: (() -> UInt64)? = nil,
@@ -322,7 +363,11 @@ actor SnapshotStore {
         let snapshot = AppSnapshot(
             pid: pid, bundleIdentifier: bundleIdentifier, windowTitle: windowTitle,
             windowOrigin: [windowOrigin.x, windowOrigin.y], pixelsPerPoint: pixelsPerPoint,
-            windowSize: windowSize, createdAt: createdAt, generation: generation,
+            displayScale: displayScale,
+            screenshotWindowOrigin: screenshotWindowOrigin,
+            screenshotWindowSize: screenshotWindowSize,
+            windowSize: windowSize,
+            createdAt: createdAt, generation: generation,
             treeFingerprint: fingerprint, treeText: tree.text, scoped: scoped,
             partial: tree.isPartial, coverage: tree.coverage,
             lineage: lineage, windowElement: windowElement, root: tree.root,
@@ -335,6 +380,24 @@ actor SnapshotStore {
 
     func load(forPid pid: pid_t) -> AppSnapshot? {
         latestKeyByPid[pid].flatMap { snapshots[$0] }
+    }
+
+    /// Load only the prior snapshot for this exact window. Perception must not
+    /// inherit screenshot coordinate provenance from a sibling window owned by
+    /// the same process.
+    func load(
+        forPid pid: pid_t, windowID: CGWindowID?, windowElement: AXUIElement
+    ) -> AppSnapshot? {
+        snapshots.values.first { snapshot in
+            guard snapshot.pid == pid else { return false }
+            if let windowID {
+                return snapshot.lineage?.windowID == windowID
+            }
+            guard snapshot.lineage?.windowID == nil,
+                let retained = snapshot.windowElement
+            else { return false }
+            return CFEqual(retained, windowElement)
+        }
     }
 
     func resolveElementSnapshot(

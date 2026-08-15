@@ -146,16 +146,16 @@ Assume the agent chooses `e12@s3`, the Checkout button returned previously.
    limits/logs the call, then checks screen lock, recent human input, and URL
    policy. The handler subsequently applies confirmation and other
    operation-specific safety rules.
-4. **Load identity:** use the PID plus element ID to find the current or retained
-   compatible snapshot element.
-5. **Reselect window:** locate the current live AX window matching the snapshot's
-   saved window identity.
-6. **Reacquire target:** walk the saved role/index locator from that live window.
-   Compare identity fields such as role and label. The result is a current
-   `AXUIElement` handle, not the old snapshot record.
-7. **Stale handling:** if the path is missing or identity is incompatible, return
-   a stale/invalid-element error. The agent must query fresh state and choose a
-   current ID; the handler does not invent a replacement target.
+4. **Load identity:** use the PID plus element ID to load the captured node and
+   its exact retained `AXUIElement` handle from the in-memory snapshot.
+5. **Validate window:** require the retained AX window to remain valid, owned by
+   the same live process, present in that application's current `AXWindows`, and
+   matched to the captured `CGWindowID`.
+6. **Validate target:** read the handle's role and stable semantic fingerprint,
+   then require its `AXWindow` or bounded `AXParent` chain to reach the retained
+   window. There is no locator-path replay or replacement search.
+7. **Stale handling:** if the handle is invalid, changed, or detached, return a
+   stale-element error. The agent must query fresh state and choose a current ID.
 8. **Before evidence:** read target-local fields appropriate to the intent:
    value preview, selected/toggled state, focus, window title, and relevant
    fingerprints.
@@ -163,21 +163,21 @@ Assume the agent chooses `e12@s3`, the Checkout button returned previously.
    `move` command through the `AgentCursor` actor to the overlay FIFO. The actor
    serializes its FIFO descriptor/process state. It then waits a fixed 160 ms;
    there is no completion acknowledgement from the overlay.
-10. **Semantic action chain:** the click handler tries deterministic,
-    control-appropriate AX options such as `AXPress`, `AXConfirm`, `AXOpen`,
-    `AXPick`, selection, or a pressable descendant/ancestor. Unsupported rungs
-    are skipped.
-11. **Per-rung verification:** after an AX API reports success, briefly reread
-    target-local or window fingerprint evidence. Stop at the first observed
-    qualifying effect; API acceptance alone is not proof.
-12. **Synthetic fallback:** if no semantic rung lands and a point is available,
-    try only the handler's permitted window-targeted, PID-targeted, or guarded
-    global CoreGraphics delivery.
+10. **Plan one delivery:** inspect capabilities before mutation and choose one
+    route. For click this is one pressable self/ancestor or one synthetic click;
+    for text and scroll it is one supported attribute/action/input route.
+11. **Deliver once:** an acknowledged AX call never falls through to another
+    semantic action or synthetic input. Unsupported preflight capabilities may
+    select another route because nothing was sent yet.
+12. **Observer-assisted verification:** a short-lived observer is installed
+    before dispatch. Reread immediately, after relevant notification wakes, and
+    once at the one-second deadline. Notifications are hints; exact target state
+    is proof.
 13. **Pulse:** after delivery, send `pulse` to draw an expanding ring showing
     “the click happened.” It is feedback, not a pending indicator.
 14. **Final recapture:** reselect the window, optionally recapture pixels,
     rebuild the AX tree, commit the new snapshot, and calculate a tree diff.
-15. **Final target reread:** walk the locator against the new live hierarchy and
+15. **Final target reread:** revalidate the exact retained handle and
     reread the fields required by the action intent.
 16. **Outcome:** deterministic Swift rules return `success`, `unsupported`,
     `effect_not_verified`, or `verifier_ambiguous`, plus human-readable content,

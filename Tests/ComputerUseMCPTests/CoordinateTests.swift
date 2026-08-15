@@ -9,7 +9,9 @@ private func makeSnapshot(
 ) -> AppSnapshot {
     AppSnapshot(
         pid: 1, bundleIdentifier: "com.example.test", windowTitle: "Test",
-        windowOrigin: [100, 50], pixelsPerPoint: pixelsPerPoint, windowSize: windowSize,
+        windowOrigin: [100, 50], pixelsPerPoint: pixelsPerPoint, displayScale: 2,
+        screenshotWindowOrigin: [100, 50], screenshotWindowSize: windowSize,
+        windowSize: windowSize,
         createdAt: Date(timeIntervalSince1970: 0), generation: "s1",
         elements: [
             CapturedNode(id: "e0@s1", role: "AXWindow", label: "Test", frame: [0, 0, 460, 816])
@@ -66,6 +68,47 @@ private func makeSnapshot(
         #expect(ScreenshotDetail.reduced.scale(forDisplayScale: 2) == 1)
         #expect(ScreenshotDetail.full.maxDimension == 1600)
         #expect(ScreenshotDetail.reduced.maxDimension == 1000)
+    }
+
+    @Test func coordinateFreshnessRejectsMovedResizedAndScaleChangedWindows() {
+        let frame = CGRect(x: 100, y: 50, width: 230, height: 408)
+        #expect(coordinateFreshnessDecision(
+            snapshotOrigin: [100, 50], snapshotSize: [460, 816], pixelsPerPoint: 2,
+            capturedDisplayScale: 2, currentFrame: frame, currentDisplayScale: 2) == .fresh)
+
+        #expect(coordinateFreshnessDecision(
+            snapshotOrigin: [100, 50], snapshotSize: [460, 816], pixelsPerPoint: 2,
+            capturedDisplayScale: 2,
+            currentFrame: CGRect(x: 120, y: 50, width: 230, height: 408),
+            currentDisplayScale: 2) != .fresh)
+        #expect(coordinateFreshnessDecision(
+            snapshotOrigin: [100, 50], snapshotSize: [460, 816], pixelsPerPoint: 2,
+            capturedDisplayScale: 2,
+            currentFrame: CGRect(x: 100, y: 50, width: 250, height: 408),
+            currentDisplayScale: 2) != .fresh)
+        #expect(coordinateFreshnessDecision(
+            snapshotOrigin: [100, 50], snapshotSize: [460, 816], pixelsPerPoint: 2,
+            capturedDisplayScale: 2, currentFrame: frame,
+            currentDisplayScale: 1) != .fresh)
+    }
+
+    @Test func treeOnlyCapturePreservesPriorScreenshotGeometryAsAUnit() {
+        let previous = makeSnapshot()
+        let carried = screenshotGeometryProvenance(
+            hasNewScreenshot: false,
+            currentOrigin: [400, 300], currentSize: [900, 700],
+            currentDisplayScale: 1, previous: previous)
+        #expect(carried.origin == [100, 50])
+        #expect(carried.size == [460, 816])
+        #expect(carried.displayScale == 2)
+
+        let replaced = screenshotGeometryProvenance(
+            hasNewScreenshot: true,
+            currentOrigin: [400, 300], currentSize: [900, 700],
+            currentDisplayScale: 1, previous: previous)
+        #expect(replaced.origin == [400, 300])
+        #expect(replaced.size == [900, 700])
+        #expect(replaced.displayScale == 1)
     }
 
     @Test func treeFingerprintIgnoresIDsButNotContent() {

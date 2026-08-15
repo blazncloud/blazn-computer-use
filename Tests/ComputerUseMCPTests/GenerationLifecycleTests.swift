@@ -218,6 +218,12 @@ private func liveTestLineage(pid: pid_t, windowID: UInt32?) -> SnapshotLineage {
         }
 
         #expect(await store.load(forPid: pid)?.generation == second.snapshot.generation)
+        #expect(await store.load(
+            forPid: pid, windowID: 20, windowElement: liveTestHandle(91_001)
+        )?.generation == first.snapshot.generation)
+        #expect(await store.load(
+            forPid: pid, windowID: 21, windowElement: liveTestHandle(91_002)
+        )?.generation == second.snapshot.generation)
         #expect(await store.resolveElementSnapshot(
             forPid: pid, elementID: first.tree.elements[0].id) != nil)
     }
@@ -246,6 +252,12 @@ private func liveTestLineage(pid: pid_t, windowID: UInt32?) -> SnapshotLineage {
         }
 
         #expect(await store.load(forPid: pid)?.generation == second.snapshot.generation)
+        #expect(await store.load(
+            forPid: pid, windowID: nil, windowElement: liveTestHandle(91_006)
+        )?.generation == first.snapshot.generation)
+        #expect(await store.load(
+            forPid: pid, windowID: nil, windowElement: liveTestHandle(91_007)
+        )?.generation == second.snapshot.generation)
         #expect(await store.resolveElementSnapshot(
             forPid: pid, elementID: first.tree.elements[0].id) != nil)
     }

@@ -862,9 +862,10 @@ paths fail, not more fallbacks added from intuition.
 - No hard daemon-enforced deadline for every stuck handler.
 - Synthetic background input may be accepted by the OS but dropped by the app.
 - Accessibility quality still depends on what the target app exposes.
-- A semantic rung whose effect appears after the short verification window can
-  fall through to another rung, creating duplicate-action risk; production
-  hardening should use action-specific settling/idempotency evidence.
+- Delivery notifications are advisory and application support varies. The
+  implementation therefore rereads exact target state immediately, after wakes,
+  and at a bounded deadline; an unverified acknowledgement is never retried
+  automatically.
 
 ## Quick script checklist
 

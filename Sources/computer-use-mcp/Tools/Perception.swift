@@ -220,10 +220,15 @@ func stateResult(
 
     // Guard both terms: a degenerate capture or zero-width window must not
     // produce a 0 (or infinite) scale that breaks pixel→point conversion.
+    let currentDisplayScale = displayScale(
+        atGlobalTopLeft: CGPoint(x: window.frame.midX, y: window.frame.midY))
+    let priorSnapshot = await SnapshotStore.shared.load(
+        forPid: app.pid, windowID: exactWindowID,
+        windowElement: window.element)
     let pixelsPerPoint: Double
     if let capture, capture.pixelWidth > 0, window.frame.width > 0 {
         pixelsPerPoint = Double(capture.pixelWidth) / window.frame.width
-    } else if let prior = await SnapshotStore.shared.load(forPid: app.pid), prior.pixelsPerPoint > 0 {
+    } else if let prior = priorSnapshot, prior.pixelsPerPoint > 0 {
         // No new screenshot: keep coordinates in the pixel space of the last
         // one the agent saw, so its ids and coordinates stay comparable.
         pixelsPerPoint = prior.pixelsPerPoint
@@ -231,9 +236,17 @@ func stateResult(
         // First contact without a capture (window on an inactive Space, or
         // Screen Recording missing): use the window's display scale so boxes
         // match a later real capture instead of being ~2x off on Retina.
-        pixelsPerPoint = displayScale(
-            atGlobalTopLeft: CGPoint(x: window.frame.midX, y: window.frame.midY))
+        pixelsPerPoint = currentDisplayScale
     }
+    let screenshotGeometry = screenshotGeometryProvenance(
+        hasNewScreenshot: capture != nil,
+        currentOrigin: [window.frame.origin.x, window.frame.origin.y],
+        currentSize: [
+            window.frame.width * pixelsPerPoint,
+            window.frame.height * pixelsPerPoint,
+        ],
+        currentDisplayScale: currentDisplayScale,
+        previous: priorSnapshot)
 
     // Chromium/Electron apps need an assistive client on record before they
     // render web content into the accessibility tree.
@@ -253,6 +266,9 @@ func stateResult(
             windowElement: window.element,
             windowOrigin: window.frame.origin,
             pixelsPerPoint: pixelsPerPoint,
+            displayScale: screenshotGeometry.displayScale,
+            screenshotWindowOrigin: screenshotGeometry.origin,
+            screenshotWindowSize: screenshotGeometry.size,
             windowSize: [window.frame.width * pixelsPerPoint, window.frame.height * pixelsPerPoint],
             createdAt: Date(),
             scoped: scope != nil,

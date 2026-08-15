@@ -34,7 +34,8 @@ func selfOrAncestor(of element: AXUIElement, supporting action: String, maxHops:
 func screenPoint(x: Double, y: Double, snapshot: AppSnapshot) throws -> CGPoint {
     // Prefer the stored window size (the element list may be scoped to a
     // subtree); fall back to the first element's box for old snapshots.
-    guard let size = snapshot.windowSize ?? snapshot.elements.first.map({ [$0.frame[2], $0.frame[3]] })
+    guard let size = snapshot.screenshotWindowSize ?? snapshot.windowSize
+        ?? snapshot.elements.first.map({ [$0.frame[2], $0.frame[3]] })
     else {
         throw ToolError.failed("The latest snapshot has no window element. Call get_app_state again.")
     }

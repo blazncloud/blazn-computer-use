@@ -62,8 +62,8 @@ struct FocusTelemetry: Equatable {
     /// Factual dirty bit — an unchanged tree after a background-event delivery
     /// is the one observable hint that the app may have dropped the event.
     var uiChanged: Bool? = nil
-    /// Which multi-strategy AX chain rung landed (its verified effect was
-    /// observed), when tier 1 was a chain. nil for non-chain deliveries.
+    /// Selected named AX primitive (currently ax-press) for compatibility with
+    /// existing telemetry consumers. nil for attribute and synthetic delivery.
     var landedRung: String? = nil
     /// Handler-owned fact: whether the mutation primitive actually dispatched.
     /// A tier can describe the selected strategy even when dispatch was

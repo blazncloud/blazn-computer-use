@@ -191,6 +191,64 @@ enum ActionPredicates {
     }
 }
 
+let deliveryVerificationTimeout: Duration = .seconds(1)
+
+/// Observe one delivered operation without ever authorizing another delivery.
+/// The predicate is checked immediately, after every notification wake, and
+/// once at the deadline. A nil predicate is used for generic actions with no
+/// truthful target-specific postcondition; those always receive the full settle
+/// interval because a notification is only a wake hint, never completion proof.
+@discardableResult
+func waitForDeliveryVerification(
+    observer: AXDeliveryObserver?, baselineRevision: UInt64?,
+    timeout: Duration = deliveryVerificationTimeout,
+    predicate: (() async -> Bool)?
+) async -> Bool {
+    if let predicate, await predicate() { return true }
+
+    guard let observer, let baselineRevision else {
+        try? await Task.sleep(for: timeout)
+        return await predicate?() ?? false
+    }
+
+    if predicate == nil {
+        try? await Task.sleep(for: timeout)
+        return false
+    }
+
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    var revision = baselineRevision
+    while clock.now < deadline {
+        let remaining = clock.now.duration(to: deadline)
+        guard await observer.waitForChange(after: revision, timeout: remaining) else { break }
+        revision = observer.revision
+        if let predicate, await predicate() { return true }
+    }
+    return await predicate?() ?? false
+}
+
+/// Authoritative retained-handle proof for intents whose result is readable on
+/// the target itself. Identity is revalidated without comparing presentation
+/// fields that an action is expected to change.
+func retainedTargetSatisfies(
+    snapshotElement: CapturedNode, window: AXUIElement,
+    family: ActionFamily, intent: ActionIntent, before: ActionVerification
+) async -> Bool {
+    do {
+        let live = try await resolveElement(
+            snapshotElement, in: window, comparePresentationEvidence: false)
+        var after = before
+        after.captureAfter(live, family: family)
+        if intent == .focusTarget {
+            return ActionPredicates.focused(after.afterFocused)
+        }
+        return intent.satisfiedByAfter(after).satisfied
+    } catch {
+        return false
+    }
+}
+
 // MARK: - The outcome envelope
 
 struct ActionOutcome: Sendable {
@@ -290,8 +348,8 @@ enum ActionFamily: Sendable {
     /// judged purely from whole-window observations.
     var readsTargetFields: Bool {
         switch self {
-        case .click, .type, .setValue: return true
-        case .scroll, .window, .menu, .secondaryAction, .drag: return false
+        case .click, .type, .setValue, .secondaryAction: return true
+        case .scroll, .window, .menu, .drag: return false
         }
     }
 }
@@ -313,6 +371,9 @@ enum ActionIntent: Sendable, Equatable {
     case setText(String)
     /// Set a numeric value (slider/stepper); success within a step tolerance.
     case setNumber(Double)
+    /// Ask a stepper-like control to move relative to its observed value.
+    case incrementNumber
+    case decrementNumber
     /// Scroll content.
     case scrollContent
     /// Open a menu / context menu.
@@ -328,7 +389,8 @@ enum ActionIntent: Sendable, Equatable {
             return ActionPredicates.value(v.beforeValuePreview, equals: want)
         case .setNumber(let want):
             return ActionPredicates.number(v.beforeValuePreview, equals: want)
-        case .activate, .focusTarget, .insertText, .scrollContent, .openMenu:
+        case .activate, .focusTarget, .insertText, .incrementNumber,
+            .decrementNumber, .scrollContent, .openMenu:
             return false
         }
     }
@@ -341,7 +403,17 @@ enum ActionIntent: Sendable, Equatable {
         case .toggle(let want):
             return (ActionPredicates.selection(v.afterSelected, equals: want), nil)
         case .insertText(let text):
-            return (ActionPredicates.value(v.afterValuePreview, contains: text), nil)
+            guard ActionPredicates.value(v.afterValuePreview, contains: text) else {
+                return (false, nil)
+            }
+            // Merely finding text that was already present before dispatch is
+            // not proof that this insertion landed.
+            if let before = v.beforeValuePreview, let after = v.afterValuePreview,
+                !text.isEmpty, before == after
+            {
+                return (false, nil)
+            }
+            return (true, nil)
         case .setText(let want):
             return (ActionPredicates.value(v.afterValuePreview, equals: want), nil)
         case .setNumber(let want):
@@ -352,6 +424,16 @@ enum ActionIntent: Sendable, Equatable {
                 return (true, "Snapped to the nearest step: requested \(want), applied \(current).")
             }
             return (false, nil)
+        case .incrementNumber:
+            guard let before = v.beforeValuePreview.flatMap(Double.init),
+                let after = v.afterValuePreview.flatMap(Double.init)
+            else { return (false, nil) }
+            return (after > before, nil)
+        case .decrementNumber:
+            guard let before = v.beforeValuePreview.flatMap(Double.init),
+                let after = v.afterValuePreview.flatMap(Double.init)
+            else { return (false, nil) }
+            return (after < before, nil)
         case .activate, .focusTarget, .scrollContent, .openMenu:
             return (false, nil)
         }
@@ -390,11 +472,8 @@ extension ActionVerifier {
             if intent == .focusTarget, ActionPredicates.focused(v.afterFocused, rereadFailed: rereadFailed) {
                 return .success("The target is focused after the click.", v)
             }
-            if intent != .activate, v.targetStateChanged == true {
-                return .success("The target's state changed after the action.", v)
-            }
-            if intent != .activate, windowChanged {
-                return .success("The UI changed after the action.", v)
+            if intent != .activate, intent.satisfiedByAfter(v).satisfied {
+                return .success("The target reached the requested state after the action.", v)
             }
             if intent == .activate, v.targetStateChanged == true || windowChanged {
                 return .effectNotVerified(
@@ -427,12 +506,6 @@ extension ActionVerifier {
                     return webEcho
                 }
                 return .success("The typed text is present in the field.", v)
-            }
-            if windowChanged {
-                if let webEcho = webAXEchoDowngradeIfNeeded(verification: v, deliveryTier: deliveryTier) {
-                    return webEcho
-                }
-                return .success("The typed text is reflected in the UI.", v)
             }
             if v.afterValuePreview == nil {
                 var record = v
