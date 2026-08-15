@@ -254,7 +254,7 @@ import Testing
         for name in ["click", "type_text", "open_app", "open_url", "manage_window", "write_clipboard"] {
             #expect(isMutatingTool(name), "\(name) should be coordinated as mutating")
         }
-        for name in ["list_apps", "get_app_state", "find", "list_windows", "read_clipboard", "wait_for", "read_text"] {
+        for name in ["list_apps", "get_app_state", "list_windows", "read_clipboard", "health_report"] {
             #expect(!isMutatingTool(name), "\(name) should remain classified as read-only")
         }
     }

@@ -438,62 +438,6 @@ private func selectedTextRange(of element: AXUIElement) -> CFRange? {
     return range
 }
 
-// MARK: - read_text
-
-func readTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
-    let app = try resolveApp(args.requireString("app"))
-    try requireAccessibilityTrusted()
-    let target = try await resolveTarget(app: app, elementID: args.requireString("element_id"))
-
-    // Visible-range path: for a large text surface, pull only the on-screen
-    // slice (rendered to markdown) instead of the whole value. Activates when
-    // the caller asks (visible_only:true), or by default once the value is
-    // past the threshold and no explicit offset/length window was requested.
-    // An explicit visible_only:false, or an offset/length, keeps the classic
-    // full-value read; the path is best-effort and falls through when the
-    // element exposes no parameterized range attribute.
-    let visibleOnly = args.bool("visible_only")
-    let hasExplicitWindow = args["offset"] != nil || args["length"] != nil
-    let charCount = (axAttribute(target.element, "AXNumberOfCharacters") as? NSNumber)?.intValue
-    let isLarge = (charCount ?? 0) > TextExtraction.largeValueThreshold
-    let useVisible = visibleOnly == true || (visibleOnly == nil && !hasExplicitWindow && isLarge)
-    if useVisible {
-        if let visible = TextExtraction.visibleText(of: target.element) {
-            let total = charCount.map { " of \($0) total" } ?? ""
-            let header =
-                "Visible text of \(describeTarget(target)) — "
-                + "chars \(visible.range.location)..<\(visible.range.location + visible.range.length)\(total) "
-                + "(scroll for more, or omit visible_only for the full value)"
-            return .text(header + ":\n" + visible.markdown)
-        }
-        // Web content (WKWebView) carries no character range; pull its rich
-        // text via text markers and render it to markdown instead.
-        if let markdown = TextExtraction.webAreaMarkdown(of: target.element) {
-            let header =
-                "Rich text of \(describeTarget(target)) — web content rendered to markdown "
-                + "(omit visible_only for the raw value)"
-            return .text(header + ":\n" + markdown)
-        }
-    }
-
-    guard let value = axString(target.element, kAXValueAttribute) else {
-        throw ToolError.failed("\(describeTarget(target)) has no readable text value.")
-    }
-    let offset = args.integer("offset") ?? 0
-    let requested = args.integer("length") ?? 20_000
-    try ArgumentBounds.checkReadText(offset: offset, length: requested)
-    let characters = Array(value)
-    guard offset < characters.count || characters.isEmpty else {
-        throw ToolError.invalidArguments("offset \(offset) is past the end (\(characters.count) chars).")
-    }
-    let slice = String(characters[offset..<min(characters.count, offset + max(1, requested))])
-    var header = "Text of \(describeTarget(target)) — \(characters.count) chars total"
-    if offset > 0 || offset + slice.count < characters.count {
-        header += ", showing \(offset)..<\(offset + slice.count) (use offset/length for more)"
-    }
-    return .text(header + ":\n" + slice)
-}
-
 // MARK: - perform_secondary_action
 
 func performSecondaryActionImpl(_ args: [String: Value]) async throws -> CallTool.Result {

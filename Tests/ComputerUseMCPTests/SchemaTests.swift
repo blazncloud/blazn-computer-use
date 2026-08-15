@@ -43,6 +43,17 @@ private func requiredProperties(for toolName: String) throws -> [String] {
 }
 
 @Suite struct SchemaTests {
+    @Test func catalogIsTheFocusedSeventeenToolSurface() {
+        let expected: Set<String> = [
+            "list_apps", "get_app_state", "click", "type_text", "press_key",
+            "scroll", "drag", "set_value", "select_text",
+            "perform_secondary_action", "open_app", "open_url", "list_windows",
+            "manage_window", "read_clipboard", "write_clipboard", "health_report",
+        ]
+        #expect(Set(toolCatalog.map(\.name)) == expected)
+        #expect(toolCatalog.count == expected.count)
+    }
+
     @Test func everyRegisteredToolHasAnnotations() {
         #expect(!toolCatalog.isEmpty)
         for spec in toolCatalog {
@@ -79,11 +90,6 @@ private func requiredProperties(for toolName: String) throws -> [String] {
         #expect(openURL.idempotentHint == false)
         #expect(openURL.openWorldHint == true)
 
-        let deleteSkill = try toolSpec("delete_skill").annotations
-        #expect(deleteSkill.readOnlyHint == false)
-        #expect(deleteSkill.destructiveHint == true)
-        #expect(deleteSkill.idempotentHint == false)
-        #expect(deleteSkill.openWorldHint == false)
     }
 
     @Test func secondaryActionAcceptsConfirmArgument() throws {
@@ -116,36 +122,6 @@ private func requiredProperties(for toolName: String) throws -> [String] {
         #expect(try schemaType(schemaProperty("allow_global_keyboard", in: "press_key")) == "boolean")
         #expect(try schemaType(schemaProperty("allow_global_cursor", in: "press_key")) == "boolean")
         #expect(try schemaType(schemaProperty("allow_focus_change", in: "press_key")) == "boolean")
-    }
-
-    @Test func saveSkillStepEnumerationIncludesReadText() throws {
-        let steps = try objectValue(try schemaProperty("steps", in: "save_skill"))
-        let description = steps["description"]?.stringValue ?? ""
-        #expect(description.contains("read_text"))
-        for name in skillStepToolNames.sorted() {
-            #expect(description.contains(name), "save_skill steps should list \(name)")
-        }
-    }
-
-    @Test func batchActionsItemsExposeToolProperty() throws {
-        let actions = try objectValue(try schemaProperty("actions", in: "batch"))
-        let items = try objectValue(actions["items"] ?? .null)
-        #expect(try schemaType(.object(items)) == "object")
-        let properties = try objectValue(items["properties"] ?? .object([:]))
-        #expect(properties["tool"] != nil)
-        #expect(items["description"]?.stringValue?.contains("tool") == true)
-        guard case let .array(required)? = items["required"] else {
-            throw ToolError.failed("batch actions.items is missing required")
-        }
-        #expect(required.compactMap(\.stringValue) == ["tool"])
-    }
-
-    @Test func pageToolExposesSelectorActionAndVerificationArguments() throws {
-        #expect(try schemaType(schemaProperty("selector", in: "page")) == "string")
-        #expect(try schemaType(schemaProperty("action", in: "page")) == "string")
-        #expect(try schemaType(schemaProperty("verify_selector", in: "page")) == "string")
-        #expect(try schemaType(schemaProperty("cdp_port", in: "page")) == "integer")
-        #expect(try requiredProperties(for: "page") == ["app", "selector"])
     }
 
     @Test func focusMutatingSystemToolsExposeFocusChangeOptIn() throws {

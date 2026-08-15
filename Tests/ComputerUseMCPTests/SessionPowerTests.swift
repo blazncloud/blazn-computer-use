@@ -9,8 +9,8 @@ import Testing
         #expect(lockedScreenMessage(toolName: "open_app", isLocked: true) != nil)
         // Read-only perception stays available behind the lock.
         #expect(lockedScreenMessage(toolName: "get_app_state", isLocked: true) == nil)
-        #expect(lockedScreenMessage(toolName: "find", isLocked: true) == nil)
-        #expect(lockedScreenMessage(toolName: "read_text", isLocked: true) == nil)
+        #expect(lockedScreenMessage(toolName: "get_app_state", isLocked: true) == nil)
+        #expect(lockedScreenMessage(toolName: "read_clipboard", isLocked: true) == nil)
     }
 
     @Test func unlockedScreenNeverPauses() {

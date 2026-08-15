@@ -533,31 +533,12 @@ private func dispatchCoordinatedTool(
                     key: coordinationKey, sessionID: sessionID, operationID: operationID)
                 return codedErrorResult("Operation cancelled before execution.", code: nil)
             }
-            var priorCompositeCommit = false
-            if name == "run_skill" {
-                switch await prepareRunSkillTarget(arguments: arguments) {
-                case .ready(_, let priorCommit):
-                    priorCompositeCommit = priorCommit
-                case .result(let result):
-                    await AppMutationCoordinator.shared.release(
-                        key: coordinationKey, sessionID: sessionID,
-                        operationID: operationID)
-                    return result
-                }
-            }
             if Task.isCancelled {
                 await AppMutationCoordinator.shared.release(
                     key: coordinationKey, sessionID: sessionID, operationID: operationID)
-                let cancelled = operationCancelledResult()
-                return priorCompositeCommit
-                    ? cancelled.withPartialCommitEvidence()
-                    : cancelled
+                return operationCancelledResult()
             }
-            let result = await CompositeCommitContext.$priorMutationCommitted.withValue(
-                priorCompositeCommit
-            ) {
-                await dispatchTool(name: name, arguments: arguments)
-            }
+            let result = await dispatchTool(name: name, arguments: arguments)
             await AppMutationCoordinator.shared.release(
                 key: coordinationKey, sessionID: sessionID, operationID: operationID)
             return result
@@ -568,58 +549,6 @@ private func dispatchCoordinatedTool(
 func daemonAccumulatedQueueLatency(coordinatorWaitMilliseconds: Double) -> Double {
     (DaemonSessionContext.queueLatencyMilliseconds ?? 0)
         + max(0, coordinatorWaitMilliseconds)
-}
-
-private enum RunSkillPreparation {
-    case ready(pid_t, priorCommit: Bool)
-    case result(CallTool.Result)
-}
-
-private func prepareRunSkillTarget(arguments: [String: Value]) async -> RunSkillPreparation {
-    guard case .string(let skillName)? = arguments["name"],
-        let skill = try? SkillStore.load(skillName)
-    else {
-        return .result(await dispatchTool(name: "run_skill", arguments: arguments))
-    }
-    if let app = try? resolveApp(skill.app) { return .ready(app.pid, priorCommit: false) }
-    // Preserve run_skill's confirmation behavior. An unconfirmed request is
-    // dispatched normally and fails before mutation; confirmed/disabled-safety
-    // requests launch first, then acquire the real PID before replaying steps.
-    guard SafetyPolicy.confirmed(arguments) || !SafetyPolicy.isEnabled else {
-        return .result(await dispatchTool(name: "run_skill", arguments: arguments))
-    }
-    let launch = await dispatchTool(
-        name: "open_app", arguments: ["app": .string(skill.app), "confirm": .bool(true)])
-    if launch.isError == true { return .result(launch) }
-    if Task.isCancelled {
-        return .result(operationCancelledResult().withPartialCommitEvidence())
-    }
-    let deadline = Date().addingTimeInterval(5)
-    while Date() < deadline {
-        if let app = try? resolveApp(skill.app) {
-            return .ready(app.pid, priorCommit: true)
-        }
-        do {
-            try await Task.sleep(for: .milliseconds(100))
-        } catch {
-            return .result(operationCancelledResult().withPartialCommitEvidence())
-        }
-    }
-    return .result(codedErrorResult(
-        "Skill target app did not become controllable in time.", code: .appNotFound)
-        .withPartialCommitEvidence())
-}
-
-private func coordinatedAppPID(name: String, arguments: [String: Value]) -> pid_t? {
-    if case .string(let appName)? = arguments["app"] {
-        return try? resolveApp(appName).pid
-    }
-    if name == "run_skill", case .string(let skillName)? = arguments["name"],
-        let skill = try? SkillStore.load(skillName)
-    {
-        return try? resolveApp(skill.app).pid
-    }
-    return nil
 }
 
 private let daemonCoordinatedToolNames = appScopedToolNames.union(["open_app"])
@@ -648,10 +577,6 @@ private func coordinatedAppKey(
     let identifier: String
     if case .string(let appName)? = arguments["app"] {
         identifier = appName
-    } else if name == "run_skill", case .string(let skillName)? = arguments["name"],
-        let skill = try? SkillStore.load(skillName)
-    {
-        identifier = skill.app
     } else {
         return nil
     }

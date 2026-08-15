@@ -11,10 +11,6 @@ func getAppState(_ args: [String: Value]) async throws -> CallTool.Result {
     try await getAppStateImpl(args)
 }
 
-func find(_ args: [String: Value]) async throws -> CallTool.Result {
-    try await findImpl(args)
-}
-
 func click(_ args: [String: Value]) async throws -> CallTool.Result {
     try await clickImpl(args)
 }
@@ -63,14 +59,6 @@ func manageWindow(_ args: [String: Value]) async throws -> CallTool.Result {
     try await manageWindowImpl(args)
 }
 
-func clickMenuItem(_ args: [String: Value]) async throws -> CallTool.Result {
-    try await clickMenuItemImpl(args)
-}
-
-func page(_ args: [String: Value]) async throws -> CallTool.Result {
-    try await pageImpl(args)
-}
-
 func readClipboard(_ args: [String: Value]) async throws -> CallTool.Result {
     try await readClipboardImpl(args)
 }
@@ -79,46 +67,6 @@ func writeClipboard(_ args: [String: Value]) async throws -> CallTool.Result {
     try await writeClipboardImpl(args)
 }
 
-func waitFor(_ args: [String: Value]) async throws -> CallTool.Result {
-    try await waitForImpl(args)
-}
-
-func readText(_ args: [String: Value]) async throws -> CallTool.Result {
-    try await readTextImpl(args)
-}
-
 func healthReport(_ args: [String: Value]) async throws -> CallTool.Result {
     try await healthReportImpl(args)
-}
-
-func batch(_ args: [String: Value]) async throws -> CallTool.Result {
-    try await batchImpl(args)
-}
-
-func saveSkill(_ args: [String: Value]) async throws -> CallTool.Result {
-    try await saveSkillImpl(args)
-}
-
-func runSkill(_ args: [String: Value]) async throws -> CallTool.Result {
-    try await runSkillImpl(args)
-}
-
-func getSkill(_ args: [String: Value]) async throws -> CallTool.Result {
-    try await getSkillImpl(args)
-}
-
-func listSkills(_ args: [String: Value]) async throws -> CallTool.Result {
-    try await listSkillsImpl(args)
-}
-
-func deleteSkill(_ args: [String: Value]) async throws -> CallTool.Result {
-    try await deleteSkillImpl(args)
-}
-
-func recordSkillStart(_ args: [String: Value]) async throws -> CallTool.Result {
-    try await recordSkillStartImpl(args)
-}
-
-func recordSkillStop(_ args: [String: Value]) async throws -> CallTool.Result {
-    try await recordSkillStopImpl(args)
 }

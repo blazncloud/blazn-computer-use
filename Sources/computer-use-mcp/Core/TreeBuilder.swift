@@ -711,7 +711,7 @@ func describeLine(_ facts: NodeFacts, id: String, frame: [Double]?, depth: Int) 
 
 private func truncate(_ value: String) -> String {
     guard value.count > maxValueLength else { return value }
-    return String(value.prefix(maxValueLength)) + "… [+\(value.count - maxValueLength) chars; read_text returns the full value]"
+    return String(value.prefix(maxValueLength)) + "… [+\(value.count - maxValueLength) chars; use a scoped get_app_state capture]"
 }
 
 private func clean(_ value: String) -> String {

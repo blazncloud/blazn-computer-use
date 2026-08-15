@@ -56,12 +56,10 @@ enum ActionEffectStatus: String, Sendable {
 }
 
 /// Commit records what remains true after the transaction. There is no rollback
-/// promise: an orchestrating batch/skill can honestly report that earlier leaf
-/// mutations committed before a later leaf stopped.
+/// promise once delivery has begun.
 enum ActionCommitStatus: String, Sendable {
     case notCommitted = "not_committed"
     case committed
-    case partiallyCommitted = "partially_committed"
     /// Delivery or mutation may have happened, but no structured evidence
     /// proves whether durable application state changed.
     case unknown
@@ -193,12 +191,6 @@ enum ActionTransactionContext {
     }
 }
 
-/// Carries evidence for a composite mutation performed before its handler
-/// starts (currently the daemon's stopped-app run_skill preparation).
-enum CompositeCommitContext {
-    @TaskLocal static var priorMutationCommitted = false
-}
-
 struct PreDeliveryCancellationError: Error, Sendable {}
 
 final class DeliveryBoundaryTracker: @unchecked Sendable {
@@ -251,107 +243,5 @@ extension ActionTransaction {
 extension CallTool.Result {
     func withActionTransaction(_ transaction: ActionTransaction) -> CallTool.Result {
         mergingMetaField(actionTransactionMetaKey, transaction.value)
-    }
-
-    /// Composite handlers call this only after observing that an earlier
-    /// mutating leaf completed. The outer dispatch envelope consumes this
-    /// evidence before replacing the nested transaction metadata.
-    func withPartialCommitEvidence() -> CallTool.Result {
-        withCommitEvidence(.partiallyCommitted)
-    }
-
-    func withUnknownCommitEvidence() -> CallTool.Result {
-        withCommitEvidence(.unknown)
-    }
-
-    func withCommittedEvidence() -> CallTool.Result {
-        withCommitEvidence(.committed)
-    }
-
-    func withNotCommittedEvidence() -> CallTool.Result {
-        withCommitEvidence(.notCommitted)
-    }
-
-    private func withCommitEvidence(_ status: ActionCommitStatus) -> CallTool.Result {
-        var evidence = ActionTransaction()
-        while evidence.phase != .commit {
-            try? evidence.advance(to: evidence.phase.next!)
-        }
-        try? evidence.recordCommit(status)
-        return withActionTransaction(evidence)
-    }
-}
-
-func applyingCompositeCommitEvidence(
-    to result: CallTool.Result,
-    priorMutationCommitted: Bool
-) -> CallTool.Result {
-    priorMutationCommitted ? result.withPartialCommitEvidence() : result
-}
-
-func applyingSuccessfulCompositeCommitEvidence(
-    to result: CallTool.Result,
-    definiteCommit: Bool,
-    ambiguousCommit: Bool
-) -> CallTool.Result {
-    if definiteCommit { return result.withCommittedEvidence() }
-    if ambiguousCommit { return result.withUnknownCommitEvidence() }
-    return result.withNotCommittedEvidence()
-}
-
-func applyingCompositeCommitEvidence(
-    to result: CallTool.Result,
-    definitePriorCommit: Bool,
-    ambiguousCommit: Bool
-) -> CallTool.Result {
-    if definitePriorCommit { return result.withPartialCommitEvidence() }
-    if ambiguousCommit { return result.withUnknownCommitEvidence() }
-    return result
-}
-
-/// Composite handlers use the structured outcome when present. Legacy
-/// non-error leaves without an outcome remain compatible.
-func leafResultSucceeded(_ result: CallTool.Result, isMutating: Bool) -> Bool {
-    guard result.isError != true else { return false }
-    if case .object(let outcome)? = result._meta?[actionOutcomeMetaKey],
-        let classification = outcome["classification"]?.stringValue
-    {
-        return classification == ActionClassification.success.rawValue
-    }
-    guard isMutating else { return true }
-    guard case .object(let transaction)? = result._meta?[actionTransactionMetaKey],
-        transaction["commit_status"]?.stringValue == ActionCommitStatus.committed.rawValue
-    else { return false }
-    return true
-}
-
-/// Terminal leaves have no dependent mutation to authorize. Preserve legacy
-/// final-only tools, while still rejecting any explicit structured failure.
-func finalLeafResultAccepted(_ result: CallTool.Result) -> Bool {
-    guard result.isError != true else { return false }
-    guard case .object(let outcome)? = result._meta?[actionOutcomeMetaKey],
-        let classification = outcome["classification"]?.stringValue
-    else { return true }
-    return classification == ActionClassification.success.rawValue
-}
-
-/// Whether a completed leaf may have changed durable application state.
-/// Unknown is deliberately sticky: a composite must not advertise safe retry
-/// when delivery may already have happened.
-enum LeafCommitEvidence: Equatable {
-    case none
-    case definite
-    case unknown
-}
-
-func leafCommitEvidence(_ result: CallTool.Result) -> LeafCommitEvidence {
-    guard case .object(let transaction)? = result._meta?[actionTransactionMetaKey],
-        let rawStatus = transaction["commit_status"]?.stringValue,
-        let status = ActionCommitStatus(rawValue: rawStatus)
-    else { return .none }
-    switch status {
-    case .committed, .partiallyCommitted: return .definite
-    case .unknown: return .unknown
-    case .notCommitted: return .none
     }
 }

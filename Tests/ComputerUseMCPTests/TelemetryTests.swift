@@ -12,10 +12,10 @@ import Testing
         var counters = TelemetryCounters()
         counters.record(tool: "click", isError: false, milliseconds: 40, at: epoch)
         counters.record(tool: "click", isError: true, milliseconds: 20, at: epoch)
-        counters.record(tool: "find", isError: false, milliseconds: 5, at: epoch)
+        counters.record(tool: "get_app_state", isError: false, milliseconds: 5, at: epoch)
 
         #expect(counters.tools["click"] == TelemetryCounter(calls: 2, errors: 1, totalMs: 60))
-        #expect(counters.tools["find"] == TelemetryCounter(calls: 1, errors: 0, totalMs: 5))
+        #expect(counters.tools["get_app_state"] == TelemetryCounter(calls: 1, errors: 0, totalMs: 5))
         #expect(counters.tools["scroll"] == nil)
     }
 
@@ -59,8 +59,8 @@ import Testing
     @Test func nonMutatingToolsNeverCountAsActs() {
         var counters = TelemetryCounters()
         counters.record(tool: "get_app_state", isError: false, milliseconds: 10, at: epoch)
-        counters.record(tool: "find", isError: false, milliseconds: 10, at: epoch + 4)
-        counters.record(tool: "read_text", isError: false, milliseconds: 10, at: epoch + 8)
+        counters.record(tool: "get_app_state", isError: false, milliseconds: 10, at: epoch + 4)
+        counters.record(tool: "list_apps", isError: false, milliseconds: 10, at: epoch + 8)
 
         #expect(counters.firstActAt == nil)
         #expect(counters.firstPerceiveToFirstActSeconds == nil)

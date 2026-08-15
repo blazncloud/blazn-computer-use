@@ -113,14 +113,6 @@ import Testing
         }
     }
 
-    @Test func partialCommitDoesNotImplyRollback() throws {
-        var transaction = ActionTransaction()
-        try advance(&transaction, through: .commit)
-        try transaction.recordCommit(.partiallyCommitted)
-
-        #expect(transaction.commitStatus == .partiallyCommitted)
-        #expect(transaction.isCommitted)
-    }
 
     @Test func taskLocalLineageIsGeneratedAndInheritedByChildren() async throws {
         let parent = ActionTransaction()
@@ -249,40 +241,10 @@ import Testing
         let error = CallTool.Result.text("handler failed", isError: true)
         #expect(deliveryStatus(for: error) == .unknown)
         #expect(commitStatus(for: error, tool: "click") == .unknown)
-        #expect(commitStatus(for: error, tool: "batch") == .unknown)
-        #expect(commitStatus(for: error, tool: "run_skill") == .unknown)
     }
 
-    @Test func errorPreservesExplicitDeliveryAndPartialCommitEvidence() throws {
-        let result = CallTool.Result.text("later verification failed", isError: true)
-            .mergingMetaField(
-                "computer-use-mcp/delivery",
-                .object(["delivery_tier": .string(InputTier.accessibilityAction.rawValue)]))
-            .withPartialCommitEvidence()
 
-        #expect(deliveryStatus(for: result) == .delivered)
-        #expect(commitStatus(for: result, tool: "batch") == .partiallyCommitted)
-    }
 
-    @Test func daemonPrelaunchEvidenceSurvivesLaterCompositeFailures() {
-        for message in [
-            "target app did not become controllable in time",
-            "missing required params",
-            "first replay step failed",
-        ] {
-            let result = applyingCompositeCommitEvidence(
-                to: .text(message, isError: true),
-                priorMutationCommitted: true)
-            #expect(commitStatus(for: result, tool: "run_skill") == .partiallyCommitted)
-        }
-    }
-
-    @Test func failedPrelaunchDoesNotClaimPartialCommit() {
-        let result = applyingCompositeCommitEvidence(
-            to: .text("launch failed", isError: true),
-            priorMutationCommitted: false)
-        #expect(commitStatus(for: result, tool: "run_skill") == .unknown)
-    }
 
     @Test func unsupportedNonErrorDoesNotClaimDeliveryOrCommit() {
         let result = CallTool.Result.text("disabled")
@@ -332,21 +294,6 @@ import Testing
         }
     }
 
-    @Test func compositeUnknownEvidenceIsNotPromotedToPartialCommit() {
-        let unknown = applyingCompositeCommitEvidence(
-            to: .text("leaf outcome unknown", isError: true),
-            definitePriorCommit: false,
-            ambiguousCommit: true)
-        let definite = applyingCompositeCommitEvidence(
-            to: .text("later leaf failed", isError: true),
-            definitePriorCommit: true,
-            ambiguousCommit: true)
-
-        #expect(commitStatus(for: unknown, tool: "run_skill") == .unknown)
-        #expect(commitStatus(for: definite, tool: "run_skill") == .partiallyCommitted)
-        #expect(leafCommitEvidence(unknown) == .unknown)
-        #expect(leafCommitEvidence(definite) == .definite)
-    }
 
     @Test func cancellationCheckRefusesPrimitiveBoundary() async {
         let task = Task {
@@ -444,31 +391,6 @@ import Testing
         #expect(result.2)
     }
 
-    @Test func menuCommandWithoutWindowReturnsHonestOutcome() {
-        let dispatched = ActionVerifier(
-            family: .menu, intent: .openMenu,
-            deliveryTier: InputTier.accessibilityAction.rawValue,
-            dispatchSucceeded: true, hasTargetElement: false,
-            snapshotElement: nil)
-        let result = menuItemNoWindowResult(
-            note: "Selected File > New Window.",
-            focusTelemetry: nil,
-            verifier: dispatched)
-        #expect(result.isError != true)
-        #expect(effectStatus(for: result) == .unverified)
-        #expect(commitStatus(for: result, tool: "click_menu_item") == .unknown)
-
-        let disabled = ActionVerifier(
-            family: .menu, intent: .openMenu,
-            deliveryTier: InputTier.accessibilityAction.rawValue,
-            dispatchSucceeded: false, hasTargetElement: false,
-            snapshotElement: nil,
-            resolved: .unsupported(.unsupported, "disabled"))
-        let disabledResult = menuItemNoWindowResult(
-            note: "Disabled.", focusTelemetry: nil, verifier: disabled)
-        #expect(deliveryStatus(for: disabledResult) == .notDelivered)
-        #expect(commitStatus(for: disabledResult, tool: "click_menu_item") == .notCommitted)
-    }
 
     @Test func handlerErrorUsesDeliveryBoundaryEvidence() throws {
         let before = DeliveryBoundaryTracker()
@@ -505,20 +427,6 @@ import Testing
         #expect(commitStatus(for: classified.result, tool: "click") == .unknown)
     }
 
-    @Test func cancelledPageInsertAfterProbeDoesNotInvokeExecutor() async {
-        let task = Task {
-            while !Task.isCancelled { await Task.yield() }
-            var invoked = false
-            do {
-                try await executePageInsertAfterProbe { invoked = true }
-                return false
-            } catch {
-                return !invoked && error is PreDeliveryCancellationError
-            }
-        }
-        task.cancel()
-        #expect(await task.value)
-    }
 
     @Test func cancelledSystemAndAXPrimitivesAreNotInvoked() async {
         let system = Task {
@@ -559,13 +467,6 @@ import Testing
         #expect(commitStatus(for: result, tool: "open_url") == .committed)
     }
 
-    @Test func compositeCommitTaskLocalIsScoped() {
-        #expect(!CompositeCommitContext.priorMutationCommitted)
-        CompositeCommitContext.$priorMutationCommitted.withValue(true) {
-            #expect(CompositeCommitContext.priorMutationCommitted)
-        }
-        #expect(!CompositeCommitContext.priorMutationCommitted)
-    }
 }
 
 private extension ActionTransactionPhase {

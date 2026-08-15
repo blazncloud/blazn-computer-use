@@ -19,7 +19,7 @@ func lockedScreenMessage(toolName: String, isLocked: @autoclosure () -> Bool) ->
     guard isMutatingTool(toolName), isLocked() else { return nil }
     return
         "The screen is locked, so mutating computer-use actions are paused. Ask the user "
-        + "to unlock the Mac and retry. Read-only tools (get_app_state, find, read_text) "
+        + "to unlock the Mac and retry. Read-only tools (get_app_state, list_apps, health_report) "
         + "remain available."
 }
 

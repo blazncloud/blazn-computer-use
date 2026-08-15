@@ -214,11 +214,6 @@ func effectStatus(for result: CallTool.Result) -> ActionEffectStatus {
 
 func commitStatus(for result: CallTool.Result, tool _: String) -> ActionCommitStatus {
     if case .object(let fields)? = result._meta?[actionTransactionMetaKey],
-        fields["commit_status"]?.stringValue == ActionCommitStatus.partiallyCommitted.rawValue
-    {
-        return .partiallyCommitted
-    }
-    if case .object(let fields)? = result._meta?[actionTransactionMetaKey],
         fields["commit_status"]?.stringValue == ActionCommitStatus.unknown.rawValue
     {
         return .unknown
