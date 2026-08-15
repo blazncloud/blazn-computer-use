@@ -213,7 +213,7 @@ enum DaemonSessionContext {
     @TaskLocal static var logicalSessionID: UUID?
     /// Canonical root operation UUID for the daemon request. Mutation
     /// transaction lineage must inherit this value rather than minting a
-    /// second root id; nested batch/skill dispatch remains in this context.
+    /// second root id; any nested internal dispatch remains in this context.
     @TaskLocal static var operationID: UUID?
     /// Time spent behind an earlier same-app mutation on this connection.
     /// Dispatch metrics may consume this instead of reporting a synthetic zero.

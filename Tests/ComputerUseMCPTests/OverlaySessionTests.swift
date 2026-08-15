@@ -49,11 +49,9 @@ import Testing
                 == .pulse(x: 5, y: 6, window: 123, session: "7"))
     }
 
-    @Test func parsesDropPingAndRecord() {
+    @Test func parsesDropAndPing() {
         #expect(OverlayCommand.parse("drop 42") == .drop(session: "42"))
         #expect(OverlayCommand.parse("ping") == .ping)
-        #expect(OverlayCommand.parse("record on") == .record(true))
-        #expect(OverlayCommand.parse("record off") == .record(false))
     }
 
     @Test func rejectsMalformedOverlayCommands() {

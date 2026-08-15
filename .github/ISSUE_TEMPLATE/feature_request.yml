@@ -7,7 +7,7 @@ body:
     attributes:
       label: Problem / use case
       description: What are you trying to do that the server can't do well today?
-      placeholder: I want a skill to fill a form that spans a scrolled, virtualized list...
+      placeholder: I want to control a form that spans a scrolled, virtualized list...
     validations:
       required: true
   - type: textarea
@@ -25,7 +25,6 @@ body:
       options:
         - Perception (get_app_state / OCR / scoped state)
         - Action tools (click / type / scroll / drag / set_value)
-        - Skills (teach / replay)
         - Safety / policy
         - Daemon / multi-session
         - Overlay / visible cursor

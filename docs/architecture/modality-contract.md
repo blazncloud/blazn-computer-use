@@ -265,9 +265,9 @@ Useful next hooks should stay split by risk tier:
   - coordinate-space round trips and bounds checks;
   - snapshot diff shaping and element-id survival across UI changes
     (covered by `SnapshotDiffTests`);
-  - interference-yield decisions, URL policy matching, batch validation, and
-    skill validation/templating/unique-anchor resolution (covered by the
-    corresponding deterministic suites in `Tests/`);
+  - interference-yield decisions, URL policy matching, element identity, and
+    stale-target resolution (covered by the corresponding deterministic suites
+    in `Tests/`);
   - daemon fallback classification for read-only versus mutating tools;
   - safety-policy confirmation coverage.
 - CLI or daemon integration checks on a non-mutating surface:

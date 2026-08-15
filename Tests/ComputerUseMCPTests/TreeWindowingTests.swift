@@ -154,8 +154,8 @@ private func build(
     }
 
     @Test func windowingDisabledMaterializesEveryRowUpToBudget() {
-        // Non-windowed callers (find / skill-replay) are bounded only by the
-        // element budget, not the per-node cap: every one of the 500 rows must
+        // Non-windowed internal captures are bounded only by the element
+        // budget, not the per-node cap: every one of the 500 rows must
         // materialize so a deep row is reachable, and no viewport summary.
         let tree = rowListTree(rowCount: 500, visible: 0..<13, total: 500)
         let built = build(tree, generation: "s1", maxElements: 5000, windowCollections: false)

@@ -96,8 +96,6 @@ without hijacking your cursor or stealing focus.**
 - **Reliable.** Every action returns fresh app state (screenshot + accessibility
   tree). Element IDs retain exact live AX handles and fail stale if the app
   recreates or detaches them; destructive actions pass a confirmation policy.
-- **Teach & replay.** Capture a task once and save it as a named, parameterized
-  skill that replays at engine speed with no model in the loop.
 - **One native binary.** Zero runtime dependencies, frictionless install.
 
 ## Install
@@ -442,7 +440,6 @@ documented, not that it's absent.
 | **Background input** | AX action → per-window → per-pid event ladder, opt-in global cursor | Not public | Weaker; only physical path is an experimental WindowServer route | Global HID tap (raises windows) |
 | **Capture API** | ScreenCaptureKit | Not public | `CGWindowListCreateImage` (deprecated) | `screencapture` shell-out |
 | **Verified outcomes** | Yes (classification enum in `_meta`) | Not public | Yes | Yes |
-| **Skills / teach-replay** | Yes | No | No | No |
 | **Visible agent cursor** | Yes (self-drawn overlay) | Not public | No | No |
 | **Multi-session** | Yes (shared daemon + per-app leases) | N/A (hosted) | No | No |
 | **Safety gates** | Yes (destructive / URL / interference / screen-lock) | Provider-side | Minimal (no auth) | Not documented |
@@ -452,8 +449,7 @@ The two independent open-source efforts above both converged on verified outcome
 ("don't trust an AX success — re-read and confirm the effect"), which is the model
 computer-use-mcp adopts in [docs/outcome-contract.md](docs/outcome-contract.md).
 computer-use-mcp's distinguishing bets are the standard MCP surface, the
-teach/replay skills layer, the shared-daemon multi-session model, and the visible
-agent cursor.
+shared-daemon multi-session model, and the visible agent cursor.
 
 ## Distribution notes
 

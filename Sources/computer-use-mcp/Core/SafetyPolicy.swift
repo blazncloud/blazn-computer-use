@@ -210,7 +210,6 @@ enum ArgumentBounds {
     static let maxTypeTextCharacters = 100_000
     static let maxSetValueCharacters = 100_000
     static let maxClipboardCharacters = 200_000
-    static let maxReadTextCharacters = 20_000
     static let maxScrollPages = 10.0
     static let minScrollPages = 0.1
     static let maxScrollDelta = 10_000
@@ -232,20 +231,6 @@ enum ArgumentBounds {
             throw ToolError.invalidArguments("\"click_count\" must be between 1 and \(maxClickCount).")
         }
         return count
-    }
-
-    static func checkReadText(offset: Int, length: Int) throws {
-        if offset < 0 {
-            throw ToolError.invalidArguments("\"offset\" must be at least 0.")
-        }
-        if length < 1 {
-            throw ToolError.invalidArguments("\"length\" must be at least 1.")
-        }
-        if length > maxReadTextCharacters {
-            throw ToolError.invalidArguments(
-                "\"length\" is \(length); maximum is \(maxReadTextCharacters). Use offset/length chunking."
-            )
-        }
     }
 
     static func checkScrollPages(_ pages: Double) throws -> Double {

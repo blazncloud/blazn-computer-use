@@ -353,10 +353,8 @@ func buildTreeCore<Node>(
             windowCollections
             ? denseCollectionWindow(element, role: role, children: children, accessors: accessors)
             : nil
-        // Windowed perception caps per-node fanout to bound tokens. Non-windowed
-        // callers (find, skill-replay) asked for the deep tree and are bounded
-        // only by the element budget so find and unique skill anchors can see
-        // every materialized row.
+        // Windowed perception caps per-node fanout to bound tokens. Internal
+        // non-windowed captures remain bounded by the global element budget.
         let scanLimit =
             window?.scanLimit
             ?? (windowCollections ? min(children.count, maxChildrenPerNode) : children.count)
@@ -385,7 +383,7 @@ func buildTreeCore<Node>(
             coveragePartial = true
             lines[lineIndex] +=
                 " …\(window.offscreen) more \(window.itemNoun) off-screen; scroll the list and "
-                + "re-read to load them, or use find to jump to a specific one"
+                + "re-read to load them, or scope get_app_state to this container"
         }
     }
 

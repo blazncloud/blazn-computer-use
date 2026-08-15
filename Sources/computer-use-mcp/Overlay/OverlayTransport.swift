@@ -74,7 +74,6 @@ func overlaySessionLabel(for sessionID: String) -> String {
 /// Wire commands the overlay helper understands.
 enum OverlayCommand: Equatable {
     case ping
-    case record(Bool)
     case move(x: Double, y: Double, window: UInt32?, session: String)
     case pulse(x: Double, y: Double, window: UInt32?, session: String)
     case drop(session: String)
@@ -87,9 +86,6 @@ enum OverlayCommand: Equatable {
         switch head {
         case "ping":
             return .ping
-        case "record":
-            guard parts.count == 2 else { return nil }
-            return .record(parts[1] == "on")
         case "drop":
             guard parts.count == 2 else { return nil }
             return .drop(session: String(parts[1]))

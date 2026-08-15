@@ -7,7 +7,6 @@
 //   move/pulse <x> <y> [<win> [<session>]]
 //   drop <session>
 //   ping
-//   record on|off
 // Coordinates are global top-left screen space. The helper is a singleton (one
 // process serves every concurrently running server) with one visually distinct
 // cursor per session, and it never moves the real system cursor.
@@ -109,7 +108,6 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
     private var chipLayers: [CALayer] = []
     private var chipVisible = false
     private var chipFadeWork: DispatchWorkItem?
-    private var recording = false
     private let chipEnabled = Config.bool("status_chip") != false
 
     /// One cursor per session id (color + short label).
@@ -351,8 +349,6 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
             switch command {
             case .ping:
                 controller?.noteActivity()
-            case .record(let on):
-                controller?.setRecording(on)
             case .drop(let session):
                 controller?.dropSession(session)
             case .move(let x, let y, let window, let session):
@@ -675,16 +671,15 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
 
     /// Show the "Agent working" pill; it fades after the same quiet period as
     /// the cursor. Every command (glide, pulse, keep-alive ping) refreshes it.
-    /// While recording the pill stays pinned (see setRecording).
     private func showChip() {
-        guard chipEnabled, !chipLayers.isEmpty, !recording else { return }
+        guard chipEnabled, !chipLayers.isEmpty else { return }
         if !chipVisible {
             chipVisible = true
             setOpacity(1, of: chipLayers, animationDuration: 0.3)
         }
         chipFadeWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.chipLayers.isEmpty, !self.recording else { return }
+            guard let self, !self.chipLayers.isEmpty else { return }
             self.chipVisible = false
             self.setOpacity(0, of: self.chipLayers, animationDuration: 0.3)
         }
@@ -692,30 +687,9 @@ private final class OverlayController: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + idleFadeDelay, execute: work)
     }
 
-    /// Teach mode: pin the pill in a red "Recording" state (no idle fade)
-    /// while the user demonstrates, and revert when recording stops.
-    fileprivate func setRecording(_ on: Bool) {
-        recording = on
-        for chip in chipLayers {
-            (chip.sublayers?.first as? CALayer)?.backgroundColor =
-                (on ? NSColor.systemRed : NSColor.systemBlue).cgColor
-        }
-        refreshChipText()
-        if on {
-            lastCommand = Date()
-            chipFadeWork?.cancel()
-            chipVisible = true
-            setOpacity(1, of: chipLayers, animationDuration: 0.3)
-        } else {
-            chipVisible = false
-            setOpacity(0, of: chipLayers, animationDuration: 0.3)
-        }
-    }
-
     /// The pill's text: names a background target when the target app isn't
     /// frontmost, so the user can see the agent is working elsewhere.
     private var chipText: String {
-        if recording { return "Recording" }
         if let backgroundTarget { return "Working in \(backgroundTarget) (background)" }
         return "Agent working"
     }

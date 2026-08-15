@@ -236,19 +236,6 @@ private func invalidArgumentMessage(_ body: () throws -> Void) -> String {
         #expect(clipboardMessage.contains("split"))
     }
 
-    @Test func readTextBoundsFailWithUsefulErrors() {
-        let negativeOffset = invalidArgumentMessage {
-            try ArgumentBounds.checkReadText(offset: -1, length: 100)
-        }
-        #expect(negativeOffset.contains("\"offset\""))
-
-        let tooLong = invalidArgumentMessage {
-            try ArgumentBounds.checkReadText(offset: 0, length: ArgumentBounds.maxReadTextCharacters + 1)
-        }
-        #expect(tooLong.contains("\"length\""))
-        #expect(tooLong.contains("chunking"))
-    }
-
     @Test func clickCountBoundsFailWithUsefulErrors() throws {
         let zeroClicks = invalidArgumentMessage {
             _ = try ArgumentBounds.checkClickCount(0)

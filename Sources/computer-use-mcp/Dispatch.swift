@@ -6,8 +6,6 @@ import Foundation
 import MCP
 
 typealias DaemonToolCaller = @Sendable (String, [String: Value]) async throws -> CallTool.Result
-/// Internal composition seam for daemon-owned compound tools such as batch.
-typealias LocalToolDispatcher = @Sendable (String, [String: Value]) async -> CallTool.Result
 
 /// The only external tool route. `serve` and `call` always cross the daemon
 /// boundary; the daemon invokes `dispatchTool` directly after authentication.

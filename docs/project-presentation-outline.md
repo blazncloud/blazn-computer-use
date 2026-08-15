@@ -520,7 +520,7 @@ ordered roadmap.
   overlay transport mechanics in speaker backup unless asked.
 - Keep daemon authentication, detailed cancellation states, and exhaustive
   action-fallback mechanics in speaker backup unless asked.
-- Keep skills, teach mode, and replay outside the core 11 slides.
+- Keep removed workflow-convenience features outside the core presentation.
 - Treat the 12-slide bullet draft above as authoritative. The phase notes below
   are implementation/Q&A backup and must not silently add new main-slide scope.
 - Do not add another deep dive before writing the first speaking draft.

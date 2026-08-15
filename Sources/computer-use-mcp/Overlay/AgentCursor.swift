@@ -59,14 +59,6 @@ actor AgentCursor {
         )
     }
 
-    /// Switch the overlay's status pill to (or from) the recording state while
-    /// teach mode captures the user. Spawns the helper so the indicator is
-    /// visible for the whole recording, not just after the first glide.
-    func setRecording(_ on: Bool) async {
-        guard enabled else { return }
-        _ = await send("record \(on ? "on" : "off")\n", spawningIfNeeded: on)
-    }
-
     /// Remove this connection's cursor when the daemon session disconnects.
     /// Never spawns the helper and never fails the caller.
     func dropSession(_ session: Int32) async {

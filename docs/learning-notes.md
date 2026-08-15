@@ -218,7 +218,7 @@ the target, the verifier reports ambiguity instead of claiming success.
 | `AXUIElementPerformAction` | Requests one advertised semantic action. |
 | `AXUIElementIsAttributeSettable` | Checks whether an attribute such as `AXValue`, `AXSelected`, or `AXFocused` can be changed. |
 | `AXUIElementSetAttributeValue` | Changes a settable attribute, for example text, focus, selection, or window position. |
-| `AXUIElementCopyElementAtPosition` | AX hit-tests a global screen point to find the element under it; primarily useful for coordinate interpretation and teach mode. |
+| `AXUIElementCopyElementAtPosition` | AX hit-tests a global screen point to find the element under it; primarily useful for coordinate interpretation. |
 | `AXUIElementSetMessagingTimeout` | Bounds how long an unresponsive target application may block an AX query. |
 
 The tree is formed by repeatedly reading attributes such as `AXWindows` and
@@ -389,25 +389,6 @@ semantic AX action
   → explicitly permitted global CG event
 ```
 
-## Skills, teach mode, and replay
-
-This is secondary to the core computer-use path:
-
-1. Teach mode starts one daemon-wide recorder for a selected app.
-2. A listen-only CoreGraphics event tap observes supported physical clicks,
-   key-down events, and scroll events.
-3. For clicks, AX hit testing maps the physical global point to a semantic
-   element and captures a durable locator when possible.
-4. Deterministic code coalesces events into draft skill steps. The recorder
-   observes interaction, not user intent, so the draft needs review.
-5. Skills persist as parameterized JSON under
-   `~/Library/Application Support/computer-use-mcp/skills/`.
-6. Replay resolves locators against fresh state and executes steps
-   sequentially, stopping on the first failure with structured verdicts.
-
-Skills store locators, roles, labels, parameters, and expectations rather than
-ephemeral element/snapshot IDs. Snapshot IDs describe one transient UI
-generation and would make a saved workflow brittle.
 
 ## Concise comparison with Codex Computer Use
 
@@ -803,7 +784,7 @@ processes or remote workers.
 Shared gates: screen lock, human interference, confirmation, URL policy
 Cancellation before delivery: stop with not_delivered/not_committed
 Cancellation after delivery may have begun: continue observation and report an
-honest committed/partial/unknown outcome rather than pretending rollback
+honest committed/unknown outcome rather than pretending rollback
 Trade-off: cancellation is cooperative, not transactional rollback
 ```
 
@@ -812,7 +793,7 @@ Trade-off: cancellation is cooperative, not transactional rollback
 ```text
 Before: PID/title/frame and locator matching could redirect after process/window churn
 Change: PID + bundle ID + process start time + exact CGWindowID lineage
-Then: select exact live AX window → replay role/index locator → verify role/label
+Then: validate the retained live AX handle → verify semantic facts and attachment
 Trade-off: strict identity produces more stale-target errors, but avoids acting
            on a recycled process or same-title sibling window
 ```
@@ -847,11 +828,11 @@ Trade-off: synthetic posting can be dropped and therefore cannot itself prove ef
 
 ```text
 quick per-rung check: reread current target; fingerprint window only if needed
-final check: reselect exact window, rebuild state, replay locator, reread target
+final check: reread the retained target, rebuild state, and compute the diff
 
 delivery: not_delivered / delivered / posted / unknown
 effect:   verified / unverified / not_checked
-commit:   not_committed / committed / partially_committed / unknown
+commit:   not_committed / committed / unknown
 ```
 
 Reasoning:
