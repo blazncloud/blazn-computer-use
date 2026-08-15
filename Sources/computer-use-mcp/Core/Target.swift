@@ -130,7 +130,9 @@ private func resolveTarget(
             snapshot: snapshot, app: app, window: window,
             requirement: .bestEffort)
     }
-    let element = try await resolveElement(snapshotElement, in: window.element)
+    let element = try await resolveElement(
+        snapshotElement, in: window.element,
+        requireStrongFingerprint: identityRequirement == .mutation)
     return ResolvedTarget(
         app: app, snapshot: snapshot, snapshotElement: snapshotElement,
         element: element, window: window)

@@ -24,6 +24,8 @@ struct SnapshotElement: Codable {
     let id: String
     let role: String
     let label: String?
+    /// Optional for snapshots written before fingerprint validation existed.
+    var fingerprint: ElementFingerprint? = nil
     let path: [LocatorStep]
     /// Bounding box in screenshot pixel coordinates.
     let frame: [Double]
@@ -134,7 +136,7 @@ struct AppSnapshot: Codable {
     var coverage: SnapshotCoverage? = nil
     /// Optional so snapshots written by older versions remain decodable.
     var lineage: SnapshotLineage? = nil
-    let elements: [SnapshotElement]
+    var elements: [SnapshotElement]
 
     var effectiveCoverage: SnapshotCoverage {
         coverage ?? (partial == true ? .partial : .complete)
@@ -232,6 +234,7 @@ actor SnapshotStore {
             tree.coverage.isComplete,
             previous.effectiveCoverage.isComplete,
             previous.treeFingerprint == fingerprint,
+            Self.elementsMatchIdentity(previous.elements, tree.elements),
             previous.windowTitle == windowTitle,
             previous.windowOrigin == [windowOrigin.x, windowOrigin.y],
             previous.windowSize == windowSize,
@@ -242,6 +245,7 @@ actor SnapshotStore {
         {
             let committedTree = Self.committedTree(from: previous, matching: tree)
             var committedSnapshot = previous
+            committedSnapshot.elements = committedTree.elements
             if committedSnapshot.treeText == nil {
                 committedSnapshot.treeText = committedTree.text
             }
@@ -477,26 +481,32 @@ actor SnapshotStore {
     ) -> (snapshot: AppSnapshot, element: SnapshotElement)? {
         let candidateGeneration = parseGeneration(candidate)
         var current = (snapshot: candidate, element: element)
-        for newer in snapshots where parseGeneration(newer) > candidateGeneration {
-            guard sameWindowGeometry(candidate, newer) else { continue }
+        let newerSnapshots = snapshots
+            .filter { parseGeneration($0) > candidateGeneration }
+            .sorted { parseGeneration($0) < parseGeneration($1) }
+        for newer in newerSnapshots {
+            guard sameWindowGeometry(current.snapshot, newer) else { continue }
             // Once a newer snapshot occupies the same logical window slot,
             // unavailable or conflicting lineage invalidates the historical
             // locator instead of allowing the old snapshot to remain current.
-            guard sameWindowLineage(candidate, newer) else { return nil }
-            if let sameID = newer.element(withID: element.id) {
+            guard sameWindowLineage(current.snapshot, newer) else { return nil }
+            let expected = current.element
+            if let sameID = newer.element(withID: expected.id) {
+                guard snapshotElementsMatchIdentity(sameID, expected) else { return nil }
                 current = (newer, sameID)
                 continue
             }
-            if let samePath = snapshotElement(atPath: element.path, in: newer) {
-                guard snapshotElement(samePath, matchesIdentityOf: element) else { return nil }
+            if let samePath = snapshotElement(atPath: expected.path, in: newer) {
+                guard snapshotElementsMatchIdentity(samePath, expected) else { return nil }
                 let stableIDElement = SnapshotElement(
-                    id: element.id, role: samePath.role, label: samePath.label,
+                    id: expected.id, role: samePath.role, label: samePath.label,
+                    fingerprint: samePath.fingerprint,
                     path: samePath.path, frame: samePath.frame)
                 current = (newer, stableIDElement)
                 continue
             }
             guard newer.scoped != true, newer.effectiveCoverage.isComplete else { continue }
-            guard let candidateFingerprint = candidate.treeFingerprint,
+            guard let candidateFingerprint = current.snapshot.treeFingerprint,
                 let newerFingerprint = newer.treeFingerprint,
                 candidateFingerprint == newerFingerprint
             else { return nil }
@@ -522,24 +532,40 @@ actor SnapshotStore {
         snapshot.elements.first { $0.path == path }
     }
 
-    private static func snapshotElement(_ lhs: SnapshotElement, matchesIdentityOf rhs: SnapshotElement) -> Bool {
-        lhs.role == rhs.role && lhs.label == rhs.label
+    private static func elementsMatchIdentity(
+        _ previous: [SnapshotElement], _ fresh: [SnapshotElement]
+    ) -> Bool {
+        guard previous.count == fresh.count else { return false }
+        return zip(previous, fresh).allSatisfy { old, new in
+            old.path == new.path && snapshotElementsMatchIdentity(new, old)
+        }
     }
 
     private static func committedTree(from snapshot: AppSnapshot, matching freshTree: BuiltTree) -> BuiltTree {
+        let committedElements: [SnapshotElement]
+        if snapshot.elements.count == freshTree.elements.count {
+            committedElements = zip(snapshot.elements, freshTree.elements).map { previous, fresh in
+                SnapshotElement(
+                    id: previous.id, role: fresh.role, label: fresh.label,
+                    fingerprint: fresh.fingerprint ?? previous.fingerprint,
+                    path: fresh.path, frame: fresh.frame)
+            }
+        } else {
+            committedElements = snapshot.elements
+        }
         guard let text = snapshot.treeText else {
             var lines = freshTree.text.components(separatedBy: "\n")
-            for index in freshTree.elements.indices where index < snapshot.elements.count && index < lines.count {
+            for index in freshTree.elements.indices where index < committedElements.count && index < lines.count {
                 lines[index] = lines[index].replacingOccurrences(
-                    of: freshTree.elements[index].id, with: snapshot.elements[index].id)
+                    of: freshTree.elements[index].id, with: committedElements[index].id)
             }
             return BuiltTree(
-                text: lines.joined(separator: "\n"), elements: snapshot.elements,
+                text: lines.joined(separator: "\n"), elements: committedElements,
                 coverage: snapshot.effectiveCoverage,
                 elementsVisited: freshTree.elementsVisited)
         }
         return BuiltTree(
-            text: text, elements: snapshot.elements,
+            text: text, elements: committedElements,
             coverage: snapshot.effectiveCoverage,
             elementsVisited: freshTree.elementsVisited)
     }
@@ -661,7 +687,7 @@ func stabilizeTree(_ tree: BuiltTree, against previous: AppSnapshot) -> (tree: B
         let element = elements[index]
         let key = pathKey(element.path)
         if let prior = previousByPath[key],
-            prior.element.role == element.role, prior.element.label == element.label
+            snapshotElementsMatchIdentity(element, prior.element)
         {
             previousByPath.removeValue(forKey: key)
             // Carry the previous id so the agent's references stay valid. A
@@ -670,6 +696,7 @@ func stabilizeTree(_ tree: BuiltTree, against previous: AppSnapshot) -> (tree: B
             newLines[index] = newLines[index].replacingOccurrences(of: element.id, with: prior.element.id)
             elements[index] = SnapshotElement(
                 id: prior.element.id, role: element.role, label: element.label,
+                fingerprint: element.fingerprint,
                 path: element.path, frame: element.frame
             )
             if prior.line != newLines[index] {
@@ -687,34 +714,40 @@ func stabilizeTree(_ tree: BuiltTree, against previous: AppSnapshot) -> (tree: B
 
     let stabilized = BuiltTree(
         text: newLines.joined(separator: "\n"), elements: elements,
-        isPartial: tree.isPartial, elementsVisited: tree.elementsVisited)
+        coverage: tree.coverage, elementsVisited: tree.elementsVisited)
     return (stabilized, TreeDiff(changed: changed, added: added, removed: removed, totalElements: elements.count))
 }
 
-/// Re-resolve a snapshot element against the live accessibility tree.
-/// Retries briefly so a UI that is mid-update can settle, and verifies the
-/// resolved element still matches the snapshot's identity (role + label) so a
-/// relayout turns into a clear stale-id error instead of a silent mis-click.
-func resolveElement(_ element: SnapshotElement, in window: AXUIElement) async throws -> AXUIElement {
-    let deadline = Date().addingTimeInterval(1.0)
-    var lastFailure = "locator path did not resolve"
-
-    repeat {
-        if let resolved = walkLocator(element.path, from: window) {
-            if matchesIdentity(resolved, of: element) {
-                return resolved
-            }
-            let liveLabel = snapshotLabel(resolved, role: axRole(resolved)) ?? "no label"
-            lastFailure =
-                "the element at path \(describePath(element.path)) is now "
-                + "\(axRole(resolved)) \"\(liveLabel)\", not what \(element.id) referred to"
-        } else {
-            lastFailure = "no element at path \(describePath(element.path))"
+/// Re-resolve a snapshot element against the live accessibility tree once and
+/// verify its captured fingerprint. A mismatch fails stale; settling belongs
+/// in the explicit observer/verification layer, not hidden locator retries.
+func resolveElement(
+    _ element: SnapshotElement, in window: AXUIElement,
+    requireStrongFingerprint: Bool = false,
+    comparePresentationEvidence: Bool = true
+) async throws -> AXUIElement {
+    if requireStrongFingerprint {
+        guard let fingerprint = element.fingerprint, fingerprint.hasIdentityEvidence else {
+            throw ToolError.failed(
+                "Element \(element.id) cannot be safely used for mutation because it has no "
+                    + "AXIdentifier. Element-id mutation is unavailable "
+                    + "for this control; choose a better-identified target."
+            )
         }
-        // Task.sleep, not Thread.sleep: this runs on the cooperative pool and
-        // must suspend rather than block a shared executor thread.
-        try? await Task.sleep(for: .milliseconds(150))
-    } while Date() < deadline
+    }
+    let lastFailure: String
+    if let resolved = walkLocator(element.path, from: window) {
+        let validation = validateResolvedElement(
+            resolved, against: element,
+            requireStrongFingerprint: requireStrongFingerprint,
+            comparePresentationEvidence: comparePresentationEvidence)
+        if validation == .match { return resolved }
+        lastFailure =
+            "the element at path \(describePath(element.path)) no longer matches: "
+            + validation.description
+    } else {
+        lastFailure = "no element at path \(describePath(element.path))"
+    }
 
     throw ToolError.failed(
         "Element \(element.id) (\(element.role)\(element.label.map { " \"\($0)\"" } ?? "")) "
@@ -734,12 +767,51 @@ func requireAppAlive(_ app: ResolvedApp) throws {
     }
 }
 
-private func matchesIdentity(_ live: AXUIElement, of element: SnapshotElement) -> Bool {
+private func validateResolvedElement(
+    _ live: AXUIElement, against element: SnapshotElement,
+    requireStrongFingerprint: Bool,
+    comparePresentationEvidence: Bool
+) -> ElementFingerprintValidation {
+    if let expected = element.fingerprint,
+        requireStrongFingerprint || expected.hasIdentityEvidence
+    {
+        return validateElementFingerprint(
+            expected: expected, live: liveElementFingerprint(live),
+            requireIdentityEvidence: requireStrongFingerprint,
+            comparePresentationEvidence: comparePresentationEvidence)
+    }
+    if requireStrongFingerprint { return .insufficientEvidence }
     let role = axRole(live)
     return elementIdentityMatches(
         liveRole: role, liveLabel: snapshotLabel(live, role: role),
         expectedRole: element.role, expectedLabel: element.label
-    )
+    ) ? .match : .mismatch("legacy role/label identity changed")
+}
+
+extension ElementFingerprintValidation {
+    fileprivate var description: String {
+        switch self {
+        case .match: return "matched"
+        case .insufficientEvidence: return "the captured fingerprint had no AXIdentifier"
+        case .mismatch(let reason): return reason
+        }
+    }
+}
+
+func snapshotElementsMatchIdentity(_ fresh: SnapshotElement, _ previous: SnapshotElement) -> Bool {
+    if let expected = previous.fingerprint, expected.hasIdentityEvidence {
+        guard let live = fresh.fingerprint else { return false }
+        return validateElementFingerprint(
+            expected: expected, live: live,
+            requireIdentityEvidence: false) == .match
+    }
+    // A legacy role/label match cannot safely inherit newly discovered strong
+    // evidence: peers may have reordered before this first fingerprinted read.
+    if fresh.fingerprint?.hasIdentityEvidence == true { return false }
+    // Preserve the historical snapshot-stabilization contract exactly. Live
+    // read-only resolution remains lenient for text-entry label churn, but a
+    // changed persisted label must not carry an old id into a new snapshot.
+    return fresh.role == previous.role && fresh.label == previous.label
 }
 
 /// Pure identity rule behind the stale-element re-check. Label identity is
@@ -757,10 +829,19 @@ func elementIdentityMatches(
 }
 
 private func walkLocator(_ path: [LocatorStep], from root: AXUIElement) -> AXUIElement? {
+    walkLocatorPath(
+        path, from: root,
+        children: { axElements($0, kAXChildrenAttribute) },
+        role: axRole)
+}
+
+func walkLocatorPath<Node>(
+    _ path: [LocatorStep], from root: Node,
+    children: (Node) -> [Node], role: (Node) -> String
+) -> Node? {
     var current = root
     for step in path {
-        let children = axElements(current, kAXChildrenAttribute)
-        let matching = children.filter { axRole($0) == step.role }
+        let matching = children(current).filter { role($0) == step.role }
         guard step.indexOfRole < matching.count else { return nil }
         current = matching[step.indexOfRole]
     }

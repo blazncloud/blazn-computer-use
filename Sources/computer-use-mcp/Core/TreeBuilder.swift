@@ -91,10 +91,12 @@ func clampedTreeBudget(_ maxElements: Int) -> Int {
 /// the outline (and the element budget) but kept in locator paths, so deep
 /// web content fits within the depth and element limits.
 func isStructuralWrapper(
-    role: String, label: String?, value: String?, focused: Bool, actions: [String]
+    role: String, label: String?, identifier: String? = nil,
+    value: String?, focused: Bool, actions: [String]
 ) -> Bool {
     guard role == "AXGroup" else { return false }
     guard label == nil || label!.isEmpty else { return false }
+    guard identifier == nil || identifier!.isEmpty else { return false }
     guard value == nil || value!.isEmpty else { return false }
     guard !focused else { return false }
     return actions.allSatisfy { $0 == "AXShowMenu" || $0 == "AXScrollToVisible" }
@@ -116,6 +118,8 @@ struct NodeFacts {
     let selected: Bool?
     let actions: [String]
     let frame: CGRect?
+    var subrole: String? = nil
+    var stableIdentityLabel: String? = nil
 }
 
 /// Accessors the generic traversal needs over an opaque node type. The live
@@ -295,7 +299,8 @@ func buildTreeCore<Node>(
         let wrapper =
             !path.isEmpty
             && isStructuralWrapper(
-                role: role, label: facts.label, value: facts.value,
+                role: role, label: facts.label, identifier: facts.identifier,
+                value: facts.value,
                 focused: facts.focused == true, actions: facts.actions)
 
         var lineIndex: Int?
@@ -304,7 +309,12 @@ func buildTreeCore<Node>(
             let frame = pixelFrame(facts.frame)
             elements.append(
                 SnapshotElement(
-                    id: id, role: role, label: facts.label, path: path, frame: frame ?? [0, 0, 0, 0]))
+                    id: id, role: role, label: facts.label,
+                    fingerprint: ElementFingerprint(
+                        role: role, subrole: facts.subrole,
+                        identifier: facts.identifier,
+                        stableLabel: facts.stableIdentityLabel),
+                    path: path, frame: frame ?? [0, 0, 0, 0]))
             lines.append(describeLine(facts, id: id, frame: frame, depth: depth))
             lineIndex = lines.count - 1
         }
@@ -500,12 +510,35 @@ func axTreeAccessors() -> TreeNodeAccessors<AXNode> {
         return sanitizedRect(CGRect(origin: position, size: size))
     }
 
-    func label(_ element: AXUIElement, role: String) -> String? {
-        string(element, kAXTitleAttribute)
-            ?? string(element, kAXDescriptionAttribute)
+    func labels(_ element: AXUIElement, role: String) -> (display: String?, identity: String?) {
+        let title = string(element, kAXTitleAttribute)
+        let description = title == nil ? string(element, kAXDescriptionAttribute) : nil
+        let display = title
+            ?? description
             ?? string(element, "AXPlaceholderValue")
             ?? informativeRoleDescription(
                 role: role, description: string(element, kAXRoleDescriptionAttribute))
+        let associatedTitle: String?
+        if isTextEntryRole(role) {
+            let titleElement: AXUIElement? = recorder.read(
+                axReadAttribute(element, kAXTitleUIElementAttribute),
+                transform: { value in
+                    guard CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+                    return (value as! AXUIElement)
+                })
+            associatedTitle = titleElement.flatMap { element in
+                string(element, kAXTitleAttribute)
+                    ?? string(element, kAXDescriptionAttribute)
+                    ?? string(element, kAXValueAttribute)
+            }
+        } else {
+            associatedTitle = nil
+        }
+        return (
+            display,
+            stableIdentityLabel(
+                role: role, title: title, description: description,
+                associatedTitle: associatedTitle))
     }
 
     return TreeNodeAccessors<AXNode>(
@@ -513,9 +546,10 @@ func axTreeAccessors() -> TreeNodeAccessors<AXNode> {
             let element = node.element
             AXUIElementSetMessagingTimeout(element, perElementAXTimeout)
             let role = string(element, kAXRoleAttribute, required: true) ?? "AXUnknown"
+            let labels = labels(element, role: role)
             return NodeFacts(
                 role: role,
-                label: label(element, role: role),
+                label: labels.display,
                 identifier: string(element, "AXIdentifier"),
                 value: string(element, kAXValueAttribute),
                 selectedText: string(element, kAXSelectedTextAttribute),
@@ -523,7 +557,9 @@ func axTreeAccessors() -> TreeNodeAccessors<AXNode> {
                 focused: bool(element, kAXFocusedAttribute),
                 selected: bool(element, kAXSelectedAttribute),
                 actions: recorder.readActions(axReadActionNames(element)),
-                frame: frame(element)
+                frame: frame(element),
+                subrole: string(element, kAXSubroleAttribute),
+                stableIdentityLabel: labels.identity
             )
         },
         role: { node in
@@ -629,8 +665,8 @@ func describeLine(_ facts: NodeFacts, id: String, frame: [Double]?, depth: Int) 
     if let label = facts.label, !label.isEmpty {
         parts.append("\"\(clean(label))\"")
     } else if let identifier = displayableIdentifier(facts.identifier) {
-        // Display-only: the identifier never enters SnapshotElement.label —
-        // locator identity (and the skills built on it) must not change.
+        // Keep the developer identifier separate from the human label. It is
+        // also retained as optional fingerprint evidence in SnapshotElement.
         parts.append("id=\"\(clean(identifier))\"")
     }
     if let frame, frame.count >= 4 {

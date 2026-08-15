@@ -697,7 +697,10 @@ struct ActionVerifier: Sendable {
         var rereadFailed = false
         if family.readsTargetFields, let snapshotElement, let windowElement {
             do {
-                let live = try await resolveElement(snapshotElement, in: windowElement)
+                let live = try await resolveElement(
+                    snapshotElement, in: windowElement,
+                    requireStrongFingerprint: true,
+                    comparePresentationEvidence: false)
                 v.captureAfter(live, family: family)
                 v.refreshedTargetStrategy = "locator-path"
                 if let atIndex = snapshotElement.id.firstIndex(of: "@") {

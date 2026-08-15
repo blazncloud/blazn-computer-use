@@ -86,6 +86,25 @@ import Testing
         #expect(!isStructuralWrapper(role: "AXGroup", label: "Sidebar", value: nil, focused: false, actions: []))
     }
 
+    @Test func identifiedGroupIsKeptAndCanAnchorIdentity() {
+        #expect(
+            !isStructuralWrapper(
+                role: "AXGroup", label: nil, identifier: "invoice-details",
+                value: nil, focused: false, actions: []))
+    }
+
+    @Test func treeCapturePersistsIdentifierSubroleAndStableLabelFingerprint() {
+        let button = MinimalTreeNode(
+            role: "AXButton", label: "Save", identifier: "save-button",
+            subrole: "AXDefaultButton", stableIdentityLabel: "Save")
+
+        let built = buildMinimalTree(button)
+
+        #expect(built.elements[0].fingerprint == ElementFingerprint(
+            role: "AXButton", subrole: "AXDefaultButton",
+            identifier: "save-button", stableLabel: "Save"))
+    }
+
     @Test func actionableGroupIsKept() {
         #expect(
             !isStructuralWrapper(
@@ -109,12 +128,22 @@ import Testing
 private final class MinimalTreeNode {
     let role: String
     let label: String?
+    let identifier: String?
+    let subrole: String?
+    let stableIdentityLabel: String?
     let frame: CGRect?
     let children: [MinimalTreeNode]
 
-    init(role: String, label: String? = nil, frame: CGRect? = nil, children: [MinimalTreeNode] = []) {
+    init(
+        role: String, label: String? = nil, identifier: String? = nil,
+        subrole: String? = nil, stableIdentityLabel: String? = nil,
+        frame: CGRect? = nil, children: [MinimalTreeNode] = []
+    ) {
         self.role = role
         self.label = label
+        self.identifier = identifier
+        self.subrole = subrole
+        self.stableIdentityLabel = stableIdentityLabel
         self.frame = frame
         self.children = children
     }
@@ -131,9 +160,11 @@ private func buildMinimalTree(
         accessors: TreeNodeAccessors<MinimalTreeNode>(
             facts: { node in
                 NodeFacts(
-                    role: node.role, label: node.label, identifier: nil, value: nil,
+                    role: node.role, label: node.label, identifier: node.identifier, value: nil,
                     selectedText: nil, enabled: nil, focused: nil, selected: nil,
-                    actions: [], frame: node.frame)
+                    actions: [], frame: node.frame,
+                    subrole: node.subrole,
+                    stableIdentityLabel: node.stableIdentityLabel)
             },
             role: { $0.role },
             frame: { $0.frame },
