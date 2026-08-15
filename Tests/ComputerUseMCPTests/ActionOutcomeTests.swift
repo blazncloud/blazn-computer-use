@@ -42,6 +42,18 @@ import Testing
             beforeSelected: true) == .toggle(true))
     }
 
+    @Test func clickIntentDerivesSelectableRowAndCellSelection() {
+        #expect(clickIntent(
+            role: "AXRow", button: "left", clickCount: 1,
+            beforeSelected: false) == .toggle(true))
+        #expect(clickIntent(
+            role: "AXCell", button: "left", clickCount: 1,
+            beforeSelected: true) == .toggle(true))
+        #expect(clickIntent(
+            role: "AXRow", button: "left", clickCount: 2,
+            beforeSelected: false) == .activate)
+    }
+
     @Test func clickIntentDoesNotGuessWhenCheckboxStateIsUnknown() {
         #expect(clickIntent(
             role: "AXCheckBox", button: "left", clickCount: 1,

@@ -168,8 +168,9 @@ let toolCatalog: [ToolSpec] = [
         name: "click",
         description: """
             Click an element by id, or by screenshot pixel coordinates when the target \
-            is not in the accessibility tree. Runs in the background: the user's real \
-            cursor and focus are not disturbed. Returns fresh app state.
+            is not in the accessibility tree. For a selectable sidebar/list item, target \
+            its AXRow or AXCell rather than the child text label. Runs in the background \
+            unless an explicitly allowed global-input route is required. Returns fresh app state.
             """,
         inputSchema: objectSchema(
             [

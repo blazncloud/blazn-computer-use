@@ -1,7 +1,7 @@
 // click — by element id (preferred) or screenshot coordinates (fallback).
-// Tier 1 uses the accessibility press/menu action when available (precise,
-// background, no event posted); otherwise it descends the synthetic input
-// ladder (per-window NSEvent → per-pid CGEvent → guarded global cursor).
+// Tier 1 uses AXSelected for selectable rows/cells or AXPress for pressable
+// controls (precise, background, no event posted); otherwise it uses one
+// preselected synthetic input route.
 
 import ApplicationServices
 import Foundation
@@ -126,7 +126,14 @@ func clickIntent(
     if role == "AXRadioButton", beforeSelected != nil {
         return .toggle(true)
     }
+    if let role, isSelectableClickRole(role), beforeSelected != nil {
+        return .toggle(true)
+    }
     return .activate
+}
+
+func isSelectableClickRole(_ role: String) -> Bool {
+    role == "AXRow" || role == "AXCell"
 }
 
 func clickCountArgument(_ args: [String: Value]) throws -> Int {
@@ -167,14 +174,46 @@ private func leftClick(_ target: PointTarget, clickCount: Int) async throws -> I
         await AgentCursor.shared.glide(to: point, targetWindow: target.deliveryContext.windowNumber)
     }
 
-    // Select one route before dispatch. A supported AXPress owns the operation;
-    // once it is attempted we never continue into synthetic delivery. Walking
-    // to one pressable ancestor is target resolution, not another action.
+    // Select one route before dispatch. Selectable rows/cells use their native
+    // AXSelected attribute; other controls prefer AXPress. Once the chosen
+    // route is attempted we never continue into another delivery route.
+    let selectable = target.element.flatMap { element -> AXUIElement? in
+        guard clickCount == 1,
+            let role = target.snapshotElement?.role,
+            isSelectableClickRole(role),
+            axBool(element, kAXSelectedAttribute) != nil
+        else { return nil }
+        var settable = DarwinBoolean(false)
+        guard AXUIElementIsAttributeSettable(
+            element, kAXSelectedAttribute as CFString, &settable) == .success,
+            settable.boolValue
+        else { return nil }
+        return element
+    }
     let pressable = target.element.flatMap {
         selfOrAncestor(of: $0, supporting: kAXPressAction as String)
     }
+    let route = clickDeliveryRoute(
+        hasSelectableElement: selectable != nil,
+        hasPressableElement: pressable != nil)
     return try await deliverSelectedClick(
-        hasPressableElement: pressable != nil,
+        route: route,
+        axSelection: {
+            guard let selectable else {
+                preconditionFailure("AXSelected route requires a selectable element")
+            }
+            try checkCancellationBeforeDelivery()
+            let error = AXUIElementSetAttributeValue(
+                selectable, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+            guard error == .success else {
+                throw ToolError.failed(
+                    "Setting AXSelected failed on \(target.description) (\(axErrorDescription(error))).")
+            }
+            return InputActionOutcome(
+                note: "Selected \(target.description) via accessibility [tier1-ax-attribute].",
+                deliveryTier: .accessibilityAttribute,
+                landedRung: "ax-selected")
+        },
         axPress: {
             guard let pressable else { preconditionFailure("AXPress route requires an action owner") }
             try await performRepeatedAXPress(

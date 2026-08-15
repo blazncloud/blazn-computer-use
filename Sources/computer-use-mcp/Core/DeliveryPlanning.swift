@@ -2,23 +2,29 @@
 /// Each tool executes exactly one returned route.
 
 enum ClickDeliveryRoute: Equatable {
+    case axSelection
     case axPress
     case synthetic
 }
 
-func clickDeliveryRoute(hasPressableElement: Bool) -> ClickDeliveryRoute {
-    hasPressableElement ? .axPress : .synthetic
+func clickDeliveryRoute(
+    hasSelectableElement: Bool, hasPressableElement: Bool
+) -> ClickDeliveryRoute {
+    if hasSelectableElement { return .axSelection }
+    return hasPressableElement ? .axPress : .synthetic
 }
 
 /// Execute exactly the route selected from preflight capabilities. Keeping the
 /// branch and dispatch together prevents a handler from accidentally running
 /// both delivery closures.
 func deliverSelectedClick<Result>(
-    hasPressableElement: Bool,
+    route: ClickDeliveryRoute,
+    axSelection: () async throws -> Result,
     axPress: () async throws -> Result,
     synthetic: () async throws -> Result
 ) async rethrows -> Result {
-    switch clickDeliveryRoute(hasPressableElement: hasPressableElement) {
+    switch route {
+    case .axSelection: return try await axSelection()
     case .axPress: return try await axPress()
     case .synthetic: return try await synthetic()
     }

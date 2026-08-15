@@ -5,8 +5,19 @@ import Foundation
 
 @Suite struct DeliveryPlanningTests {
     @Test func clickSelectsExactlyOneRouteFromPreflight() {
-        #expect(clickDeliveryRoute(hasPressableElement: true) == .axPress)
-        #expect(clickDeliveryRoute(hasPressableElement: false) == .synthetic)
+        #expect(clickDeliveryRoute(
+            hasSelectableElement: true, hasPressableElement: true) == .axSelection)
+        #expect(clickDeliveryRoute(
+            hasSelectableElement: false, hasPressableElement: true) == .axPress)
+        #expect(clickDeliveryRoute(
+            hasSelectableElement: false, hasPressableElement: false) == .synthetic)
+    }
+
+    @Test func selectableClickRolesAreNarrow() {
+        #expect(isSelectableClickRole("AXRow"))
+        #expect(isSelectableClickRole("AXCell"))
+        #expect(!isSelectableClickRole("AXStaticText"))
+        #expect(!isSelectableClickRole("AXButton"))
     }
 
     @Test func textRouteIsChosenOnlyFromSettableCapabilities() {
@@ -70,7 +81,8 @@ import Foundation
         var axPresses = 0
         var syntheticClicks = 0
         let route = await deliverSelectedClick(
-            hasPressableElement: true,
+            route: .axPress,
+            axSelection: { "selection" },
             axPress: {
                 axPresses += 1
                 return "ax"
@@ -82,6 +94,31 @@ import Foundation
 
         #expect(route == "ax")
         #expect(axPresses == 1)
+        #expect(syntheticClicks == 0)
+    }
+
+    @Test func selectableClickDispatchesOnlySelection() async {
+        var selections = 0
+        var axPresses = 0
+        var syntheticClicks = 0
+        let result = await deliverSelectedClick(
+            route: .axSelection,
+            axSelection: {
+                selections += 1
+                return "selection"
+            },
+            axPress: {
+                axPresses += 1
+                return "press"
+            },
+            synthetic: {
+                syntheticClicks += 1
+                return "synthetic"
+            })
+
+        #expect(result == "selection")
+        #expect(selections == 1)
+        #expect(axPresses == 0)
         #expect(syntheticClicks == 0)
     }
 }
