@@ -1,5 +1,5 @@
-// Shared target resolution for interaction tools: app + element_id (from the
-// latest snapshot) → live AXUIElement, re-resolved via its locator path.
+// Shared target resolution: app + element_id → the exact retained AX handle,
+// validated against its captured process, window, and semantic facts.
 
 import ApplicationServices
 import Foundation
@@ -8,15 +8,14 @@ import MCP
 struct ResolvedTarget {
     let app: ResolvedApp
     let snapshot: AppSnapshot
-    let snapshotElement: SnapshotElement
+    let snapshotElement: CapturedNode
     let element: AXUIElement
-    /// Exact window used for lineage validation and live locator resolution.
+    /// Exact retained window used for lineage and attachment validation.
     let window: TargetWindow
 }
 
 enum SnapshotIdentityRequirement: Equatable {
-    /// Scoped/read-only perception may use legacy title/path resolution when
-    /// strong identity is unavailable, but still rejects a positive conflict.
+    /// Scoped/read-only perception may tolerate unavailable CG window identity.
     case bestEffort
     /// Mutations require a fresh snapshot with fully available strong process
     /// and window identity.
@@ -73,19 +72,69 @@ func resolveMutationTarget(app: ResolvedApp, elementID: String) async throws -> 
         app: app, elementID: elementID, identityRequirement: .mutation)
 }
 
-/// Resolve the exact captured window and require fully available, matching
+func containsAXElement(_ expected: AXUIElement, in elements: [AXUIElement]) -> Bool {
+    elements.contains { CFEqual($0, expected) }
+}
+
+/// Validate the exact retained window and require fully available, matching
 /// lineage. Shared by element-id and coordinate mutation paths.
 func resolveMutationWindow(snapshot: AppSnapshot, app: ResolvedApp) throws -> TargetWindow {
-    guard let snapshotWindowID = snapshot.lineage?.windowID else {
-        try enforceSnapshotIdentityDecision(
-            .unavailable, requirement: .mutation,
-            generation: snapshot.generation)
-        preconditionFailure("mutation identity enforcement must throw when window id is unavailable")
+    try resolveRetainedWindow(snapshot: snapshot, app: app, requirement: .mutation)
+}
+
+private func resolveRetainedWindow(
+    snapshot: AppSnapshot, app: ResolvedApp,
+    requirement: SnapshotIdentityRequirement
+) throws -> TargetWindow {
+    guard let windowElement = snapshot.windowElement else {
+        throw ToolError.failed(
+            "Snapshot \(snapshot.generation) has no live AX window handle. Call get_app_state "
+                + "in the current daemon before mutating the app.")
     }
-    let window = try targetWindow(for: app, snapshotWindowID: snapshotWindowID)
+    var ownerPID = pid_t(0)
+    let pidError = AXUIElementGetPid(windowElement, &ownerPID)
+    guard pidError == .success, ownerPID == app.pid else {
+        throw ToolError.failed(
+            "Snapshot \(snapshot.generation) is stale: its AX window no longer belongs to "
+                + "\(app.name). Call get_app_state and use a fresh element id.")
+    }
+    guard case .value(let rawRole) = axReadAttribute(windowElement, kAXRoleAttribute),
+        rawRole as? String == "AXWindow"
+    else {
+        throw ToolError.failed(
+            "Snapshot \(snapshot.generation) is stale: its AX window is no longer valid. "
+                + "Call get_app_state and use a fresh element id.")
+    }
+    switch axReadElements(app.axApplication, kAXWindowsAttribute) {
+    case .value(let currentWindows):
+        guard containsAXElement(windowElement, in: currentWindows) else {
+            throw ToolError.failed(
+                "Snapshot \(snapshot.generation) is stale: its AX window is no longer attached "
+                    + "to \(app.name). Call get_app_state and use a fresh element id.")
+        }
+    case .failure(let failure):
+        throw ToolError.failed(
+            "Could not prove that snapshot \(snapshot.generation)'s AX window is still attached "
+                + "to \(app.name): \(describeAXReadFailure(failure)).")
+    }
+    let snapshotWindowID = snapshot.lineage?.windowID
+    let currentWindowID = windowID(for: windowElement)
+    if let snapshotWindowID, let currentWindowID, currentWindowID != snapshotWindowID {
+        try enforceSnapshotIdentityDecision(
+            .conflict("the target window was replaced"), requirement: requirement,
+            generation: snapshot.generation)
+        preconditionFailure("identity enforcement must throw on a window conflict")
+    }
+    guard let frame = axFrame(windowElement) else {
+        throw ToolError.failed("Could not read the captured window frame for \(app.name).")
+    }
+    let window = TargetWindow(
+        element: windowElement,
+        title: axString(windowElement, kAXTitleAttribute),
+        frame: frame, identityWindowID: currentWindowID)
     try requireCompatibleSnapshotIdentity(
         snapshot: snapshot, app: app, window: window,
-        requirement: .mutation)
+        requirement: requirement)
     return window
 }
 
@@ -121,7 +170,10 @@ private func resolveTarget(
     case .mutation:
         window = try resolveMutationWindow(snapshot: snapshot, app: app)
     case .bestEffort:
-        if let snapshotWindowID = snapshot.lineage?.windowID {
+        if snapshot.windowElement != nil {
+            window = try resolveRetainedWindow(
+                snapshot: snapshot, app: app, requirement: .bestEffort)
+        } else if let snapshotWindowID = snapshot.lineage?.windowID {
             window = try targetWindow(for: app, snapshotWindowID: snapshotWindowID)
         } else {
             window = try targetWindow(for: app, title: snapshot.windowTitle)
@@ -130,9 +182,14 @@ private func resolveTarget(
             snapshot: snapshot, app: app, window: window,
             requirement: .bestEffort)
     }
-    let element = try await resolveElement(
-        snapshotElement, in: window.element,
-        requireStrongFingerprint: identityRequirement == .mutation)
+    let element = try await resolveElement(snapshotElement, in: window.element)
+    var elementPID = pid_t(0)
+    let elementPIDError = AXUIElementGetPid(element, &elementPID)
+    guard elementPIDError == .success, elementPID == app.pid else {
+        throw ToolError.failed(
+            "Element \(snapshotElement.id) is stale: its AX handle no longer belongs to "
+                + "\(app.name). Call get_app_state and use a fresh element id.")
+    }
     return ResolvedTarget(
         app: app, snapshot: snapshot, snapshotElement: snapshotElement,
         element: element, window: window)

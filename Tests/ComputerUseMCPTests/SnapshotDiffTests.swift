@@ -1,146 +1,56 @@
+import ApplicationServices
 import Foundation
 import Testing
 
 @testable import computer_use_mcp
 
-@Suite struct ElementIdentityTests {
-    @Test func roleAndLabelIdentityForOrdinaryControls() {
-        #expect(elementIdentityMatches(
-            liveRole: "AXButton", liveLabel: "Save", expectedRole: "AXButton", expectedLabel: "Save"))
-        #expect(!elementIdentityMatches(
-            liveRole: "AXButton", liveLabel: "Cancel", expectedRole: "AXButton", expectedLabel: "Save"))
-        #expect(!elementIdentityMatches(
-            liveRole: "AXCheckBox", liveLabel: "Save", expectedRole: "AXButton", expectedLabel: "Save"))
-        // Unlabeled snapshot elements are identified by structure alone.
-        #expect(elementIdentityMatches(
-            liveRole: "AXGroup", liveLabel: "anything", expectedRole: "AXGroup", expectedLabel: nil))
-    }
-
-    @Test func textEntryIdentityIgnoresChurningLabel() {
-        // The reproduced failure: the snapshot labeled the text area by its
-        // generic description, then the label vanished once it had content.
-        #expect(elementIdentityMatches(
-            liveRole: "AXTextArea", liveLabel: nil,
-            expectedRole: "AXTextArea", expectedLabel: "text entry area"))
-        #expect(elementIdentityMatches(
-            liveRole: "AXTextField", liveLabel: "Search",
-            expectedRole: "AXTextField", expectedLabel: "text entry area"))
-        // Role is still identity for text entries.
-        #expect(!elementIdentityMatches(
-            liveRole: "AXStaticText", liveLabel: nil,
-            expectedRole: "AXTextArea", expectedLabel: "text entry area"))
-    }
+private func diffNode(
+    _ id: String, handleToken: pid_t, role: String = "AXButton", label: String = "Save"
+) -> CapturedNode {
+    CapturedNode(
+        id: id, role: role, label: label,
+        fingerprint: ElementFingerprint(
+            role: role, subrole: nil, identifier: nil, stableLabel: label),
+        frame: [0, 0, 80, 24], handle: AXUIElementCreateApplication(handleToken))
 }
 
-private let windowStep: [LocatorStep] = []
-private let fieldPath = [LocatorStep(role: "AXTextField", indexOfRole: 0)]
-private let buttonPath = [LocatorStep(role: "AXButton", indexOfRole: 0)]
-private let sheetPath = [LocatorStep(role: "AXSheet", indexOfRole: 0)]
-
-private func previousSnapshot() -> AppSnapshot {
-    let elements = [
-        SnapshotElement(id: "e0@s1", role: "AXWindow", label: "Doc", path: windowStep, frame: [0, 0, 800, 600]),
-        SnapshotElement(id: "e1@s1", role: "AXTextField", label: nil, path: fieldPath, frame: [10, 10, 200, 30]),
-        SnapshotElement(id: "e2@s1", role: "AXButton", label: "Save", path: buttonPath, frame: [10, 50, 80, 30]),
-    ]
-    let lines = [
-        "e0@s1 AXWindow \"Doc\" (0,0,800,600)",
-        "\te1@s1 AXTextField (10,10,200,30) value=\"old\"",
-        "\te2@s1 AXButton \"Save\" (10,50,80,30) actions=Press",
-    ]
-    return AppSnapshot(
-        pid: 1, bundleIdentifier: "com.example", windowTitle: "Doc",
-        windowOrigin: [0, 0], pixelsPerPoint: 2, windowSize: [800, 600],
-        createdAt: Date(timeIntervalSince1970: 0), generation: "s1",
-        treeFingerprint: "x", treeText: lines.joined(separator: "\n"), scoped: false,
-        elements: elements
-    )
+private func diffSnapshot(tree: BuiltTree) -> AppSnapshot {
+    AppSnapshot(
+        pid: 1, bundleIdentifier: "com.example", windowTitle: "Document",
+        windowOrigin: [0, 0], pixelsPerPoint: 1, windowSize: [400, 300],
+        createdAt: Date(), generation: "s1", treeFingerprint: treeFingerprint(tree.text),
+        treeText: tree.text, scoped: false, partial: false, coverage: .complete,
+        lineage: nil, root: tree.root, elements: tree.elements)
 }
 
-/// New capture: field value changed, Save button gone, a sheet appeared.
-private func newTree() -> BuiltTree {
-    let elements = [
-        SnapshotElement(id: "e0@s2", role: "AXWindow", label: "Doc", path: windowStep, frame: [0, 0, 800, 600]),
-        SnapshotElement(id: "e1@s2", role: "AXTextField", label: nil, path: fieldPath, frame: [10, 10, 200, 30]),
-        SnapshotElement(id: "e2@s2", role: "AXSheet", label: "Export", path: sheetPath, frame: [100, 100, 400, 300]),
-    ]
-    let lines = [
-        "e0@s2 AXWindow \"Doc\" (0,0,800,600)",
-        "\te1@s2 AXTextField (10,10,200,30) value=\"new\"",
-        "\te2@s2 AXSheet \"Export\" (100,100,400,300)",
-    ]
-    return BuiltTree(text: lines.joined(separator: "\n"), elements: elements)
-}
+@Suite struct HandleBasedSnapshotDiffTests {
+    @Test func reorderedSameHandlesKeepIDs() throws {
+        let a = diffNode("e0@s1", handleToken: 90_001, label: "A")
+        let b = diffNode("e1@s1", handleToken: 90_002, label: "B")
+        let previousTree = BuiltTree(
+            text: "e0@s1 AXButton \"A\"\ne1@s1 AXButton \"B\"",
+            elements: [a, b])
+        let freshB = diffNode("e0@s2", handleToken: 90_002, label: "B")
+        let freshA = diffNode("e1@s2", handleToken: 90_001, label: "A")
+        let fresh = BuiltTree(
+            text: "e0@s2 AXButton \"B\"\ne1@s2 AXButton \"A\"",
+            elements: [freshB, freshA])
 
-@Suite struct SnapshotDiffTests {
-    @Test func survivingElementsCarryTheirIDs() throws {
-        let result = try #require(stabilizeTree(newTree(), against: previousSnapshot()))
-        #expect(result.tree.elements[0].id == "e0@s1")
-        #expect(result.tree.elements[1].id == "e1@s1")
-        // The new sheet keeps its fresh generation id.
-        #expect(result.tree.elements[2].id == "e2@s2")
-        // The rendered text carries the same ids.
-        #expect(result.tree.text.contains("e1@s1 AXTextField"))
-        #expect(!result.tree.text.contains("e1@s2"))
+        let result = try #require(stabilizeTree(fresh, against: diffSnapshot(tree: previousTree)))
+        #expect(result.tree.elements.map(\.id) == ["e1@s1", "e0@s1"])
+        #expect(result.diff.added.isEmpty)
+        #expect(result.diff.removed.isEmpty)
     }
 
-    @Test func diffReportsChangedAddedAndRemoved() throws {
-        let result = try #require(stabilizeTree(newTree(), against: previousSnapshot()))
-        let diff = result.diff
-        // Value change on the carried field.
-        #expect(diff.changed.count == 1)
-        #expect(diff.changed[0].hasPrefix("~ e1@s1"))
-        #expect(diff.changed[0].contains("value=\"new\""))
-        // The sheet is new; the button is gone.
-        #expect(diff.added.count == 1)
-        #expect(diff.added[0].hasPrefix("+ e2@s2 AXSheet"))
-        #expect(diff.removed.count == 1)
-        #expect(diff.removed[0].hasPrefix("- e2@s1 AXButton \"Save\""))
-        // The unchanged window appears nowhere.
-        #expect(!diff.text.contains("AXWindow"))
-        #expect(diff.totalElements == 3)
-        #expect(diff.entryCount == 3)
-    }
+    @Test func samePositionDifferentHandleDoesNotStealID() throws {
+        let old = diffNode("e0@s1", handleToken: 90_003)
+        let previous = BuiltTree(text: "e0@s1 AXButton \"Save\"", elements: [old])
+        let replacement = diffNode("e0@s2", handleToken: 90_004)
+        let fresh = BuiltTree(text: "e0@s2 AXButton \"Save\"", elements: [replacement])
 
-    @Test func identityChangeAtSamePathIsAddPlusRemove() throws {
-        var tree = newTree()
-        // Replace the text field with a button at the same locator path.
-        let swapped = SnapshotElement(
-            id: "e1@s2", role: "AXButton", label: "Clear",
-            path: fieldPath, frame: [10, 10, 200, 30]
-        )
-        var elements = tree.elements
-        elements[1] = swapped
-        var lines = tree.text.components(separatedBy: "\n")
-        lines[1] = "\te1@s2 AXButton \"Clear\" (10,10,200,30) actions=Press"
-        tree = BuiltTree(text: lines.joined(separator: "\n"), elements: elements)
-
-        let result = try #require(stabilizeTree(tree, against: previousSnapshot()))
-        // Role mismatch at the path: no id carry, previous field reported gone.
-        #expect(result.tree.elements[1].id == "e1@s2")
-        #expect(result.diff.added.contains { $0.contains("AXButton \"Clear\"") })
-        #expect(result.diff.removed.contains { $0.contains("e1@s1 AXTextField") })
-    }
-
-    @Test func missingPreviousTextMeansNoDiff() {
-        var previous = previousSnapshot()
-        previous.treeText = nil
-        #expect(stabilizeTree(newTree(), against: previous) == nil)
-    }
-
-    @Test func scrollRelevantDiffRecognizesViewportRowsChanging() {
-        let diff = TreeDiff(
-            changed: [],
-            added: ["+ e5@s2 AXRow \"Row 025\" (10,120,250,24)"],
-            removed: ["- e4@s1 AXRow \"Row 001\" is gone"],
-            totalElements: 20)
-        #expect(scrollRelevantChange(in: diff) == true)
-    }
-
-    @Test func scrollRelevantDiffRejectsUnrelatedTextChurn() {
-        let diff = TreeDiff(
-            changed: ["~ e3@s1 AXStaticText \"clock\" (10,10,80,20) value=12:34"],
-            added: [], removed: [], totalElements: 8)
-        #expect(scrollRelevantChange(in: diff) == false)
+        let result = try #require(stabilizeTree(fresh, against: diffSnapshot(tree: previous)))
+        #expect(result.tree.elements[0].id == "e0@s2")
+        #expect(result.diff.added.count == 1)
+        #expect(result.diff.removed.count == 1)
     }
 }

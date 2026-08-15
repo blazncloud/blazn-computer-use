@@ -596,7 +596,7 @@ extension ActionVerifier {
 // MARK: - The verifier: captures before-state, reduces after the reread
 
 /// Built by a handler post-dispatch, carrying the before-capture plus the
-/// context the reducer needs. `stateResult` re-resolves the target, captures
+/// context the reducer needs. `stateResult` revalidates the retained target, captures
 /// the after-state, and calls `finalize`.
 struct ActionVerifier: Sendable {
     let family: ActionFamily
@@ -604,9 +604,9 @@ struct ActionVerifier: Sendable {
     let deliveryTier: String
     let dispatchSucceeded: Bool
     let hasTargetElement: Bool
-    /// Locator for the acted-on element, re-resolved for the after-read. nil for
+    /// Captured node for the acted-on element, revalidated for the after-read. nil for
     /// coordinate clicks and whole-window families.
-    let snapshotElement: SnapshotElement?
+    let snapshotElement: CapturedNode?
     /// Fields captured before dispatch (before_* slots filled).
     var before: ActionVerification = ActionVerification()
     /// Window title before dispatch, for the window-title-changed bit.
@@ -618,7 +618,7 @@ struct ActionVerifier: Sendable {
 
     /// Capture the target-local before fields for a family that reads them.
     static func captureBefore(
-        _ element: AXUIElement?, family: ActionFamily, snapshotElement: SnapshotElement? = nil
+        _ element: AXUIElement?, family: ActionFamily, snapshotElement: CapturedNode? = nil
     ) -> ActionVerification {
         var v = ActionVerification()
         guard family.readsTargetFields, let element else { return v }
@@ -670,7 +670,7 @@ struct ActionVerifier: Sendable {
         }
     }
 
-    /// Re-resolve the target, read the after-state, and reduce to an outcome.
+    /// Revalidate the retained target, read the after-state, and reduce to an outcome.
     /// A reread problem degrades the classification; it never throws.
     func finalize(
         windowElement: AXUIElement?, treeChanged: Bool, diff: TreeDiff?, afterWindowTitle: String?
@@ -699,17 +699,16 @@ struct ActionVerifier: Sendable {
             do {
                 let live = try await resolveElement(
                     snapshotElement, in: windowElement,
-                    requireStrongFingerprint: true,
                     comparePresentationEvidence: false)
                 v.captureAfter(live, family: family)
-                v.refreshedTargetStrategy = "locator-path"
+                v.refreshedTargetStrategy = "retained-ax-handle"
                 if let atIndex = snapshotElement.id.firstIndex(of: "@") {
                     v.notes.append("Target resolved from generation \(snapshotElement.id[snapshotElement.id.index(after: atIndex)...]).")
                 }
             } catch {
                 rereadFailed = true
                 v.targetRelocated = true
-                v.notes.append("Target could not be re-resolved after the action (relocated or gone).")
+                v.notes.append("Target handle could not be revalidated after the action (changed or gone).")
             }
         }
 

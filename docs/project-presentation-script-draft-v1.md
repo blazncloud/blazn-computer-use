@@ -152,8 +152,7 @@ contract but does not own the independent computer-use engine, most similar to a
 
 The MCP server forwards requests over a local Unix socket to the shared daemon instance, which is the central coordination service. It owns tool dispatch, snapshots of different app's state in tree like structures, and per-application lease ownerships so that each application only has one agent mutating it at one time.
 
-Each snapshot preserves the state of an application and window in an accessibility tree structure, representing the structure of the app's elements, stable
-IDs for each element, and locator paths that save the traversal path from the root of the app to each individual element.
+Each current in-memory snapshot preserves one application window as an accessibility tree, with stable model-facing IDs mapped to exact live AX handles and captured semantic facts.
 
 Below the daemon are the macOS services that perform the operations on the computer. AppKit, Apple's native GUI framework, helps identify running GUI
 applications. The Accessibility APIs expose app elements and element accessibility actions, like clicking a button or setting the text value of a text box.
@@ -272,10 +271,10 @@ Now, walking through a full mutation tool call, suppose the model finished calli
 which returned the app's AX tree and element IDs. It then decides to call the click tool
 on a checkbox element with ID `e1`.
 
-The first phase is to resolve the live element. The daemon loads the snapshot
-entry, reselects its recorded window, and replays the locator path against the
-live Accessibility tree. If the resulting element no longer has the expected
-role and label, it fails with a stale-element error before delivering input.
+The first phase is to validate the live element. The daemon loads the snapshot
+node, rereads the exact retained AX handle, checks its semantic fingerprint and
+PID, and proves it is still attached to the captured window. If any check fails,
+it returns a stale-element error before delivering input.
 The model must then call `get_app_state` again to get the application's latest
 state before choosing another target.
 

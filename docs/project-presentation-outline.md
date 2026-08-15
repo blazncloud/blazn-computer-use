@@ -56,9 +56,9 @@ than the main presentation.
 
 The main presentation has exactly three technical deep dives:
 
-1. **Perception and durable targeting:** AX hierarchy construction,
-   ScreenCaptureKit context, snapshots, element IDs, locator replay, and stale
-   target detection.
+1. **Perception and live targeting:** AX hierarchy construction,
+   ScreenCaptureKit context, snapshots, retained AX handles, and stale target
+   detection.
 2. **One evidence-backed mutation:** follow one concrete click from the
    model-selected element through live resolution, before evidence, semantic AX
    delivery, guarded Core Graphics fallback, observed effect, snapshot commit,
@@ -82,8 +82,8 @@ architecture deep dive.
 4. **Current system architecture** (2 min) — MCP shims, shared daemon,
    snapshots, app coordination, macOS services, target apps, and OpenBench.
 5. **Deep dive: perception and durable targeting** (4 min) — AX APIs,
-   ScreenCaptureKit, tree construction, snapshot persistence, element IDs, and
-   locator paths.
+   ScreenCaptureKit, tree construction, in-memory snapshots, element IDs, and
+   retained AX handles.
 6. **Deep dive: one mutation end to end** (4.5 min) — resolve, gate, capture,
    AX-first delivery, Core Graphics fallback, verification, snapshot commit,
    and diff response.
@@ -188,9 +188,9 @@ into its three hardest parts.
 - **Shared daemon:** one per-user engine owns dispatch, safety gates, app
   resolution, perception, action delivery, verification, logical sessions,
   operation deduplication, and per-app mutation coordination.
-- **Snapshot subsystem:** `SnapshotStore` persists the current and bounded
-  historical state per PID, including window lineage, semantic elements,
-  frames, locator paths, stable IDs, generations, and tree diffs.
+- **Snapshot subsystem:** `SnapshotStore` keeps one current in-memory state per
+  process/window, including window lineage, semantic elements, live AX handles,
+  frames, stable IDs, generations, and tree diffs.
 - **Platform layer:** AppKit and `NSRunningApplication` resolve GUI apps;
   Accessibility supplies semantic hierarchy and actions; ScreenCaptureKit
   supplies aligned pixels; Core Graphics supplies guarded synthetic input when
@@ -218,7 +218,7 @@ macOS object becomes a target that can be used in a later call.
   `AXFocusedWindow`, and `AXMainWindow`. The snapshot records a stronger lineage
   for later mutation safety: PID, bundle ID, process start time, and the selected
   `CGWindowID`. This prevents a reused PID, restarted app, or replacement window
-  from inheriting old locators silently.
+  from inheriting an old target silently.
 - ScreenCaptureKit captures that exact window. AX frames are reported in global
   points, so the system aligns them with the captured image's pixels using the
   window origin and pixels-per-point scale.
@@ -229,24 +229,20 @@ macOS object becomes a target that can be used in a later call.
 - “Useful” is a deterministic shaping rule, not a model decision. The builder
   omits only structural noise from the returned outline: unlabeled, value-less,
   unfocused `AXGroup` wrappers whose only actions are generic navigation actions.
-  It still retains those wrappers in the locator path so descendants can be
-  reacquired correctly.
+  It still retains those wrappers as nodes in the internal tree so parent and
+  window attachment remain available even when the model-facing text omits them.
 - `AXUIElementCopyActionNames` returns the semantic actions one live element
   supports, such as `AXPress`, `AXConfirm`, or `AXShowMenu`.
 - The model receives a compact hierarchical tree text plus an optional
-  screenshot. The persisted snapshot contains structured target metadata:
-  element ID, role, label, pixel frame, and locator path.
-- A locator is a sequence such as `AXGroup[0] → AXButton[2]`, where each number
-  is the index among siblings with the same role. It records how to reacquire
-  the element; it does not retain the fragile `AXUIElement` pointer.
-- `SnapshotStore` allocates a generation per PID, preserves compatible element
-  IDs across successor snapshots, persists bounded history, and computes
-  changed/added/removed entries.
+  screenshot. The in-memory snapshot contains each element ID, exact live AX
+  handle, semantic fingerprint, pixel frame, parent, and children.
+- `SnapshotStore` allocates a generation per PID. Core Foundation equality and
+  hashing map each surviving AX handle to its earlier ID; recreated handles are
+  explicit removals and additions. Screenshot scale is not part of identity.
 - `SnapshotStore` is a Swift actor. Concurrent daemon tasks must enter it
-  serially when allocating generations or updating the per-PID cache/history,
-  preventing two captures from racing on the same snapshot ID. Disk persistence
-  is write-through for restart and cross-process resolution rather than the
-  primary concurrency mechanism.
+  serially when allocating generations or replacing a current process/window
+  snapshot, preventing two captures from racing on the same snapshot ID. A
+  daemon restart intentionally starts with no snapshots.
 - Use one small construction example on the slide or in the narration:
 
   ```text
@@ -259,11 +255,11 @@ macOS object becomes a target that can be used in a later call.
   e0@s1 AXWindow "Settings" (0,0,900,700)
     e1@s1 AXCheckBox "Email alerts" (40,90,180,24) value="0" actions=[AXPress]
 
-  Persisted snapshot entry for e1@s1
+  Daemon snapshot entry for e1@s1
   role=AXCheckBox
   label="Email alerts"
   frame=[40,90,180,24]
-  locator=AXGroup[0] → AXCheckBox[0]
+  handle=<AXUIElement>; parent=<AXGroup handle>
   ```
 
 - Explain the representation split explicitly: tree text and screenshot are the
@@ -291,10 +287,11 @@ verification, and the state returned to the model.
 - **Resolve:** the daemon resolves the current app/PID, loads the snapshot that
   contains that element ID, reselects the captured live window, and checks its
   process/window lineage.
-- **Reacquire:** it walks the saved locator from the live window through current
-  `AXChildren`, then checks that the resulting element's role and stable label
-  still match. A mismatch returns a stale-element error before input; the model
-  must perceive again instead of the runtime guessing.
+- **Validate:** it reads `AXRole` on the exact retained handle, compares role,
+  subrole, optional identifier, and stable label, checks the owning PID, and
+  proves attachment to the captured window with `AXWindow` or a bounded
+  `AXParent` walk. A failure returns stale before input; the model must perceive
+  again instead of the runtime guessing at a replacement.
 - **Gate:** before delivery, shared policy checks app ownership, screen-lock,
   recent human interference, confirmation requirements, and browser URL rules
   where applicable.
@@ -314,8 +311,8 @@ verification, and the state returned to the model.
   layer constructs Core Graphics mouse-down/up events and attempts its guarded
   window/PID/global delivery path. Posting an event is not proof that the app
   applied it, so verification still uses live AX evidence.
-- **Final verification:** reselect the window, rebuild and persist final state,
-  re-resolve the acted target where possible, and classify the result using the
+- **Final verification:** reselect the window, rebuild the final state, reread
+  the retained target where possible, and classify the result using the
   action family's evidence contract.
 - **Commit and return:** preserve compatible IDs, compute the successor diff,
   and return an unchanged notice, compact diff, or full tree according to the
@@ -325,8 +322,8 @@ verification, and the state returned to the model.
 - Design choices to articulate:
   - Prefer direct AX semantics; keep coordinate input as a guarded compatibility
     path for sparse or custom accessibility surfaces.
-  - Fail stale rather than clicking whatever now occupies an old coordinate or
-    locator.
+  - Fail stale rather than searching for a similar replacement or clicking
+    whatever now occupies an old coordinate.
   - Use quick evidence to decide whether to continue the delivery ladder, then
     final state capture to create an authoritative successor snapshot.
 
@@ -569,15 +566,16 @@ custom accessibility surfaces.
 
 - Resolve the requested GUI app and exact window.
 - Capture the window and recursively read its live AX hierarchy.
-- Save snapshot elements with role, label, frame, and locator path.
-- Give the agent element IDs that refer to snapshot metadata—not retained live
-  `AXUIElement` pointers.
-- Before mutation, replay the locator against the live window and verify the
-  resulting element's identity.
-- Fail stale instead of guessing when the live hierarchy no longer matches.
+- Save snapshot nodes with role, subrole, optional identifier, stable label,
+  frame, parent/children, and the exact live `AXUIElement` handle.
+- Give the agent element IDs that map to those daemon-owned live nodes.
+- Before mutation, prove the handle is live, semantically unchanged, owned by
+  the same PID, and still attached to the captured window.
+- Fail stale instead of searching for a similar replacement.
 
-**Trade-off:** locators tolerate losing ephemeral AX handles, but structural UI
-changes can require a fresh snapshot and another model turn.
+**Trade-off:** exact handles survive movement and reordering without structural
+guessing, but a framework that recreates an AX object invalidates its old ID and
+requires a fresh snapshot/model turn.
 
 ## Phase 3 — One mutation as an evidence lifecycle
 
@@ -592,7 +590,7 @@ resolve → gate → capture before → deliver → observe after → verify →
 - **Deliver:** prefer supported AX actions or attribute writes; use guarded
   synthetic input only when needed.
 - **Verify:** reread the target and, where needed, compare window-level AX state.
-- **Commit:** persist the new snapshot/evidence and return a structured outcome.
+- **Commit:** replace the current in-memory snapshot and return a structured outcome.
 
 **Important distinction:** delivery success is not application success. The
 result separately reports what was delivered and what effect was observed.
@@ -605,19 +603,18 @@ result separately reports what was delivered and what effect was observed.
 - App resolution scans current PIDs, creates `NSRunningApplication` records to
   match name/bundle ID, and then creates an AX application proxy for the chosen
   PID.
-- Tree text is the model-readable outline. Structured snapshot elements contain
-  only ID, role, label, frame, and locator path; values, focus, selection, and
-  available AX actions are rendered into tree text. The current canonical
-  snapshot persists both; historical snapshots deliberately drop tree text and
-  retain only locator metadata so old AX values are not accumulated.
+- Tree text is the model-readable outline. Structured snapshot nodes contain
+  ID, the live AX handle, semantic fingerprint, frame, parent, and children;
+  values, focus, selection, and available AX actions are rendered into tree text.
+  Only current process/window snapshots stay in daemon memory.
 - Snapshot generations are per PID (`s1`, `s2`, ...). Fresh emitted elements are
-  `e0@sN`, `e1@sN`, etc.; unchanged path + role + label entries can retain an
-  older ID in a newer snapshot. Element strings are therefore app/PID-scoped,
+  `e0@sN`, `e1@sN`, etc.; the same Core Foundation AX handle can retain an older
+  ID in a newer snapshot. Element strings are therefore app/PID-scoped,
   not globally unique by themselves.
-- Mutation resolution selects the current process/window lineage, replays the
-  saved locator, and checks live role + label. Dynamic value/focus/selection are
-  evidence rather than identity. A mismatch fails stale before before-state
-  capture or delivery.
+- Mutation resolution selects the current process/window lineage and validates
+  the retained handle's liveness, semantic fingerprint, PID, and window
+  attachment. Dynamic value/focus/selection are evidence rather than identity.
+  A mismatch fails stale before before-state capture or delivery.
 - A click chain stops at the first rung with an **observed effect**, not merely
   the first AX call that returns success. It rereads cheap target-local evidence
   first and computes a window AX fingerprint only when the target appears inert.
@@ -875,7 +872,7 @@ paths fail, not more fallbacks added from intuition.
 - Show the current architecture early, but explain prior architectures only
   when they motivate a current decision.
 - Explain the happy path using one concrete operation.
-- State why AX is preferred and why snapshots/locators exist.
+- State why AX is preferred and why live, validated snapshots exist.
 - Explain `resolve → gate → deliver → verify → commit`.
 - Then introduce the multi-agent problems: identity, retries, and interleaving.
 - Explain the per-app queue before discussing leases.

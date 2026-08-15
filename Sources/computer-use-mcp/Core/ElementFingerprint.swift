@@ -1,9 +1,8 @@
 import ApplicationServices
 import Foundation
 
-/// Stable evidence captured for validating the element found by a locator
-/// path. Mutable values, geometry, and sibling position are deliberately not
-/// identity.
+/// Stable evidence captured for validating a retained AX handle. Mutable
+/// values, geometry, and sibling position are deliberately not identity.
 struct ElementFingerprint: Codable, Equatable, Sendable {
     let role: String
     let subrole: String?
@@ -48,11 +47,11 @@ func validateElementFingerprint(
         return .mismatch(
             "AXIdentifier changed from \(identifier) to \(live.identifier ?? "none")")
     }
-    // A matching identifier lets post-delivery verification tolerate a label
-    // changed by the action itself. Label-only targets must keep their label;
-    // otherwise no identity evidence would remain.
-    if (comparePresentationEvidence || !expected.hasIdentifierEvidence),
-        let label = expected.stableLabel, live.stableLabel != label
+    // Pre-delivery checks compare the captured presentation label. After a
+    // delivery, the retained handle itself is the identity, so an intentional
+    // Play→Pause-style label change is allowed.
+    if comparePresentationEvidence, let label = expected.stableLabel,
+        live.stableLabel != label
     {
         return .mismatch(
             "stable label changed from \(label) to \(live.stableLabel ?? "none")")

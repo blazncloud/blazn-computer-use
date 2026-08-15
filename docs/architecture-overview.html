@@ -234,12 +234,12 @@
 
 <!-- 5 -->
 <section id="perception">
-  <h2><span class="n">05</span>Perception &amp; snapshots — the locator engine</h2>
+  <h2><span class="n">05</span>Perception &amp; snapshots — live AX identity</h2>
   <p>How the agent "sees". <code>get_app_state</code> is the canonical surface: it returns <strong>one window's AX tree + a ScreenCaptureKit screenshot</strong>, with every element boxed in the screenshot's pixel space. <span class="fp">Tools/Perception.swift · Core/Screenshot.swift</span></p>
 
-  <h3>The stale-reference problem, solved with locators</h3>
-  <p>Raw AX element references go stale the instant an app relayouts. So a snapshot never hands out a raw reference — it hands out an <code>element_id</code> (<code>e12</code>) backed by a stored <strong>locator</strong>: the path of <span class="mono">(role, index-among-same-role-siblings)</span> steps from the window root. Before any action, the id's locator is <em>re-resolved against the live tree</em>. <span class="fp">Core/Snapshot.swift</span></p>
-  <div class="callout key"><span class="lbl">The id-survival contract</span>Ids are generation-tagged (<code>e12@s3</code>), but validity is <em>membership in the latest snapshot</em>, not a generation match. An element that survives a UI change keeps its id — so ids you captured before the change keep working. An id fails only when its element didn't survive, and the error tells you to fetch fresh state. Re-resolution also means an id <em>never silently operates a different control</em>.</div>
+  <h3>The stale-reference problem, solved with exact handles</h3>
+  <p>The daemon gives the model an <code>element_id</code> backed by the exact live <code>AXUIElement</code> captured for that node. Before an action, it proves the handle is live, compares its semantic fingerprint, checks the owning PID, and proves attachment to the captured window. <span class="fp">Core/Snapshot.swift · Core/Target.swift</span></p>
+  <div class="callout key"><span class="lbl">The id-survival contract</span>Core Foundation equality and hashing let the same live AX object keep its id across captures, even when its tree position or screenshot scale changes. A recreated or detached object becomes stale; the daemon asks for fresh state instead of searching for a similar replacement.</div>
 
   <h3>Three coordinate spaces (name which one, always)</h3>
   <table>
@@ -319,7 +319,7 @@
     </div>
     <div class="card">
       <h4>Skills (record → replay)</h4>
-      <p><code>save_skill</code> freezes a performed task into <strong>durable locators</strong> (role + label + tree path). <code>run_skill</code> re-resolves each anchor against the live tree — exact path first, unique role+label as the layout-shift fallback — and replays through the same per-step gates <em>with no model in the loop</em>. <code>{{param}}</code> placeholders substitute into string args; steps may assert with <code>expect</code>. A step that won't resolve stops the run and names it. <span class="fp">Skills/Skill.swift · SkillStore.swift · SkillTools.swift · Recorder.swift · ReplayVerdict.swift</span></p>
+      <p><code>save_skill</code> freezes a performed task into a role + stable-label anchor. <code>run_skill</code> requires exactly one live match and replays through the same per-step gates <em>with no model in the loop</em>. <code>{{param}}</code> placeholders substitute into string args; steps may assert with <code>expect</code>. A missing or ambiguous anchor stops the run and names it. <span class="fp">Skills/Skill.swift · SkillStore.swift · SkillTools.swift · Recorder.swift · ReplayVerdict.swift</span></p>
     </div>
   </div>
   <p>Both are just deterministic re-drivers of the underlying tools: neither grants an escalation its steps couldn't request individually. Skills persist as validated JSON under Application Support; <code>record_skill_start</code>/<code>stop</code> capture a demonstration live.</p>
@@ -364,7 +364,7 @@
     <tr><td><strong>Core</strong> <span class="fp">(the engine)</span></td><td class="fp">Core/Snapshot.swift · TreeBuilder.swift · AX.swift · Input.swift · SkyLightInput.swift · Screenshot.swift · HitTest.swift · ActionOutcome.swift · FocusTelemetry.swift · MetricsRecorder.swift · InterferenceGuard.swift · URLPolicy.swift · SafetyPolicy.swift · SessionPower.swift · Window.swift · WindowMotion.swift · ScrollRouting.swift · AppResolver.swift · Target.swift · Keymap.swift · OCR.swift · TextExtraction.swift · GeometrySanitization.swift · Telemetry.swift · Config.swift · CrossProcessLock.swift · ErrorCodes.swift · ActionChains.swift · PointTarget.swift</td><td>Perception, the dispatch ladder, verification, safety, coordinate math, telemetry. This is the real substance of the project.</td></tr>
     <tr><td><strong>Daemon</strong></td><td class="fp">Daemon/DaemonServer.swift · DaemonClient.swift · DaemonProtocol.swift · AppLeases.swift</td><td>Socket server, auth handshake, framing/limits, per-app leases.</td></tr>
     <tr><td><strong>Overlay</strong></td><td class="fp">Overlay/OverlayHelper.swift · AgentCursor.swift · OverlayTransport.swift</td><td>The cosmetic agent-cursor helper process + FIFO transport.</td></tr>
-    <tr><td><strong>Skills</strong></td><td class="fp">Skills/SkillStore.swift · SkillTools.swift · Recorder.swift · Skill.swift · ReplayVerdict.swift</td><td>Teach/replay: persistence, validation, templating, locator anchoring.</td></tr>
+    <tr><td><strong>Skills</strong></td><td class="fp">Skills/SkillStore.swift · SkillTools.swift · Recorder.swift · Skill.swift · ReplayVerdict.swift</td><td>Teach/replay: persistence, validation, templating, unique semantic anchoring.</td></tr>
   </table>
   <p>Plus: <span class="fp">Sources/ComputerUseFixture/</span> — a deterministic AppKit GUI fixture with stable AX identifiers, for the end-to-end "truth suite"; <span class="fp">Tests/ComputerUseMCPTests/</span>; <span class="fp">scripts/</span> (live/CI eval harnesses like <code>live_background_eval.py</code>); <span class="fp">docs/</span> (the contracts below); <span class="fp">packaging/homebrew/</span>.</p>
 </section>
@@ -390,12 +390,12 @@
   <ol>
     <li><strong>One binary, three roles.</strong> N thin <code>serve</code> shims → one <code>daemon</code> engine → one <code>overlay</code> cursor. The daemon owning all shared state is why concurrent agents can't collide.</li>
     <li><strong>One funnel.</strong> Every call — from any entry point — passes the same gates in <code>dispatchTool</code>. Uniform guarantees come from that single chokepoint.</li>
-    <li><strong>See below the pixels.</strong> AX tree for semantics + ScreenCaptureKit for one window + ids backed by re-resolvable locators. Ids survive UI changes; actions never silently hit the wrong control.</li>
+    <li><strong>See below the pixels.</strong> AX tree for semantics + ScreenCaptureKit for one window + ids backed by validated live AX handles. Same objects retain ids; recreated objects fail stale.</li>
     <li><strong>Act AX-first, event-last, never auto-escalate.</strong> The ladder protects your cursor and focus by default; global takeover is always an explicit opt-in.</li>
     <li><strong>Never lie.</strong> Background delivery has no OS success signal, so the server <em>verifies the effect</em> and reports a four-value verdict + focus telemetry instead of claiming success.</li>
     <li><strong>Yield to the human.</strong> Interference guard, screen-lock pause, URL policy, confirmation gating — all server-side, all recoverable errors, none the agent can casually disable.</li>
   </ol>
-  <div class="callout key"><span class="lbl">Where to poke next</span>Tell me a thread you want to pull — e.g. "walk me through a <code>click</code> end to end", "how does locator re-resolution actually work in <span class="fp">Snapshot.swift</span>", "show me the daemon auth handshake", or "how does <code>page</code> decide Chromium vs WKWebView" — and we'll go deep from here.</div>
+  <div class="callout key"><span class="lbl">Where to poke next</span>Tell me a thread you want to pull — e.g. "walk me through a <code>click</code> end to end", "how does live-handle validation work in <span class="fp">Snapshot.swift</span>", "show me the daemon auth handshake", or "how does <code>page</code> decide Chromium vs WKWebView" — and we'll go deep from here.</div>
 </section>
 
 <footer>

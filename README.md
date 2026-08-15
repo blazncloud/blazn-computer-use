@@ -57,7 +57,7 @@ without hijacking your cursor or stealing focus.**
   This clip should show, in one take:
     1. record_skill_start, then the user (or agent) demonstrates a short task.
     2. record_skill_stop → the task is saved as a named skill.
-    3. run_skill replays it at engine speed, re-resolving each element locator,
+    3. run_skill replays it at engine speed, resolving each role+label locator,
        with the agent cursor gliding through the replayed steps.
   The point: teach once, replay deterministically with no model in the loop.
 -->
@@ -69,7 +69,7 @@ without hijacking your cursor or stealing focus.**
       <p><em>Placeholder for <code>assets/teach-replay.gif</code></em></p>
       <p>Record a task once (<code>record_skill_start</code> → demonstrate →
       <code>record_skill_stop</code>), then <code>run_skill</code> replays it at
-      engine speed — re-resolving each element locator, no model in the loop.</p>
+      engine speed — resolving each role+label locator, no model in the loop.</p>
     </td>
   </tr>
 </table>
@@ -120,8 +120,8 @@ without hijacking your cursor or stealing focus.**
   accessibility, input, and the cursor — and per-app leases keep two agents from
   interleaving actions inside the same app.
 - **Reliable.** Every action returns fresh app state (screenshot + accessibility
-  tree). Elements are addressed by re-resolving locators (not stale indices), and
-  destructive actions pass a confirmation policy.
+  tree). Element IDs retain exact live AX handles and fail stale if the app
+  recreates or detaches them; destructive actions pass a confirmation policy.
 - **Teach & replay.** Capture a task once and save it as a named, parameterized
   skill that replays at engine speed with no model in the loop.
 - **One native binary.** Zero runtime dependencies, frictionless install.
@@ -339,13 +339,12 @@ short action sequence in one round-trip, stopping at the first failure)
 `delete_skill` · `record_skill_start` · `record_skill_stop` — teach/replay:
 capture a task once (the agent performs it, **or** the user demonstrates it with
 the recorder) and save it as a named, parameterized skill; element anchors are
-frozen into durable locators (role + label + tree path) that re-resolve on every
-run, so the skill survives app restarts and replays at engine speed with no model
+frozen into durable role + label locators that resolve uniquely on every run,
+so the skill survives app restarts and replays at engine speed with no model
 in the loop. Each replayed step passes the same per-step safety gates as a live
 action, steps can assert their effect (`expect`, in `wait_for` terms) and extract
-data (`read_text` steps return their text in the run result), a resolved-but-moved
-element **self-heals** its saved path, and a step that no longer resolves stops
-the run with a report naming the nearest candidates — fix that step, re-save (or
+data (`read_text` steps return their text in the run result), and a step that is
+missing or ambiguous stops the run with a report naming the nearest candidates — fix that step, re-save (or
 resume with `start_at_step`), run again.
 
 Every interaction tool accepts **either** a stable element id **or** raw
@@ -409,8 +408,9 @@ Two ways to keep large windows from blowing up the tree:
   on-screen slice — preferring the app's own visible-rows attributes, else a
   viewport-frame intersection — instead of a blind first-N prefix that ignores
   scroll position. Off-window items are summarised as a count on the container's
-  line (never silently dropped), and locator identity is preserved so materialised
-  rows still re-resolve. `find` and skill replay opt out and see every element.
+  line (never silently dropped), and materialised rows retain live-handle identity
+  while the app keeps the same AX objects. `find` and skill replay opt out and see
+  every element.
 
 ## Requirements
 

@@ -174,8 +174,7 @@ private func buildMinimalTree(
             equals: { $0 === $1 }
         ),
         windowOrigin: windowOrigin, pixelsPerPoint: pixelsPerPoint, generation: "s1",
-        pathPrefix: [], maxElements: maxElements,
-        skeleton: false, windowCollections: true)
+        maxElements: maxElements, skeleton: false, windowCollections: true)
 }
 
 @Suite struct RoleDescriptionFallbackTests {

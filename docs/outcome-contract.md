@@ -3,7 +3,7 @@
 Implementation design for Wave 2's anchor change: move `computer-use-mcp` from
 "success = the tool didn't throw" to "success = the action's effect was
 observed." Inspired by `actuallyepic/background-computer-use` (BCU), adapted to
-our snapshot/locator architecture.
+our live AX snapshot architecture.
 
 Status: implemented (task #4, Wave 2). All mutating tools emit a
 `computer-use-mcp/outcome` block; the reducer is unit-tested per §4 matrix row.
@@ -185,7 +185,7 @@ three-valued (`Bool?`): `nil` = "not observed," which is distinct from `false` =
 struct ActionVerification: Sendable {
     // Target identity across the action (did it relocate? by what strategy?)
     var targetRelocated: Bool? = nil
-    var refreshedTargetStrategy: String? = nil   // e.g. "locator-path", "focused-element"
+    var refreshedTargetStrategy: String? = nil   // e.g. "retained-ax-handle", "focused-element"
 
     // Target-local field diffs (populated when we hold the acted-on element)
     var beforeValuePreview: String? = nil
@@ -287,8 +287,8 @@ dispatches. So:
   before-target fields stay `nil` and we lean on the whole-window bit.
 - **Act:** unchanged dispatch.
 - **Read (after):** `stateResult` already re-perceives the whole window. We
-  extend it to *also* re-resolve the acted-on element via its locator and read
-  the same fields, then compute the diff and the classification.
+  extend it to *also* reread the acted-on retained AX handle, then compute the
+  diff and the classification.
 
 To thread this without rewriting every handler signature, `stateResult` gains
 two optional parameters:
@@ -313,7 +313,7 @@ func stateResult(
 ```swift
 struct ActionVerifier: Sendable {
     let family: ActionFamily          // .click / .type / .setValue / .scroll / .window / .menu
-    let target: ResolvedTarget?       // the element + its snapshot locator, nil for coordinate clicks
+    let target: ResolvedTarget?       // retained element + snapshot facts, nil for coordinate clicks
     let before: ActionVerification    // captured before dispatch
     let intent: ActionIntent          // e.g. .toggle(to: true), .setText("foo"), .setFrame(rect)
     let dispatchSucceeded: Bool       // did the AX call / event post return success?
@@ -520,14 +520,11 @@ BCU guards against acting on a stale target by comparing a supplied
 `Resolver.swift:172-183`); its element resolution can also relocate a target and
 report `refreshedTargetMatchStrategy`.
 
-Our equivalent is stronger and already in place: **generation-tagged element
-ids** (`e12@s3`). `resolveElement` (`Snapshot.swift:298-324`) re-resolves the
-locator path against the live tree and enforces role+label identity, throwing a
-loud, actionable stale error ("The UI has changed since that state was
-captured — call get_app_state and use a fresh element id"). Text-entry roles
-already relax the label check because their labels churn with content
-(`elementIdentityMatches`, `Snapshot.swift:350-357`; see the macOS-API-gotchas
-memory).
+Our equivalent is **generation-tagged element ids** (`e12@s3`) backed by exact
+live `AXUIElement` handles in the daemon's current snapshots. Before dispatch,
+`resolveElement` proves the retained handle is live, compares role, subrole,
+optional identifier, and stable label, checks its PID, and proves attachment to
+the captured window. Any mismatch throws a loud retry-with-fresh-state error.
 
 ### 5.2 What changes: almost nothing, by design
 
@@ -538,19 +535,16 @@ the wrong element is worse than not acting. So:
 - **Pre-dispatch stale id → keep throwing** (`isError: true`). Not an
   `ActionOutcome`. The id the agent passed no longer identifies a real control;
   there is nothing to verify.
-- **Post-dispatch relocation → soft.** The distinction: before dispatch, a
-  relocated/stale target means we might act on the wrong thing (dangerous, must
-  fail). *After* dispatch, the action already happened; if the element then
-  relocated (common — the action itself caused a relayout), that's expected and
-  we re-resolve to read the after-state. Only here do we record
-  `targetRelocated`/`refreshedTargetStrategy` and tolerate failure as
-  `verifier_ambiguous`.
+- **Post-dispatch target loss → soft.** The distinction: before dispatch, a
+  stale target means we might act on the wrong thing and must fail. After
+  dispatch, the action already happened; if it rebuilt the element, the exact
+  handle can no longer supply target-local proof. The verifier records that
+  ambiguity and may still use permitted window-level evidence. It does not
+  search for a similar replacement.
 
-The one addition: record the pre-dispatch generation into
-`verification.notes` (e.g. "target resolved from generation s3") so the outcome
-is self-describing, and set `refreshedTargetStrategy = "locator-path"` on the
-after-reread since that's the only strategy we use. No new token type, no new
-guard — our generation tag *is* the token.
+The outcome records the pre-dispatch generation in `verification.notes` and
+uses `retained-ax-handle` for the direct reread strategy. No separate state
+token is required; snapshot membership plus handle validation is the guard.
 
 ### 5.3 isError stays reserved for structural failure
 

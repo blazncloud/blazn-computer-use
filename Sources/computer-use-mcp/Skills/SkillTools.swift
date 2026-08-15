@@ -47,11 +47,22 @@ func saveSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         throw ToolError.invalidArguments("\"steps\" (array of {\"tool\": …, …} objects) is required.")
     }
 
-    // element_id anchors are frozen into durable locators against the app's
-    // latest snapshot — ids expire, locators re-resolve.
+    // Element ids are frozen only from a fresh, full-window, unwindowed tree,
+    // so uniqueness is not inferred from a scoped or truncated view.
     var latest: AppSnapshot?
-    if let resolvedApp = try? resolveApp(appName) {
+    let needsElementFreeze = rawSteps.contains { raw in
+        guard case .object(let fields) = raw else { return false }
+        return fields["element_id"]?.stringValue != nil
+    }
+    if needsElementFreeze {
+        let resolvedApp = try resolveApp(appName)
+        try await refreshSkillSnapshot(app: resolvedApp)
         latest = await SnapshotStore.shared.load(forPid: resolvedApp.pid)
+        guard let latest, latest.scoped != true, latest.effectiveCoverage.isComplete else {
+            throw ToolError.failed(
+                "Could not build a complete full-window tree to prove saved-skill anchor "
+                    + "uniqueness. Retry after the app settles.")
+        }
     }
 
     var steps: [SkillStep] = []
@@ -71,7 +82,19 @@ func saveSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
                     "steps[\(index)]: element_id \"\(elementID)\" is not in the latest \(appName) state. "
                         + "Call get_app_state and use current ids, or provide a locator {role, label} instead.")
             }
-            locator = SkillLocator(role: element.role, label: element.label, path: element.path)
+            let frozen = SkillLocator(
+                role: element.role, label: element.fingerprint.stableLabel ?? element.label)
+            switch resolveSkillLocator(frozen, in: latest) {
+            case .found(let match) where match.id == element.id:
+                locator = frozen
+            case .found:
+                throw ToolError.invalidArguments(
+                    "steps[\(index)]: element_id \"\(elementID)\" does not freeze to its own unique "
+                        + "role+label anchor. Use a different target.")
+            case .failed(let reason):
+                throw ToolError.invalidArguments(
+                    "steps[\(index)]: element_id \"\(elementID)\" cannot be saved safely: \(reason).")
+            }
         } else if case .object(let rawLocator)? = fields.removeValue(forKey: "locator") {
             guard let role = rawLocator["role"]?.stringValue else {
                 throw ToolError.invalidArguments("steps[\(index)]: a locator needs at least {\"role\": …}.")
@@ -244,8 +267,7 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
             ambiguousCommit: compositeCommitUnknown)
     }
 
-    var steps = skill.steps
-    var healedSteps: [Int] = []
+    let steps = skill.steps
     var extracts: [String] = []
     var lastResult: CallTool.Result?
     for (index, step) in steps.enumerated() where index + 1 >= startAtStep {
@@ -271,14 +293,8 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
                 )
             }
             switch resolveSkillLocator(locator, in: snapshot) {
-            case .found(let element, let viaFallback):
+            case .found(let element):
                 arguments["element_id"] = .string(element.id)
-                if viaFallback {
-                    // The element moved; remember its new address so future
-                    // runs hit the fast, precise path again.
-                    steps[index].locator?.path = element.path
-                    healedSteps.append(index + 1)
-                }
             case .failed(let why):
                 return failure(
                     step: index + 1,
@@ -385,23 +401,8 @@ func runSkillImpl(_ args: [String: Value]) async throws -> CallTool.Result {
         summary.append("✓ step \(index + 1) \(step.tool)")
     }
 
-    // Persist healed locator paths (best-effort) so the skill tracks the
-    // app's evolution without a repair round.
-    if !healedSteps.isEmpty {
-        try? SkillStore.save(
-            Skill(
-                name: skill.name, description: skill.description, app: skill.app,
-                params: skill.params, steps: steps, updatedAt: Date()
-            ))
-    }
-
     var header = "Skill \"\(name)\" completed \(skill.steps.count - startAtStep + 1) step(s):\n"
     header += summary.joined(separator: "\n") + "\n"
-    if !healedSteps.isEmpty {
-        header +=
-            "Self-healed the locator path of step(s) \(healedSteps.map(String.init).joined(separator: ", ")) "
-            + "(element moved; new address saved).\n"
-    }
     if !extracts.isEmpty {
         header += "\nExtracted:\n" + extracts.joined(separator: "\n") + "\n"
     }
@@ -513,6 +514,7 @@ private func refreshSkillSnapshot(app: ResolvedApp) async throws {
         bundleIdentifier: app.bundleIdentifier,
         windowTitle: window.title,
         windowID: windowID(for: window.element),
+        windowElement: window.element,
         windowOrigin: window.frame.origin,
         pixelsPerPoint: pixelsPerPoint,
         windowSize: [window.frame.width * pixelsPerPoint, window.frame.height * pixelsPerPoint],

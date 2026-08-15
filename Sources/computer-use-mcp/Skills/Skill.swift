@@ -1,9 +1,8 @@
 // Skill model: a named, parameterized, assertion-bearing action sequence that
 // replays deterministically — no model in the loop on the happy path.
 //
-// Steps are anchored by locators (role + label + locator path), not element
-// ids or pixels: ids expire with app restarts, but a locator re-resolves
-// against the live tree the same way action tools already re-resolve ids.
+// Steps are anchored by durable role + label locators, not live element ids
+// or pixels. Ambiguous matches fail instead of guessing.
 // Parameters appear as {{name}} placeholders in any string argument and are
 // substituted at run time.
 
@@ -15,13 +14,10 @@ struct SkillParam: Codable, Equatable {
     let description: String
 }
 
-/// Durable element anchor. Resolution order: exact locator path (with role
-/// and label verified), then unique role+label match anywhere in the tree —
-/// the fallback that survives layout shifts.
+/// Durable element anchor. It must resolve to exactly one current tree node.
 struct SkillLocator: Codable, Equatable {
     let role: String
     var label: String? = nil
-    var path: [LocatorStep]? = nil
 }
 
 /// Post-condition checked after a step, in wait_for terms. A step whose
@@ -130,68 +126,42 @@ func unresolvedPlaceholders(_ value: Value) -> [String] {
 // MARK: - locator resolution
 
 enum SkillLocatorResolution: Equatable {
-    /// viaFallback: the saved path missed and the element was recovered by
-    /// the unique role+label search — the caller should heal the saved path.
-    case found(SnapshotElement, viaFallback: Bool)
+    case found(CapturedNode)
     case failed(String)
 }
 
-extension SnapshotElement: Equatable {
-    static func == (lhs: SnapshotElement, rhs: SnapshotElement) -> Bool {
-        lhs.id == rhs.id && lhs.role == rhs.role && lhs.label == rhs.label && lhs.path == rhs.path
+extension CapturedNode: Equatable {
+    static func == (lhs: CapturedNode, rhs: CapturedNode) -> Bool {
+        lhs.id == rhs.id && lhs.role == rhs.role && lhs.label == rhs.label
     }
 }
 
-/// Resolve a locator against the latest snapshot. Exact path first (role and
-/// label verified), then a unique role+label match anywhere in the tree.
-/// Failures name the nearest candidates so a repairing agent can usually fix
-/// the step from the report alone.
-///
-/// Text-entry locators get one lenient retry with the label dropped: their
-/// label tracks the field's contents (macOS swaps description, placeholder,
-/// and value as the field fills), so a strict miss there is churn, not a
-/// different control. The retry still requires a path or unique-role match,
-/// so genuinely ambiguous cases keep failing loudly.
+/// Resolve a locator against the latest snapshot by unique role+label. There
+/// is no relaxed fallback: a missing or ambiguous anchor fails clearly.
 func resolveSkillLocator(
     _ locator: SkillLocator, in snapshot: AppSnapshot
 ) -> SkillLocatorResolution {
-    let strict = resolveSkillLocatorStrictly(locator, in: snapshot)
-    guard case .failed = strict, locator.label != nil, isTextEntryRole(locator.role) else {
-        return strict
-    }
-    let lenient = resolveSkillLocatorStrictly(
-        SkillLocator(role: locator.role, label: nil, path: locator.path), in: snapshot)
-    if case .found = lenient { return lenient }
-    return strict
-}
-
-private func resolveSkillLocatorStrictly(
-    _ locator: SkillLocator, in snapshot: AppSnapshot
-) -> SkillLocatorResolution {
-    if let path = locator.path,
-        let element = snapshot.elements.first(where: { $0.path == path }),
-        element.role == locator.role,
-        locator.label == nil || element.label == locator.label
-    {
-        return .found(element, viaFallback: false)
-    }
     let candidates = snapshot.elements.filter { element in
-        element.role == locator.role && (locator.label == nil || element.label == locator.label)
+        let stableLabel = element.fingerprint.stableLabel ?? element.label
+        return element.role == locator.role
+            && (locator.label == nil || stableLabel == locator.label)
     }
     let described = "\(locator.role)\(locator.label.map { " \"\($0)\"" } ?? "")"
     switch candidates.count {
     case 1:
-        return .found(candidates[0], viaFallback: true)
+        return .found(candidates[0])
     case 0:
         var reason = "no element matching \(described) is in the current tree"
         let sameRoleLabels = snapshot.elements
             .filter { $0.role == locator.role }
-            .compactMap(\.label).filter { !$0.isEmpty }
+            .compactMap { $0.fingerprint.stableLabel ?? $0.label }.filter { !$0.isEmpty }
         if !sameRoleLabels.isEmpty {
             let nearest = Array(Set(sameRoleLabels)).sorted().prefix(4)
             reason += ". Current \(locator.role)s: \(nearest.map { "\"\($0)\"" }.joined(separator: ", "))"
         } else if let label = locator.label {
-            let sameLabel = snapshot.elements.filter { $0.label == label }.map(\.role)
+            let sameLabel = snapshot.elements.filter {
+                ($0.fingerprint.stableLabel ?? $0.label) == label
+            }.map(\.role)
             if !sameLabel.isEmpty {
                 reason += ". \"\(label)\" now exists as: \(Array(Set(sameLabel)).sorted().joined(separator: ", "))"
             }
@@ -199,7 +169,7 @@ private func resolveSkillLocatorStrictly(
         return .failed(reason)
     default:
         return .failed(
-            "\(candidates.count) elements match \(described) and the saved path matches none of them "
-                + "— the locator is ambiguous; re-save this step with a more specific label or a fresh element_id")
+            "\(candidates.count) elements match \(described) — the locator is ambiguous; "
+                + "re-save this step with a more specific label")
     }
 }

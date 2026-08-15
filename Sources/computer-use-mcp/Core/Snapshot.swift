@@ -1,40 +1,69 @@
-// App-state snapshots and the locator engine.
+// In-memory app-state snapshots backed by live accessibility handles.
 //
-// Element ids ("e12") are positions in the most recent snapshot of an app.
-// AX element references go stale whenever an app relayouts, so a snapshot
-// stores a *locator* per element — the path of (role, index-among-same-role-
-// siblings) steps from the window root — and actions re-resolve the locator
-// against the live tree, retrying briefly to let the UI settle. This mirrors
-// the lazily-resolved-locator pattern used by mature UI automation tools.
-//
-// Snapshots are persisted to disk so ids work across processes (the `serve`
-// server and the `call` harness, or a restarted server).
+// Element ids name retained AXUIElement objects in the daemon process. A
+// mutation validates the exact captured handle and its window attachment; it
+// never replays a structural path or guesses at a replacement. A stale handle
+// fails clearly and requires a fresh get_app_state.
 
 import ApplicationServices
 import CryptoKit
 import Foundation
 
-struct LocatorStep: Codable, Equatable {
-    let role: String
-    /// Index among siblings that share this role.
-    let indexOfRole: Int
+/// Hashable identity for a live AX object. Core Foundation owns the equality
+/// contract for AXUIElement; Swift object identity is not equivalent.
+struct AXHandleKey: Hashable, @unchecked Sendable {
+    let element: AXUIElement
+
+    static func == (lhs: AXHandleKey, rhs: AXHandleKey) -> Bool {
+        CFEqual(lhs.element, rhs.element)
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(CFHash(element))
+    }
 }
 
-struct SnapshotElement: Codable {
-    let id: String
+/// One materialized node in the model-facing tree. The node retains both the
+/// semantic facts captured for rendering/validation and the exact live AX
+/// handle used for delivery.
+final class CapturedNode: @unchecked Sendable {
+    var id: String
     let role: String
     let label: String?
-    /// Optional for snapshots written before fingerprint validation existed.
-    var fingerprint: ElementFingerprint? = nil
-    let path: [LocatorStep]
+    let fingerprint: ElementFingerprint
     /// Bounding box in screenshot pixel coordinates.
     let frame: [Double]
+    let handle: AXUIElement?
+    weak var parent: CapturedNode?
+    private(set) var children: [CapturedNode]
+
+    init(
+        id: String, role: String, label: String?,
+        fingerprint: ElementFingerprint? = nil,
+        frame: [Double], handle: AXUIElement? = nil,
+        children: [CapturedNode] = []
+    ) {
+        self.id = id
+        self.role = role
+        self.label = label
+        self.fingerprint = fingerprint ?? ElementFingerprint(
+            role: role, subrole: nil, identifier: nil, stableLabel: nil)
+        self.frame = frame
+        self.handle = handle
+        self.children = children
+        for child in children { child.parent = self }
+    }
+
+    func appendChild(_ child: CapturedNode) {
+        child.parent = self
+        children.append(child)
+    }
 }
 
 /// Strong process identity when macOS exposes a launch timestamp. PID and
 /// bundle id are always retained; `startTimeMicroseconds` is nil when libproc
 /// cannot inspect the process.
-struct SnapshotProcessIdentity: Codable, Equatable {
+struct SnapshotProcessIdentity: Equatable, Hashable {
     let pid: Int32
     let bundleIdentifier: String
     let startTimeMicroseconds: UInt64?
@@ -43,7 +72,7 @@ struct SnapshotProcessIdentity: Codable, Equatable {
 /// Identity shared by the AX window used to build the tree and later mutation
 /// resolution. A nil `windowID` explicitly means strong window identity was
 /// unavailable.
-struct SnapshotLineage: Codable, Equatable {
+struct SnapshotLineage: Equatable, Hashable {
     let process: SnapshotProcessIdentity
     let windowID: UInt32?
 }
@@ -54,8 +83,8 @@ enum SnapshotLineageDecision: Equatable {
     case conflict(String)
 }
 
-/// Single policy for deciding whether a persisted locator may be applied to a
-/// current process/window. Missing strong identity preserves legacy behavior;
+/// Single policy for deciding whether captured state still belongs to a
+/// current process/window. Missing strong identity preserves read-only behavior;
 /// any positively observed conflict fails closed.
 func compareSnapshotLineage(
     persisted: SnapshotLineage?, current: SnapshotLineage
@@ -85,23 +114,7 @@ func compareSnapshotLineage(
     return .compatible
 }
 
-func snapshotLineagesAreCompatible(_ persisted: SnapshotLineage?, _ current: SnapshotLineage) -> Bool {
-    if case .conflict = compareSnapshotLineage(persisted: persisted, current: current) {
-        return false
-    }
-    return true
-}
-
-/// Element IDs may survive only when both captures carry fully available,
-/// matching strong identity. Legacy or partial lineage always gets a fresh
-/// generation so new identity is never attached to old locators.
-func snapshotLineagesCanReuseElementIDs(
-    _ persisted: SnapshotLineage?, _ current: SnapshotLineage
-) -> Bool {
-    compareSnapshotLineage(persisted: persisted, current: current) == .compatible
-}
-
-struct AppSnapshot: Codable {
+struct AppSnapshot: @unchecked Sendable {
     let pid: Int32
     let bundleIdentifier: String
     let windowTitle: String?
@@ -110,7 +123,7 @@ struct AppSnapshot: Codable {
     /// Multiplier from window points to screenshot pixels.
     let pixelsPerPoint: Double
     /// Window size in screenshot pixels, for coordinate bounds checks (the
-    /// element list may be scoped to a subtree). Optional for old snapshots.
+    /// element list may be scoped to a subtree).
     let windowSize: [Double]?
     let createdAt: Date
     /// Generation tag baked into element ids (e.g. "e11@s3"), so an id from
@@ -119,31 +132,78 @@ struct AppSnapshot: Codable {
     /// carry their id (and so an older tag) forward — see stabilizeTree.
     let generation: String
     /// Hash of the id-normalized tree text, for unchanged-tree detection.
-    /// Optional: predates some persisted snapshots.
-    var treeFingerprint: String? = nil
-    /// The rendered outline this snapshot was built from, kept for diffing
-    /// the next capture against. Optional: predates some persisted snapshots.
-    var treeText: String? = nil
+    let treeFingerprint: String?
+    /// The rendered outline this snapshot was built from, kept for diffing.
+    let treeText: String?
     /// True when the element list covers a scoped subtree rather than the
     /// whole window; scoped snapshots are never diffed against.
-    var scoped: Bool? = nil
+    let scoped: Bool?
     /// True when a whole-window capture omitted known-live elements because
     /// of truncation, skeleton depth, or collection windowing. Partial
     /// snapshots must not invalidate ids they did not observe.
-    var partial: Bool? = nil
-    /// Rich coverage state. Optional so snapshots written by older versions
-    /// remain decodable; `partial` is retained as the compatibility bit.
-    var coverage: SnapshotCoverage? = nil
-    /// Optional so snapshots written by older versions remain decodable.
-    var lineage: SnapshotLineage? = nil
-    var elements: [SnapshotElement]
+    let partial: Bool?
+    /// Rich coverage state. `partial` is retained as a compact compatibility bit.
+    let coverage: SnapshotCoverage?
+    let lineage: SnapshotLineage?
+    let windowElement: AXUIElement?
+    let root: CapturedNode?
+    let elements: [CapturedNode]
+    let nodesByID: [String: CapturedNode]
+    let idsByHandle: [AXHandleKey: String]
+
+    init(
+        pid: Int32, bundleIdentifier: String, windowTitle: String?,
+        windowOrigin: [Double], pixelsPerPoint: Double, windowSize: [Double]?,
+        createdAt: Date, generation: String,
+        treeFingerprint: String? = nil, treeText: String? = nil,
+        scoped: Bool? = nil, partial: Bool? = nil,
+        coverage: SnapshotCoverage? = nil, lineage: SnapshotLineage? = nil,
+        windowElement: AXUIElement? = nil, root: CapturedNode? = nil,
+        elements: [CapturedNode], retainedElements: [CapturedNode] = []
+    ) {
+        self.pid = pid
+        self.bundleIdentifier = bundleIdentifier
+        self.windowTitle = windowTitle
+        self.windowOrigin = windowOrigin
+        self.pixelsPerPoint = pixelsPerPoint
+        self.windowSize = windowSize
+        self.createdAt = createdAt
+        self.generation = generation
+        self.treeFingerprint = treeFingerprint
+        self.treeText = treeText
+        self.scoped = scoped
+        self.partial = partial
+        self.coverage = coverage
+        self.lineage = lineage
+        self.windowElement = windowElement
+        self.root = root ?? elements.first
+        self.elements = elements
+        var nodeIndex: [String: CapturedNode] = [:]
+        var handleIndex: [AXHandleKey: String] = [:]
+        for node in elements {
+            nodeIndex[node.id] = node
+            if let handle = node.handle {
+                let key = AXHandleKey(element: handle)
+                if handleIndex[key] == nil { handleIndex[key] = node.id }
+            }
+        }
+        for node in retainedElements where nodeIndex[node.id] == nil {
+            nodeIndex[node.id] = node
+            if let handle = node.handle {
+                let key = AXHandleKey(element: handle)
+                if handleIndex[key] == nil { handleIndex[key] = node.id }
+            }
+        }
+        self.nodesByID = nodeIndex
+        self.idsByHandle = handleIndex
+    }
 
     var effectiveCoverage: SnapshotCoverage {
         coverage ?? (partial == true ? .partial : .complete)
     }
 
-    func element(withID id: String) -> SnapshotElement? {
-        elements.first { $0.id == id }
+    func element(withID id: String) -> CapturedNode? {
+        nodesByID[id]
     }
 
     /// Convert a screenshot pixel coordinate to global screen points.
@@ -155,157 +215,137 @@ struct AppSnapshot: Codable {
     }
 }
 
-/// Serializes snapshot capture and lookup so concurrent same-pid tool calls
-/// cannot race on the generation counter. An in-memory cache is the source of
-/// truth; disk is write-through so element ids survive across processes.
+private enum SnapshotWindowIdentity: Hashable {
+    case cgWindow(CGWindowID)
+    case axWindow(AXHandleKey)
+    case unavailable
+}
+
+private struct WindowSnapshotKey: Hashable {
+    let process: SnapshotProcessIdentity
+    let window: SnapshotWindowIdentity
+}
+
+private func snapshotKey(
+    process: SnapshotProcessIdentity, windowID: CGWindowID?, windowElement: AXUIElement?
+) -> WindowSnapshotKey {
+    let window: SnapshotWindowIdentity
+    if let windowID {
+        window = .cgWindow(windowID)
+    } else if let windowElement {
+        window = .axWindow(AXHandleKey(element: windowElement))
+    } else {
+        window = .unavailable
+    }
+    return WindowSnapshotKey(process: process, window: window)
+}
+
+/// Serializes capture, id allocation, and handle lookup. Snapshots deliberately
+/// live only in the daemon: a restart starts with no valid AX references.
 actor SnapshotStore {
     static let shared = SnapshotStore()
 
-    private var cache: [pid_t: AppSnapshot] = [:]
+    private var snapshots: [WindowSnapshotKey: AppSnapshot] = [:]
+    private var latestKeyByPid: [pid_t: WindowSnapshotKey] = [:]
     private var counters: [pid_t: Int] = [:]
-    private var history: [pid_t: [AppSnapshot]] = [:]
-    private let maxHistoryPerPid = 32
 
-    private static var directory: URL {
-        // Caches, not tmp: snapshot files must survive periodic temp cleaning
-        // for cross-process id resolution (serve vs call, server restarts).
-        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        return base.appendingPathComponent("computer-use-mcp", isDirectory: true)
-    }
-
-    private static func url(forPid pid: pid_t) -> URL {
-        directory.appendingPathComponent("snapshot-\(pid).json")
-    }
-
-    private static func historicalURL(forPid pid: pid_t, generation: String) -> URL {
-        directory.appendingPathComponent("snapshot-\(pid)-\(generation).json")
-    }
-
-    /// Allocate the next generation, build the tree with it, and persist —
-    /// all atomically, so a second same-pid capture cannot collide.
-    ///
-    /// When the rebuilt tree is identical to the previous snapshot's (same
-    /// content, window placement, and scale — only the ids differ), the
-    /// previous snapshot is kept and returned with `unchanged: true`. When it
-    /// changed, elements that still resolve to the same place carry their
-    /// previous id forward and a diff against the previous state is returned,
-    /// so the caller can send only what changed while existing ids stay valid.
+    /// Allocate a generation and atomically replace the current snapshot for
+    /// this live process/window. Identity reuse is based only on AX handles.
     func capture(
         pid: pid_t, bundleIdentifier: String, windowTitle: String?,
-        windowID: CGWindowID?,
+        windowID: CGWindowID?, windowElement: AXUIElement? = nil,
         windowOrigin: CGPoint, pixelsPerPoint: Double, windowSize: [Double]?, createdAt: Date,
         lineageOverrideForTesting: SnapshotLineage? = nil,
         scoped: Bool = false,
         revision: (() -> UInt64)? = nil,
         buildTree: (String) -> BuiltTree
     ) -> (snapshot: AppSnapshot, tree: BuiltTree, unchanged: Bool, diff: TreeDiff?) {
-        // Always consult disk, not just on first touch: other server
-        // processes (each MCP client spawns its own) persist to the same
-        // file, and two servers must never issue the same generation tag for
-        // the same pid. One decode serves both the counter and the diff base.
-        let disk = loadFromDisk(pid)
-        if let disk { remember(disk) }
-        _ = loadHistory(forPid: pid)
-        let diskGeneration = disk.map(Self.parseGeneration) ?? 0
-        let next = max(counters[pid] ?? 0, diskGeneration) + 1
-        counters[pid] = next
-        let generation = "s\(next)"
-        var tree = buildTreeWithRevisionRetry(
-            generation: generation, revision: revision, build: buildTree)
-        let fingerprint = treeFingerprint(tree.text)
         let lineage =
             lineageOverrideForTesting
             ?? snapshotLineage(
                 pid: pid, bundleIdentifier: bundleIdentifier,
                 windowID: windowID)
-
-        let previous = bestBaseline(
-            forPid: pid,
-            bundleIdentifier: bundleIdentifier,
-            windowTitle: windowTitle,
-            windowOrigin: windowOrigin,
-            windowSize: windowSize,
-            pixelsPerPoint: pixelsPerPoint,
-            lineage: lineage,
-            scoped: scoped
-        )
-        if let previous,
-            tree.coverage.isComplete,
-            previous.effectiveCoverage.isComplete,
-            previous.treeFingerprint == fingerprint,
-            Self.elementsMatchIdentity(previous.elements, tree.elements),
-            previous.windowTitle == windowTitle,
-            previous.windowOrigin == [windowOrigin.x, windowOrigin.y],
-            previous.windowSize == windowSize,
-            previous.bundleIdentifier == bundleIdentifier,
-            previous.pixelsPerPoint == pixelsPerPoint,
-            snapshotLineagesCanReuseElementIDs(previous.lineage, lineage),
-            (previous.scoped == true) == scoped
-        {
-            let committedTree = Self.committedTree(from: previous, matching: tree)
-            var committedSnapshot = previous
-            if committedSnapshot.treeText == nil {
-                committedSnapshot.treeText = committedTree.text
-            }
-            cache[pid] = committedSnapshot
-            remember(committedSnapshot)
-            persist(committedSnapshot)
-            return (committedSnapshot, committedTree, true, nil)
+        let key = snapshotKey(
+            process: lineage.process, windowID: lineage.windowID,
+            windowElement: windowElement)
+        snapshots = snapshots.filter { existing, _ in
+            existing.process.pid != pid || existing.process == lineage.process
         }
+
+        let next = (counters[pid] ?? 0) + 1
+        counters[pid] = next
+        let generation = "s\(next)"
+        var tree = buildTreeWithRevisionRetry(
+            generation: generation, revision: revision, build: buildTree)
+        let previous = snapshots[key]
 
         var diff: TreeDiff?
-        if let previous, !scoped, tree.coverage.isComplete,
-            previous.scoped != true, previous.effectiveCoverage.isComplete,
-            previous.bundleIdentifier == bundleIdentifier,
-            previous.windowTitle == windowTitle,
-            previous.windowOrigin == [windowOrigin.x, windowOrigin.y],
-            previous.windowSize == windowSize,
-            previous.pixelsPerPoint == pixelsPerPoint,
-            snapshotLineagesCanReuseElementIDs(previous.lineage, lineage),
-            let stabilized = stabilizeTree(tree, against: previous)
+        if let previous, let stabilized = stabilizeTree(tree, against: previous)
         {
             tree = stabilized.tree
-            diff = stabilized.diff
+            if !scoped, tree.coverage.isComplete,
+                previous.scoped != true, previous.effectiveCoverage.isComplete,
+                previous.windowTitle == windowTitle,
+                previous.windowOrigin == [windowOrigin.x, windowOrigin.y],
+                previous.windowSize == windowSize,
+                previous.pixelsPerPoint == pixelsPerPoint
+            {
+                diff = stabilized.diff
+            }
         }
 
+        let fingerprint = treeFingerprint(tree.text)
+        let unchanged = previous.map { prior in
+            tree.coverage.isComplete
+                && prior.effectiveCoverage.isComplete
+                && diff?.entryCount == 0
+                && prior.treeFingerprint == fingerprint
+                && prior.windowTitle == windowTitle
+                && prior.windowOrigin == [windowOrigin.x, windowOrigin.y]
+                && prior.windowSize == windowSize
+                && prior.pixelsPerPoint == pixelsPerPoint
+                && (prior.scoped == true) == scoped
+        } ?? false
+        let preserveUnobserved = scoped || !tree.coverage.isComplete
+        let observedIDs = Set(tree.elements.map(\.id))
+        let observedHandles = Set(tree.elements.compactMap(\.handle).map(AXHandleKey.init))
+        let retainedElements: [CapturedNode]
+        if preserveUnobserved, let previous {
+            retainedElements = previous.nodesByID.values.filter { node in
+                guard let handle = node.handle else { return false }
+                return !observedIDs.contains(node.id)
+                    && !observedHandles.contains(AXHandleKey(element: handle))
+            }
+        } else {
+            retainedElements = []
+        }
         let snapshot = AppSnapshot(
             pid: pid, bundleIdentifier: bundleIdentifier, windowTitle: windowTitle,
             windowOrigin: [windowOrigin.x, windowOrigin.y], pixelsPerPoint: pixelsPerPoint,
             windowSize: windowSize, createdAt: createdAt, generation: generation,
             treeFingerprint: fingerprint, treeText: tree.text, scoped: scoped,
             partial: tree.isPartial, coverage: tree.coverage,
-            lineage: lineage, elements: tree.elements
+            lineage: lineage, windowElement: windowElement, root: tree.root,
+            elements: tree.elements, retainedElements: retainedElements
         )
-        cache[pid] = snapshot
-        remember(snapshot)
-        persist(snapshot)
-        return (snapshot, tree, false, diff)
+        snapshots[key] = snapshot
+        latestKeyByPid[pid] = key
+        return (snapshot, tree, unchanged, unchanged ? nil : diff)
     }
 
     func load(forPid pid: pid_t) -> AppSnapshot? {
-        if let cached = cache[pid] { return cached }
-        guard let disk = loadFromDisk(pid) else { return nil }
-        cache[pid] = disk
-        counters[pid] = max(counters[pid] ?? 0, Self.parseGeneration(disk))
-        remember(disk)
-        return disk
+        latestKeyByPid[pid].flatMap { snapshots[$0] }
     }
 
-    func resolveElementSnapshot(forPid pid: pid_t, elementID: String) -> (snapshot: AppSnapshot, element: SnapshotElement, isLatest: Bool)? {
-        let latest = load(forPid: pid)
-        if let latest, let element = latest.element(withID: elementID) {
-            return (latest, element, true)
+    func resolveElementSnapshot(
+        forPid pid: pid_t, elementID: String
+    ) -> (snapshot: AppSnapshot, element: CapturedNode)? {
+        if let latest = load(forPid: pid), let element = latest.element(withID: elementID) {
+            return (latest, element)
         }
-        let snapshots = loadHistory(forPid: pid)
-        for snapshot in snapshots.reversed() {
-            if snapshot.generation == latest?.generation { continue }
-            if let latest, snapshot.bundleIdentifier != latest.bundleIdentifier { continue }
-            if let element = snapshot.element(withID: elementID),
-                let current = Self.currentEquivalentSnapshotElement(
-                    to: element, from: snapshot, among: snapshots)
-            {
-                return (current.snapshot, current.element, false)
+        for (key, snapshot) in snapshots where key.process.pid == pid {
+            if let element = snapshot.element(withID: elementID) {
+                return (snapshot, element)
             }
         }
         return nil
@@ -313,249 +353,30 @@ actor SnapshotStore {
 
     func resetForTesting(pid: pid_t) {
         clearMemoryForTesting(pid: pid)
-        try? FileManager.default.removeItem(at: Self.url(forPid: pid))
-        for url in historicalSnapshotURLs(forPid: pid) {
-            try? FileManager.default.removeItem(at: url)
-        }
     }
 
     func seedForTesting(_ snapshot: AppSnapshot) {
-        cache[snapshot.pid] = snapshot
+        let lineage = snapshot.lineage ?? SnapshotLineage(
+            process: SnapshotProcessIdentity(
+                pid: snapshot.pid, bundleIdentifier: snapshot.bundleIdentifier,
+                startTimeMicroseconds: nil),
+            windowID: nil)
+        let key = snapshotKey(
+            process: lineage.process, windowID: lineage.windowID,
+            windowElement: snapshot.windowElement)
+        snapshots[key] = snapshot
+        latestKeyByPid[snapshot.pid] = key
         counters[snapshot.pid] = max(counters[snapshot.pid] ?? 0, Self.parseGeneration(snapshot))
-        remember(snapshot)
-        persist(snapshot)
     }
 
     func clearMemoryForTesting(pid: pid_t) {
-        cache.removeValue(forKey: pid)
+        snapshots = snapshots.filter { $0.key.process.pid != pid }
+        latestKeyByPid.removeValue(forKey: pid)
         counters.removeValue(forKey: pid)
-        history.removeValue(forKey: pid)
-    }
-
-    private func remember(_ snapshot: AppSnapshot) {
-        var snapshots = history[snapshot.pid] ?? []
-        if let existingIndex = snapshots.firstIndex(where: { $0.generation == snapshot.generation }) {
-            var merged = snapshot
-            let existing = snapshots[existingIndex]
-            if merged.treeFingerprint == nil { merged.treeFingerprint = existing.treeFingerprint }
-            if merged.treeText == nil { merged.treeText = existing.treeText }
-            if merged.scoped == nil { merged.scoped = existing.scoped }
-            if merged.partial == nil { merged.partial = existing.partial }
-            if merged.coverage == nil { merged.coverage = existing.coverage }
-            if merged.lineage == nil { merged.lineage = existing.lineage }
-            snapshots[existingIndex] = merged
-        } else {
-            snapshots.append(snapshot)
-        }
-        if snapshots.count > maxHistoryPerPid {
-            snapshots.removeFirst(snapshots.count - maxHistoryPerPid)
-        }
-        history[snapshot.pid] = snapshots
-    }
-
-    private func bestBaseline(
-        forPid pid: pid_t,
-        bundleIdentifier: String,
-        windowTitle: String?,
-        windowOrigin: CGPoint,
-        windowSize: [Double]?,
-        pixelsPerPoint: Double,
-        lineage: SnapshotLineage,
-        scoped: Bool
-    ) -> AppSnapshot? {
-        let candidates = history[pid] ?? []
-        return candidates
-            .filter {
-                $0.bundleIdentifier == bundleIdentifier
-                    && $0.windowTitle == windowTitle
-                    && $0.windowOrigin == [windowOrigin.x, windowOrigin.y]
-                    && $0.windowSize == windowSize
-                    && $0.pixelsPerPoint == pixelsPerPoint
-                    && snapshotLineagesAreCompatible($0.lineage, lineage)
-                    && ($0.scoped == true) == scoped
-                    && $0.effectiveCoverage.isComplete
-            }
-            .max { Self.parseGeneration($0) < Self.parseGeneration($1) }
-    }
-
-    private func loadFromDisk(_ pid: pid_t) -> AppSnapshot? {
-        guard let data = try? Data(contentsOf: Self.url(forPid: pid)) else { return nil }
-        return try? JSONDecoder().decode(AppSnapshot.self, from: data)
-    }
-
-    private func loadHistory(forPid pid: pid_t) -> [AppSnapshot] {
-        let diskSnapshots = historicalSnapshotURLs(forPid: pid).compactMap { url -> AppSnapshot? in
-            guard let data = try? Data(contentsOf: url) else { return nil }
-            return try? JSONDecoder().decode(AppSnapshot.self, from: data)
-        }
-        for snapshot in diskSnapshots {
-            remember(snapshot)
-            counters[pid] = max(counters[pid] ?? 0, Self.parseGeneration(snapshot))
-        }
-        return history[pid] ?? []
-    }
-
-    private func historicalSnapshotURLs(forPid pid: pid_t) -> [URL] {
-        guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: Self.directory, includingPropertiesForKeys: nil
-        ) else { return [] }
-        let prefix = "snapshot-\(pid)-s"
-        return entries.filter { url in
-            url.lastPathComponent.hasPrefix(prefix) && url.pathExtension == "json"
-        }.sorted { lhs, rhs in
-            Self.generation(fromHistoricalFilename: lhs.lastPathComponent, pid: pid)
-                < Self.generation(fromHistoricalFilename: rhs.lastPathComponent, pid: pid)
-        }
-    }
-
-    private func persist(_ snapshot: AppSnapshot) {
-        // The in-memory cache is the source of truth; disk only matters for
-        // cross-process id resolution (serve vs call, restarts). Still, a
-        // persist failure should leave a trace, not vanish.
-        do {
-            try FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(snapshot)
-            try data.write(to: Self.url(forPid: snapshot.pid), options: .atomic)
-            try persistHistoricalData(for: snapshot)
-        } catch {
-            FileHandle.standardError.write(
-                Data("[computer-use-mcp] snapshot persist failed for pid \(snapshot.pid): \(error)\n".utf8)
-            )
-        }
-        pruneSnapshotHistory(forPid: snapshot.pid)
-        pruneStaleFiles()
-    }
-
-    private func persistHistoricalData(for snapshot: AppSnapshot) throws {
-        var historical = snapshot
-        // Historical files only exist so ids returned by a peer process can
-        // resolve after another session advances the canonical snapshot. Keep
-        // the locator metadata, but do not retain rendered outline text with
-        // AX values/selected text for every prior generation.
-        historical.treeText = nil
-        let historicalData = try JSONEncoder().encode(historical)
-        try historicalData.write(
-            to: Self.historicalURL(forPid: snapshot.pid, generation: snapshot.generation),
-            options: .atomic
-        )
-    }
-
-    /// Best-effort: drop snapshot files older than an hour so the temp dir
-    /// doesn't accumulate files for exited apps / recycled pids.
-    private func pruneStaleFiles() {
-        let cutoff = Date(timeIntervalSinceNow: -3600)
-        guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: Self.directory, includingPropertiesForKeys: [.contentModificationDateKey]
-        ) else { return }
-        for url in entries where url.lastPathComponent.hasPrefix("snapshot-") {
-            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-            if let modified, modified < cutoff {
-                try? FileManager.default.removeItem(at: url)
-            }
-        }
-    }
-
-    private func pruneSnapshotHistory(forPid pid: pid_t) {
-        let urls = historicalSnapshotURLs(forPid: pid)
-        guard urls.count > maxHistoryPerPid else { return }
-        for url in urls.prefix(urls.count - maxHistoryPerPid) {
-            try? FileManager.default.removeItem(at: url)
-        }
     }
 
     private static func parseGeneration(_ snapshot: AppSnapshot) -> Int {
         Int(snapshot.generation.dropFirst()) ?? 0
-    }
-
-    private static func generation(fromHistoricalFilename filename: String, pid: pid_t) -> Int {
-        let prefix = "snapshot-\(pid)-s"
-        guard filename.hasPrefix(prefix), filename.hasSuffix(".json") else { return 0 }
-        let start = filename.index(filename.startIndex, offsetBy: prefix.count)
-        let end = filename.index(filename.endIndex, offsetBy: -".json".count)
-        return Int(filename[start..<end]) ?? 0
-    }
-
-    private static func currentEquivalentSnapshotElement(
-        to element: SnapshotElement, from candidate: AppSnapshot, among snapshots: [AppSnapshot]
-    ) -> (snapshot: AppSnapshot, element: SnapshotElement)? {
-        let candidateGeneration = parseGeneration(candidate)
-        var current = (snapshot: candidate, element: element)
-        let newerSnapshots = snapshots
-            .filter { parseGeneration($0) > candidateGeneration }
-            .sorted { parseGeneration($0) < parseGeneration($1) }
-        for newer in newerSnapshots {
-            guard sameWindowGeometry(current.snapshot, newer) else { continue }
-            // Once a newer snapshot occupies the same logical window slot,
-            // unavailable or conflicting lineage invalidates the historical
-            // locator instead of allowing the old snapshot to remain current.
-            guard sameWindowLineage(current.snapshot, newer) else { return nil }
-            let expected = current.element
-            if let sameID = newer.element(withID: expected.id) {
-                guard snapshotElementsMatchIdentity(sameID, expected) else { return nil }
-                current = (newer, sameID)
-                continue
-            }
-            if let samePath = snapshotElement(atPath: expected.path, in: newer) {
-                guard snapshotElementsMatchIdentity(samePath, expected) else { return nil }
-                let stableIDElement = SnapshotElement(
-                    id: expected.id, role: samePath.role, label: samePath.label,
-                    fingerprint: expected.fingerprint,
-                    path: samePath.path, frame: samePath.frame)
-                current = (newer, stableIDElement)
-                continue
-            }
-            guard newer.scoped != true, newer.effectiveCoverage.isComplete else { continue }
-            guard let candidateFingerprint = current.snapshot.treeFingerprint,
-                let newerFingerprint = newer.treeFingerprint,
-                candidateFingerprint == newerFingerprint
-            else { return nil }
-        }
-        return current
-    }
-
-    private static func sameWindowLineage(_ lhs: AppSnapshot, _ rhs: AppSnapshot) -> Bool {
-        sameWindowGeometry(lhs, rhs)
-            && (rhs.lineage.map { snapshotLineagesCanReuseElementIDs(lhs.lineage, $0) } ?? false)
-    }
-
-    private static func sameWindowGeometry(_ lhs: AppSnapshot, _ rhs: AppSnapshot) -> Bool {
-        lhs.bundleIdentifier == rhs.bundleIdentifier
-            && lhs.windowTitle == rhs.windowTitle
-            && lhs.windowOrigin == rhs.windowOrigin
-            && lhs.windowSize == rhs.windowSize
-            && lhs.pixelsPerPoint == rhs.pixelsPerPoint
-            && (lhs.scoped == true || rhs.scoped != true)
-    }
-
-    private static func snapshotElement(atPath path: [LocatorStep], in snapshot: AppSnapshot) -> SnapshotElement? {
-        snapshot.elements.first { $0.path == path }
-    }
-
-    private static func elementsMatchIdentity(
-        _ previous: [SnapshotElement], _ fresh: [SnapshotElement]
-    ) -> Bool {
-        guard previous.count == fresh.count else { return false }
-        return zip(previous, fresh).allSatisfy { old, new in
-            old.path == new.path && snapshotElementsMatchIdentity(new, old)
-        }
-    }
-
-    private static func committedTree(from snapshot: AppSnapshot, matching freshTree: BuiltTree) -> BuiltTree {
-        guard let text = snapshot.treeText else {
-            var lines = freshTree.text.components(separatedBy: "\n")
-            for index in freshTree.elements.indices where index < snapshot.elements.count && index < lines.count {
-                lines[index] = lines[index].replacingOccurrences(
-                    of: freshTree.elements[index].id, with: snapshot.elements[index].id)
-            }
-            return BuiltTree(
-                text: lines.joined(separator: "\n"), elements: snapshot.elements,
-                coverage: snapshot.effectiveCoverage,
-                elementsVisited: freshTree.elementsVisited)
-        }
-        return BuiltTree(
-            text: text, elements: snapshot.elements,
-            coverage: snapshot.effectiveCoverage,
-            elementsVisited: freshTree.elementsVisited)
     }
 }
 
@@ -586,7 +407,7 @@ struct TreeDiff {
     /// True when the post-state diff contains any changed/added/removed line
     /// other than the acted target's own line. Without a target line,
     /// independence cannot be proven.
-    func hasChangeIndependent(of target: SnapshotElement?) -> Bool {
+    func hasChangeIndependent(of target: CapturedNode?) -> Bool {
         hasChangeIndependent(in: changed + added + removed, of: target) { _ in true }
     }
 
@@ -594,7 +415,7 @@ struct TreeDiff {
     /// the independent line must carry the requested text in post-action
     /// changed/added content, or unrelated timers/deletions could be mistaken
     /// for proof that the write landed.
-    func hasChangeIndependent(of target: SnapshotElement?, matching text: String) -> Bool {
+    func hasChangeIndependent(of target: CapturedNode?, matching text: String) -> Bool {
         guard !text.isEmpty else { return false }
         return hasChangeIndependent(in: changed + added, of: target) { line in
             String(line).localizedCaseInsensitiveContains(text)
@@ -602,7 +423,7 @@ struct TreeDiff {
     }
 
     private func hasChangeIndependent(
-        in entries: [String], of target: SnapshotElement?, where lineMatches: (String.SubSequence) -> Bool
+        in entries: [String], of target: CapturedNode?, where lineMatches: (String.SubSequence) -> Bool
     ) -> Bool {
         guard let target else { return false }
         let targetPrefix = target.id + " "
@@ -637,15 +458,8 @@ private func isScrollRelevantDiffEntry(_ entry: String) -> Bool {
     return false
 }
 
-/// Carry element ids forward across a UI change and compute the diff.
-///
-/// An element that still resolves to the same locator path with the same role
-/// and label is the same control, so it keeps its previous id — the agent's
-/// references survive the change — and appears in the diff only if its
-/// rendered line (value, frame, flags) differs. Elements at new paths are
-/// added under fresh ids; previous paths with no counterpart are removed.
-/// Returns nil when the previous snapshot cannot be diffed against (no stored
-/// text, or line/element misalignment).
+/// Carry ids forward only when Core Foundation says the fresh traversal saw
+/// the same live AX object. Recreated objects are intentionally remove/add.
 func stabilizeTree(_ tree: BuiltTree, against previous: AppSnapshot) -> (tree: BuiltTree, diff: TreeDiff)? {
     guard let previousText = previous.treeText else { return nil }
     let previousLines = previousText.components(separatedBy: "\n")
@@ -653,41 +467,31 @@ func stabilizeTree(_ tree: BuiltTree, against previous: AppSnapshot) -> (tree: B
     var newLines = tree.text.components(separatedBy: "\n")
     guard tree.elements.count <= newLines.count else { return nil }
 
-    func pathKey(_ path: [LocatorStep]) -> String {
-        path.map { "\($0.role)#\($0.indexOfRole)" }.joined(separator: "/")
-    }
     func stripIndent(_ line: String) -> String {
         String(line.drop(while: { $0 == "\t" }))
     }
 
-    // Matched entries are claimed (removed) as the new tree consumes them;
-    // the leftovers are the removed elements, ordered by their old position.
-    var previousByPath: [String: (element: SnapshotElement, line: String, index: Int)] = [:]
-    for (index, element) in previous.elements.enumerated() {
-        previousByPath[pathKey(element.path)] = (element, previousLines[index], index)
-    }
-
-    var elements = tree.elements
+    let previousIndexByID = Dictionary(uniqueKeysWithValues:
+        previous.elements.enumerated().map { ($0.element.id, $0.offset) })
+    var claimedPreviousIDs: Set<String> = []
     var changed: [String] = []
     var added: [String] = []
 
-    for index in elements.indices {
-        let element = elements[index]
-        let key = pathKey(element.path)
-        if let prior = previousByPath[key],
-            snapshotElementsMatchIdentity(element, prior.element)
+    for index in tree.elements.indices {
+        let element = tree.elements[index]
+        if let handle = element.handle,
+            let priorID = previous.idsByHandle[AXHandleKey(element: handle)],
+            let prior = previous.nodesByID[priorID],
+            prior.role == element.role,
+            !claimedPreviousIDs.contains(priorID)
         {
-            previousByPath.removeValue(forKey: key)
-            // Carry the previous id so the agent's references stay valid. A
-            // fresh build always mints current-generation ids, so after this
-            // rewrite a plain line comparison means a content comparison.
-            newLines[index] = newLines[index].replacingOccurrences(of: element.id, with: prior.element.id)
-            elements[index] = SnapshotElement(
-                id: prior.element.id, role: element.role, label: element.label,
-                fingerprint: prior.element.fingerprint,
-                path: element.path, frame: element.frame
-            )
-            if prior.line != newLines[index] {
+            claimedPreviousIDs.insert(priorID)
+            newLines[index] = newLines[index].replacingOccurrences(
+                of: element.id, with: priorID)
+            element.id = priorID
+            if let priorIndex = previousIndexByID[priorID],
+                previousLines[priorIndex] != newLines[index]
+            {
                 changed.append("~ " + stripIndent(newLines[index]))
             }
         } else {
@@ -695,53 +499,107 @@ func stabilizeTree(_ tree: BuiltTree, against previous: AppSnapshot) -> (tree: B
         }
     }
 
-    let removed = previousByPath.values.sorted { $0.index < $1.index }.map { leftover in
-        let label = leftover.element.label.map { " \"\($0)\"" } ?? ""
-        return "- \(leftover.element.id) \(leftover.element.role)\(label) is gone"
+    let removed = previous.elements.filter { !claimedPreviousIDs.contains($0.id) }.map { element in
+        let label = element.label.map { " \"\($0)\"" } ?? ""
+        return "- \(element.id) \(element.role)\(label) is gone"
     }
 
     let stabilized = BuiltTree(
-        text: newLines.joined(separator: "\n"), elements: elements,
+        text: newLines.joined(separator: "\n"), root: tree.root, elements: tree.elements,
         coverage: tree.coverage, elementsVisited: tree.elementsVisited)
-    return (stabilized, TreeDiff(changed: changed, added: added, removed: removed, totalElements: elements.count))
+    return (stabilized, TreeDiff(
+        changed: changed, added: added, removed: removed,
+        totalElements: tree.elements.count))
 }
 
-/// Re-resolve a snapshot element against the live accessibility tree once and
-/// verify its captured fingerprint. A mismatch fails stale; settling belongs
-/// in the explicit observer/verification layer, not hidden locator retries.
+/// Validate the exact retained handle. There is no structural replay or
+/// replacement search: invalid, changed, or detached targets fail stale.
 func resolveElement(
-    _ element: SnapshotElement, in window: AXUIElement,
-    requireStrongFingerprint: Bool = false,
+    _ element: CapturedNode, in window: AXUIElement,
     comparePresentationEvidence: Bool = true
 ) async throws -> AXUIElement {
-    if requireStrongFingerprint {
-        guard let fingerprint = element.fingerprint, fingerprint.hasIdentityEvidence else {
-            throw ToolError.failed(
-                "Element \(element.id) cannot be safely used for mutation because it has no "
-                    + "AXIdentifier or meaningful stable label. Element-id mutation is unavailable "
-                    + "for this control; choose a better-identified target."
-            )
+    guard let handle = element.handle else {
+        throw ToolError.failed(
+            "Element \(element.id) has no live AX handle. Call get_app_state in the current daemon "
+                + "and use a fresh element id.")
+    }
+    switch axReadAttribute(handle, kAXRoleAttribute) {
+    case .failure(let failure):
+        throw staleHandleError(element, reason: describeAXReadFailure(failure))
+    case .value(let raw):
+        guard let role = raw as? String else {
+            throw staleHandleError(element, reason: "AXRole returned an unexpected value")
+        }
+        guard role == element.role else {
+            throw staleHandleError(
+                element, reason: "role changed from \(element.role) to \(role)")
         }
     }
-    let lastFailure: String
-    if let resolved = walkLocator(element.path, from: window) {
-        let validation = validateResolvedElement(
-            resolved, against: element,
-            requireStrongFingerprint: requireStrongFingerprint,
-            comparePresentationEvidence: comparePresentationEvidence)
-        if validation == .match { return resolved }
-        lastFailure =
-            "the element at path \(describePath(element.path)) no longer matches: "
-            + validation.description
-    } else {
-        lastFailure = "no element at path \(describePath(element.path))"
+
+    let validation = validateElementFingerprint(
+        expected: element.fingerprint, live: liveElementFingerprint(handle),
+        requireIdentityEvidence: false,
+        comparePresentationEvidence: comparePresentationEvidence)
+    guard validation == .match else {
+        throw staleHandleError(element, reason: validation.description)
+    }
+    try requireAttached(handle, to: window, element: element)
+    return handle
+}
+
+private func staleHandleError(_ element: CapturedNode, reason: String) -> ToolError {
+    ToolError.failed(
+        "Element \(element.id) (\(element.role)\(element.label.map { " \"\($0)\"" } ?? "")) "
+            + "is stale: \(reason). Call get_app_state and use a fresh element id.")
+}
+
+func describeAXReadFailure(_ failure: AXReadFailure) -> String {
+    switch failure {
+    case .api(let error): return axErrorDescription(error)
+    case .typeMismatch: return "the accessibility attribute had an unexpected type"
+    }
+}
+
+private func requireAttached(
+    _ element: AXUIElement, to expectedWindow: AXUIElement,
+    element captured: CapturedNode, maxDepth: Int = 32
+) throws {
+    if CFEqual(element, expectedWindow) { return }
+    switch axReadAttribute(element, kAXWindowAttribute) {
+    case .value(let raw):
+        guard CFGetTypeID(raw) == AXUIElementGetTypeID() else {
+            throw staleHandleError(captured, reason: "AXWindow returned an unexpected value")
+        }
+        guard CFEqual(raw as! AXUIElement, expectedWindow) else {
+            throw staleHandleError(captured, reason: "the element belongs to a different window")
+        }
+        return
+    case .failure(.api(.noValue)), .failure(.api(.attributeUnsupported)):
+        break
+    case .failure(let failure):
+        throw staleHandleError(captured, reason: describeAXReadFailure(failure))
     }
 
-    throw ToolError.failed(
-        "Element \(element.id) (\(element.role)\(element.label.map { " \"\($0)\"" } ?? "")) "
-            + "is stale: \(lastFailure). The UI has changed since that state was captured — "
-            + "call get_app_state and use a fresh element id."
-    )
+    var current = element
+    var visited: Set<AXHandleKey> = []
+    for _ in 0..<maxDepth {
+        let key = AXHandleKey(element: current)
+        guard visited.insert(key).inserted else {
+            throw staleHandleError(captured, reason: "the AXParent chain contains a cycle")
+        }
+        switch axReadAttribute(current, kAXParentAttribute) {
+        case .value(let raw):
+            guard CFGetTypeID(raw) == AXUIElementGetTypeID() else {
+                throw staleHandleError(captured, reason: "AXParent returned an unexpected value")
+            }
+            current = raw as! AXUIElement
+            if CFEqual(current, expectedWindow) { return }
+        case .failure(let failure):
+            throw staleHandleError(captured, reason: describeAXReadFailure(failure))
+        }
+    }
+    throw staleHandleError(
+        captured, reason: "the expected window was not reached within \(maxDepth) AXParent hops")
 }
 
 /// Fail fast with a clear message when the target app has quit or crashed,
@@ -755,27 +613,6 @@ func requireAppAlive(_ app: ResolvedApp) throws {
     }
 }
 
-private func validateResolvedElement(
-    _ live: AXUIElement, against element: SnapshotElement,
-    requireStrongFingerprint: Bool,
-    comparePresentationEvidence: Bool
-) -> ElementFingerprintValidation {
-    if let expected = element.fingerprint,
-        requireStrongFingerprint || expected.hasIdentityEvidence
-    {
-        return validateElementFingerprint(
-            expected: expected, live: liveElementFingerprint(live),
-            requireIdentityEvidence: requireStrongFingerprint,
-            comparePresentationEvidence: comparePresentationEvidence)
-    }
-    if requireStrongFingerprint { return .insufficientEvidence }
-    let role = axRole(live)
-    return elementIdentityMatches(
-        liveRole: role, liveLabel: snapshotLabel(live, role: role),
-        expectedRole: element.role, expectedLabel: element.label
-    ) ? .match : .mismatch("legacy role/label identity changed")
-}
-
 extension ElementFingerprintValidation {
     fileprivate var description: String {
         switch self {
@@ -785,22 +622,6 @@ extension ElementFingerprintValidation {
         case .mismatch(let reason): return reason
         }
     }
-}
-
-func snapshotElementsMatchIdentity(_ fresh: SnapshotElement, _ previous: SnapshotElement) -> Bool {
-    if let expected = previous.fingerprint, expected.hasIdentityEvidence {
-        guard let live = fresh.fingerprint else { return false }
-        return validateElementFingerprint(
-            expected: expected, live: live,
-            requireIdentityEvidence: false) == .match
-    }
-    // A legacy role/label match cannot safely inherit newly discovered strong
-    // evidence: peers may have reordered before this first fingerprinted read.
-    if fresh.fingerprint?.hasIdentityEvidence == true { return false }
-    // Preserve the historical snapshot-stabilization contract exactly. Live
-    // read-only resolution remains lenient for text-entry label churn, but a
-    // changed persisted label must not carry an old id into a new snapshot.
-    return fresh.role == previous.role && fresh.label == previous.label
 }
 
 /// Pure identity rule behind the stale-element re-check. Label identity is
@@ -815,28 +636,4 @@ func elementIdentityMatches(
     guard let expected = expectedLabel, !expected.isEmpty else { return true }
     if isTextEntryRole(expectedRole) { return true }
     return liveLabel == expected
-}
-
-private func walkLocator(_ path: [LocatorStep], from root: AXUIElement) -> AXUIElement? {
-    walkLocatorPath(
-        path, from: root,
-        children: { axElements($0, kAXChildrenAttribute) },
-        role: axRole)
-}
-
-func walkLocatorPath<Node>(
-    _ path: [LocatorStep], from root: Node,
-    children: (Node) -> [Node], role: (Node) -> String
-) -> Node? {
-    var current = root
-    for step in path {
-        let matching = children(current).filter { role($0) == step.role }
-        guard step.indexOfRole < matching.count else { return nil }
-        current = matching[step.indexOfRole]
-    }
-    return current
-}
-
-private func describePath(_ path: [LocatorStep]) -> String {
-    path.map { "\($0.role)[\($0.indexOfRole)]" }.joined(separator: "/")
 }

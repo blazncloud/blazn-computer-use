@@ -135,7 +135,7 @@ func appLooksLikeWebRenderer(pid: pid_t) -> Bool {
 /// — the signature of a Chromium/Electron app whose web accessibility is off
 /// (or still building). Elements are emitted in DFS order, so a web area's
 /// content, if any survived filtering, immediately follows it.
-func hasEmptyWebArea(_ elements: [SnapshotElement]) -> Bool {
+func hasEmptyWebArea(_ elements: [CapturedNode]) -> Bool {
     for (index, element) in elements.enumerated() where element.role == "AXWebArea" {
         if !hasEmittedChild(of: element, at: index, in: elements) { return true }
     }
@@ -145,7 +145,7 @@ func hasEmptyWebArea(_ elements: [SnapshotElement]) -> Bool {
 /// WKWebView cold-start can first expose only a childless web container, then
 /// materialize the real web area later. This shape is narrow by design so
 /// ordinary get_app_state calls do not pay a retry tax.
-func hasColdStartWebContentShape(_ elements: [SnapshotElement]) -> Bool {
+func hasColdStartWebContentShape(_ elements: [CapturedNode]) -> Bool {
     for (index, element) in elements.enumerated() {
         guard !hasEmittedChild(of: element, at: index, in: elements) else { continue }
         if element.role == "AXWebArea" { return true }
@@ -154,27 +154,24 @@ func hasColdStartWebContentShape(_ elements: [SnapshotElement]) -> Bool {
     return false
 }
 
-private func hasEmittedChild(of element: SnapshotElement, at index: Int, in elements: [SnapshotElement]) -> Bool {
-    let prefix = element.path
-    let next = index + 1 < elements.count ? elements[index + 1] : nil
-    return next.map { $0.path.count > prefix.count && Array($0.path.prefix(prefix.count)) == prefix } ?? false
+private func hasEmittedChild(of element: CapturedNode, at _: Int, in _: [CapturedNode]) -> Bool {
+    !element.children.isEmpty
 }
 
-private func isWebAreaShapedPlaceholder(_ element: SnapshotElement) -> Bool {
+private func isWebAreaShapedPlaceholder(_ element: CapturedNode) -> Bool {
     guard element.role == "AXGroup" || element.role == "AXScrollArea" else { return false }
     let label = element.label?.lowercased() ?? ""
     return label.contains("web")
 }
 
 /// True when the target is itself an AXWebArea or lives below one. Prefer the
-/// snapshot locator path when available: it is free and already carries the
-/// materialized ancestry from get_app_state. Fall back to a bounded live
-/// AXParent walk for focused elements and coordinate hit-test targets.
-func targetIsInWebArea(_ element: AXUIElement?, snapshotElement: SnapshotElement?, maxDepth: Int = 32) -> Bool {
-    if let snapshotElement,
-        snapshotElement.role == "AXWebArea" || snapshotElement.path.contains(where: { $0.role == "AXWebArea" })
-    {
-        return true
+/// captured node ancestry, then fall back to a bounded live AXParent walk for
+/// focused elements and coordinate hit-test targets.
+func targetIsInWebArea(_ element: AXUIElement?, snapshotElement: CapturedNode?, maxDepth: Int = 32) -> Bool {
+    var captured = snapshotElement
+    while let node = captured {
+        if node.role == "AXWebArea" { return true }
+        captured = node.parent
     }
     guard let element else { return false }
     var current: AXUIElement? = element

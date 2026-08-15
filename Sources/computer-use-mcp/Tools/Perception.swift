@@ -19,7 +19,7 @@ func getAppStateImpl(_ args: [String: Value]) async throws -> CallTool.Result {
     var scopeWindowID: CGWindowID?
     if let scopeID = args.string("scope_element_id") {
         let target = try await resolveTarget(app: app, elementID: scopeID)
-        scope = TreeScope(root: target.element, pathPrefix: target.snapshotElement.path)
+        scope = TreeScope(root: target.element)
         scopeWindowTitle = target.window.title
         scopeWindowID = target.window.lineageWindowID
     }
@@ -87,22 +87,16 @@ let opaqueCanvasCoverageThreshold = 0.6
 /// childlessness is the sparse-tree case. Frames are clipped to the window
 /// so oversized frames cannot inflate coverage. Returns a hint naming the
 /// largest qualifying element, or nil.
-func opaqueCanvasHint(elements: [SnapshotElement], windowSize: [Double]?) -> String? {
+func opaqueCanvasHint(elements: [CapturedNode], windowSize: [Double]?) -> String? {
     guard let windowSize, windowSize.count == 2 else { return nil }
     let windowArea = windowSize[0] * windowSize[1]
     guard windowArea > 0 else { return nil }
     guard !elements.contains(where: { $0.role == "AXWebArea" }) else { return nil }
 
-    var best: SnapshotElement?
+    var best: CapturedNode?
     var bestCoverage = 0.0
-    for (index, element) in elements.enumerated() where !element.path.isEmpty {
-        let next = index + 1 < elements.count ? elements[index + 1] : nil
-        let hasChildren =
-            next.map {
-                $0.path.count > element.path.count
-                    && Array($0.path.prefix(element.path.count)) == element.path
-            } ?? false
-        if hasChildren { continue }
+    for element in elements where element.parent != nil {
+        if !element.children.isEmpty { continue }
         let visibleWidth =
             min(element.frame[0] + element.frame[2], windowSize[0]) - max(element.frame[0], 0)
         let visibleHeight =
@@ -120,12 +114,10 @@ func opaqueCanvasHint(elements: [SnapshotElement], windowSize: [Double]?) -> Str
         + "— likely a custom-drawn canvas. Call get_app_state with ocr:true to read it."
 }
 
-/// A subtree root to build the element tree from, with its locator path from
-/// the window root so resolved paths stay anchored at the window.
+/// A retained subtree root for a scoped state read.
 /// @unchecked: AXUIElement is an immutable thread-safe CF handle.
 struct TreeScope: @unchecked Sendable {
     let root: AXUIElement
-    let pathPrefix: [LocatorStep]
 }
 
 /// Result detail for get_app_state: full screenshot by default,
@@ -258,6 +250,7 @@ func stateResult(
             bundleIdentifier: app.bundleIdentifier,
             windowTitle: window.title,
             windowID: exactWindowID,
+            windowElement: window.element,
             windowOrigin: window.frame.origin,
             pixelsPerPoint: pixelsPerPoint,
             windowSize: [window.frame.width * pixelsPerPoint, window.frame.height * pixelsPerPoint],
@@ -270,7 +263,6 @@ func stateResult(
                 windowOrigin: window.frame.origin,
                 pixelsPerPoint: pixelsPerPoint,
                 generation: generation,
-                pathPrefix: scope?.pathPrefix ?? [],
                 maxElements: maxElements,
                 skeleton: skeleton
             )

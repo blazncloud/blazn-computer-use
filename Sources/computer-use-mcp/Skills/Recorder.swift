@@ -5,7 +5,7 @@
 // first use) observes the user's real clicks and keystrokes while the target
 // app is frontmost — it never modifies or injects events. Clicks are mapped
 // to the accessibility element underneath (role + label → a durable locator,
-// the same anchor run_skill re-resolves). Consecutive typed characters
+// the same role+label anchor run_skill resolves). Consecutive typed characters
 // coalesce into type_text; a modifier chord becomes press_key. Recording
 // pauses whenever secure input is active, so passwords are never captured.
 //

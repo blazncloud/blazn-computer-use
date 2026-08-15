@@ -1,5 +1,5 @@
 // Walk an app window's accessibility tree into (a) a numbered, indented text
-// outline for the model and (b) snapshot elements with locator paths.
+// outline for the model and (b) a nested tree of retained live AX nodes.
 //
 // The traversal core (`buildTreeCore`) is generic over a node type via
 // `TreeNodeAccessors`, so the shaping rules — structural-wrapper elision,
@@ -11,7 +11,8 @@ import Foundation
 
 struct BuiltTree {
     let text: String
-    let elements: [SnapshotElement]
+    let root: CapturedNode?
+    let elements: [CapturedNode]
     let coverage: SnapshotCoverage
     var isPartial: Bool { !coverage.isComplete }
     /// Nodes whose full facts were read during traversal, including structural
@@ -19,11 +20,12 @@ struct BuiltTree {
     let elementsVisited: Int
 
     init(
-        text: String, elements: [SnapshotElement], isPartial: Bool = false,
+        text: String, root: CapturedNode? = nil, elements: [CapturedNode], isPartial: Bool = false,
         coverage: SnapshotCoverage? = nil,
         elementsVisited: Int? = nil
     ) {
         self.text = text
+        self.root = root ?? elements.first
         self.elements = elements
         self.coverage = coverage ?? (isPartial ? .partial : .complete)
         self.elementsVisited = max(0, elementsVisited ?? elements.count)
@@ -33,7 +35,7 @@ struct BuiltTree {
         let combined = SnapshotCoverage.combining(coverage, additionalCoverage)
         let combinedText = note.map { text.isEmpty ? $0 : text + "\n" + $0 } ?? text
         return BuiltTree(
-            text: combinedText, elements: elements, coverage: combined,
+            text: combinedText, root: root, elements: elements, coverage: combined,
             elementsVisited: elementsVisited)
     }
 }
@@ -88,8 +90,8 @@ func clampedTreeBudget(_ maxElements: Int) -> Int {
 /// True for pure structural wrappers: unlabeled, value-less AXGroups whose
 /// only actions are universal noise (ShowMenu, ScrollToVisible). Web pages
 /// nest dozens of these around every piece of content — they are omitted from
-/// the outline (and the element budget) but kept in locator paths, so deep
-/// web content fits within the depth and element limits.
+/// the outline (and the element budget), while emitted descendants attach to
+/// the nearest retained ancestor.
 func isStructuralWrapper(
     role: String, label: String?, identifier: String? = nil,
     value: String?, focused: Bool, actions: [String]
@@ -128,8 +130,8 @@ struct NodeFacts {
 struct TreeNodeAccessors<Node> {
     /// Full read for a node that will be materialized (emitted).
     let facts: (Node) -> NodeFacts
-    /// Cheap role-only read, used to keep locator indices absolute while
-    /// scanning past children that are windowed out.
+    /// Cheap role-only read used while scanning past children that are
+    /// windowed out.
     let role: (Node) -> String
     /// Cheap frame-only read (tight timeout), used by the viewport-intersection
     /// windowing fallback.
@@ -144,6 +146,8 @@ struct TreeNodeAccessors<Node> {
     /// Identity, for mapping a visible child back to its index among all
     /// children.
     let equals: (Node, Node) -> Bool
+    /// Live AX handle retained by production captures; deterministic tests use nil.
+    let handle: (Node) -> AXUIElement?
     /// Coverage learned while reading nodes. Test accessors default to complete.
     let coverage: () -> SnapshotCoverage
     let coverageDiagnostic: () -> String?
@@ -156,6 +160,7 @@ struct TreeNodeAccessors<Node> {
         visibleCollectionChildren: @escaping (Node) -> [Node]?,
         collectionTotal: @escaping (Node) -> Int?,
         equals: @escaping (Node, Node) -> Bool,
+        handle: @escaping (Node) -> AXUIElement? = { _ in nil },
         coverage: @escaping () -> SnapshotCoverage = { .complete },
         coverageDiagnostic: @escaping () -> String? = { nil }
     ) {
@@ -166,6 +171,7 @@ struct TreeNodeAccessors<Node> {
         self.visibleCollectionChildren = visibleCollectionChildren
         self.collectionTotal = collectionTotal
         self.equals = equals
+        self.handle = handle
         self.coverage = coverage
         self.coverageDiagnostic = coverageDiagnostic
     }
@@ -177,8 +183,8 @@ struct TreeNodeAccessors<Node> {
 struct CollectionWindow {
     /// Indices (into the full children array) to materialize.
     let includedIndices: Set<Int>
-    /// Scan children[0..<scanLimit] to keep locator indices absolute; beyond
-    /// this the collection is entirely off-window.
+    /// Scan children[0..<scanLimit]; beyond this the collection is entirely
+    /// off-window.
     let scanLimit: Int
     /// Items past the window, for the summary line.
     let offscreen: Int
@@ -255,12 +261,12 @@ private func denseCollectionWindow<Node>(
 func buildTreeCore<Node>(
     root: Node, accessors: TreeNodeAccessors<Node>,
     windowOrigin: CGPoint, pixelsPerPoint: Double, generation: String,
-    pathPrefix: [LocatorStep], maxElements: Int,
-    skeleton: Bool, windowCollections: Bool
+    maxElements: Int, skeleton: Bool, windowCollections: Bool
 ) -> BuiltTree {
     let maxNodes = clampedTreeBudget(maxElements)
     var lines: [String] = []
-    var elements: [SnapshotElement] = []
+    var elements: [CapturedNode] = []
+    var capturedRoot: CapturedNode?
 
     func pixelFrame(_ frame: CGRect?) -> [Double]? {
         guard let frame = frame.flatMap(sanitizedRect), sanitizedPoint(windowOrigin) != nil,
@@ -280,7 +286,10 @@ func buildTreeCore<Node>(
     var coveragePartial = false
     var elementsVisited = 0
 
-    func visit(_ element: Node, depth: Int, rawDepth: Int, path: [LocatorStep]) {
+    func visit(
+        _ element: Node, depth: Int, rawDepth: Int,
+        capturedParent: CapturedNode?
+    ) {
         guard elements.count < maxNodes else {
             budgetTruncated = true
             return
@@ -297,24 +306,32 @@ func buildTreeCore<Node>(
         // Wrappers (never the tree root) pass their outline slot straight to
         // their children; childless wrappers vanish entirely.
         let wrapper =
-            !path.isEmpty
+            capturedParent != nil
             && isStructuralWrapper(
                 role: role, label: facts.label, identifier: facts.identifier,
                 value: facts.value,
                 focused: facts.focused == true, actions: facts.actions)
 
         var lineIndex: Int?
+        var parentForChildren = capturedParent
         if !wrapper {
             let id = "e\(elements.count)@\(generation)"
             let frame = pixelFrame(facts.frame)
-            elements.append(
-                SnapshotElement(
-                    id: id, role: role, label: facts.label,
-                    fingerprint: ElementFingerprint(
-                        role: role, subrole: facts.subrole,
-                        identifier: facts.identifier,
-                        stableLabel: facts.stableIdentityLabel),
-                    path: path, frame: frame ?? [0, 0, 0, 0]))
+            let node = CapturedNode(
+                id: id, role: role, label: facts.label,
+                fingerprint: ElementFingerprint(
+                    role: role, subrole: facts.subrole,
+                    identifier: facts.identifier,
+                    stableLabel: facts.stableIdentityLabel),
+                frame: frame ?? [0, 0, 0, 0],
+                handle: accessors.handle(element))
+            if let capturedParent {
+                capturedParent.appendChild(node)
+            } else {
+                capturedRoot = node
+            }
+            elements.append(node)
+            parentForChildren = node
             lines.append(describeLine(facts, id: id, frame: frame, depth: depth))
             lineIndex = lines.count - 1
         }
@@ -338,10 +355,8 @@ func buildTreeCore<Node>(
             : nil
         // Windowed perception caps per-node fanout to bound tokens. Non-windowed
         // callers (find, skill-replay) asked for the deep tree and are bounded
-        // only by the element budget: a collection row past maxChildrenPerNode
-        // must still materialize so find can match it and a skill recorded on it
-        // can re-resolve its locator (resolveSkillLocator looks the row up by
-        // path in the snapshot, so an unmaterialized row is unreachable).
+        // only by the element budget so find and unique skill anchors can see
+        // every materialized row.
         let scanLimit =
             window?.scanLimit
             ?? (windowCollections ? min(children.count, maxChildrenPerNode) : children.count)
@@ -349,20 +364,13 @@ func buildTreeCore<Node>(
             coveragePartial = true
         }
 
-        var roleCounts: [String: Int] = [:]
         for childIndex in 0..<children.count {
             guard childIndex < scanLimit else { break }
             let child = children[childIndex]
-            // Keep the locator index absolute even for windowed-out children:
-            // walkLocator (Snapshot.swift) resolves by index among same-role
-            // siblings, so a relative index would mis-resolve.
-            let childRole = accessors.role(child)
-            let indexOfRole = roleCounts[childRole, default: 0]
-            roleCounts[childRole] = indexOfRole + 1
             if let window, !window.includedIndices.contains(childIndex) { continue }
             visit(
-                child, depth: wrapper ? depth : depth + 1, rawDepth: rawDepth + 1,
-                path: path + [LocatorStep(role: childRole, indexOfRole: indexOfRole)])
+                child, depth: wrapper ? depth : depth + 1,
+                rawDepth: rawDepth + 1, capturedParent: parentForChildren)
             if elements.count >= maxNodes {
                 if childIndex + 1 < scanLimit { budgetTruncated = true }
                 break
@@ -381,7 +389,7 @@ func buildTreeCore<Node>(
         }
     }
 
-    visit(root, depth: 0, rawDepth: 0, path: pathPrefix)
+    visit(root, depth: 0, rawDepth: 0, capturedParent: nil)
 
     if budgetTruncated {
         coveragePartial = true
@@ -402,7 +410,7 @@ func buildTreeCore<Node>(
         lines.append(diagnostic)
     }
     return BuiltTree(
-        text: lines.joined(separator: "\n"), elements: elements,
+        text: lines.joined(separator: "\n"), root: capturedRoot, elements: elements,
         coverage: coverage,
         elementsVisited: elementsVisited)
 }
@@ -588,6 +596,7 @@ func axTreeAccessors() -> TreeNodeAccessors<AXNode> {
             }
         },
         equals: { CFEqual($0.element, $1.element) },
+        handle: { $0.element },
         coverage: { recorder.coverage },
         coverageDiagnostic: { recorder.diagnostic }
     )
@@ -595,14 +604,14 @@ func axTreeAccessors() -> TreeNodeAccessors<AXNode> {
 
 func buildTree(
     window: AXUIElement, windowOrigin: CGPoint, pixelsPerPoint: Double, generation: String,
-    pathPrefix: [LocatorStep] = [], maxElements: Int = defaultMaxTreeElements,
-    skeleton: Bool = false, windowCollections: Bool = true
+    maxElements: Int = defaultMaxTreeElements, skeleton: Bool = false,
+    windowCollections: Bool = true
 ) -> BuiltTree {
     buildTreeCore(
         root: AXNode(element: window), accessors: axTreeAccessors(),
         windowOrigin: windowOrigin, pixelsPerPoint: pixelsPerPoint, generation: generation,
-        pathPrefix: pathPrefix, maxElements: maxElements,
-        skeleton: skeleton, windowCollections: windowCollections)
+        maxElements: maxElements, skeleton: skeleton,
+        windowCollections: windowCollections)
 }
 
 // MARK: - Labels and line rendering
@@ -666,7 +675,7 @@ func describeLine(_ facts: NodeFacts, id: String, frame: [Double]?, depth: Int) 
         parts.append("\"\(clean(label))\"")
     } else if let identifier = displayableIdentifier(facts.identifier) {
         // Keep the developer identifier separate from the human label. It is
-        // also retained as optional fingerprint evidence in SnapshotElement.
+        // also retained as optional fingerprint evidence in CapturedNode.
         parts.append("id=\"\(clean(identifier))\"")
     }
     if let frame, frame.count >= 4 {

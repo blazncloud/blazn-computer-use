@@ -4,7 +4,7 @@ import Testing
 @testable import computer_use_mcp
 
 @Suite struct RecorderCompileTests {
-    @Test func clickCompilesToLocatorStep() {
+    @Test func clickCompilesToDurableRoleLabelLocator() {
         let steps = compileRecordedEvents([
             .click(role: "AXButton", label: "Save", clickCount: 1, button: "left")
         ])

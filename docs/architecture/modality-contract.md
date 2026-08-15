@@ -19,10 +19,10 @@ window metadata, and a shared local daemon in one trusted user session.
 | Observation | `get_app_state` returns one target window's Accessibility tree plus a ScreenCaptureKit screenshot. Element boxes and coordinate inputs are in the returned screenshot's pixel space. | `find` searches a deeper AX tree without a new screenshot. `read_text` returns long AX values. `ocr:true` adds Vision OCR boxes when AX is sparse. | Missing Accessibility permission, missing Screen Recording permission, no running app, no queryable window, no capturable on-screen window, ScreenCaptureKit timeout. |
 | Capture scope | Window capture is desktop-independent for the target app window and does not foreground the app. It requires the window to be on screen and capturable by ScreenCaptureKit. | `include_screenshot:false` keeps tree-only action results. `include_state:false` returns only a confirmation note. | "Screenshot unavailable" may be returned with a usable AX tree; capture timeout includes `replayd` recovery guidance. |
 | Action target | Interaction tools target a running app by name or bundle id. A window title may select a specific window for perception and some window operations. | `open_app` can launch an app without activation by default. `list_windows` disambiguates windows. | Unknown or non-running app, no matching window title, app quit or crashed after resolution. |
-| Element identity | `element_id` values are generation-tagged per pid, for example `e12@s3`, but validity is membership in the latest snapshot, not a generation-tag comparison: elements that survive a UI change carry their ids forward, so ids captured before the change keep working. Actions re-resolve the stored locator against the live AX tree before acting. | Call `get_app_state` or use the state/diff returned after an action. Use `scope_element_id` when the tree was truncated. | An id whose element did not survive into the latest snapshot, a missing id, a locator identity mismatch, or app death produces a clear retry-with-fresh-state error. |
+| Element identity | `element_id` values are generation-tagged per pid, for example `e12@s3`, but validity is membership in the current in-memory snapshot. A surviving `AXUIElement` handle carries its id forward. Before acting, the daemon proves that exact handle is live, still has the captured semantic identity, and remains attached to the captured process/window. | Call `get_app_state` or use the state/diff returned after an action. Use `scope_element_id` when the tree was truncated. | A recreated, detached, missing, semantically changed, or ambiguously attached element produces a clear retry-with-fresh-state error. |
 | Post-action state | Mutating tools return reduced-detail fresh state. An unchanged tree is not resent (existing ids remain valid); a changed tree returns a compact diff of changed, appeared, and disappeared elements, with surviving elements keeping their ids. | `include_state:false` or `include_screenshot:false` reduce the result further. `get_app_state` always returns the full tree and full-detail pixels. | Diffs fall back to the full tree when more than half the elements changed. Scoped snapshots are never diffed against. |
 | Batched actions | `batch` runs up to 10 app-scoped actions (plus `wait_for`) against one app in one round-trip. Every step passes the normal dispatch funnel and server-side gates. All steps are validated before any runs. | Intermediate steps skip state for speed; the final step returns fresh state, which composes with diffs. | Execution stops at the first failure and reports which steps already ran. `batch` cannot nest itself or `run_skill`. |
-| Saved skills | `save_skill` freezes a performed task into durable locators (role + label + tree path); `run_skill` re-resolves each anchor against the live tree and replays through the same per-step gates with no model in the loop. `list_skills` and `delete_skill` manage the store. | `{{param}}` placeholders substitute into string arguments; steps may assert their effect with `expect` (in `wait_for` terms). | A step that no longer resolves or whose expectation fails stops the run with a report naming the step and reason. `delete_skill` requires `confirm`. |
+| Saved skills | `save_skill` freezes an element anchor as role plus stable label; `run_skill` requires exactly one live match and replays through the same per-step gates with no model in the loop. `list_skills` and `delete_skill` manage the store. | `{{param}}` placeholders substitute into string arguments; steps may assert their effect with `expect` (in `wait_for` terms). | Unlabeled or duplicate role+label controls cannot be replayed safely and fail instead of guessing. A missing anchor or failed expectation stops the run with the step and reason. `delete_skill` requires `confirm`. |
 | Coordinate identity | Raw `x` and `y` are screenshot pixels from the latest snapshot for that app. They are bounds-checked, converted to global screen points, then optionally hit-tested back to an AX element for labels and safety gates. | Use coordinates when the target is absent from AX, custom drawn, or found by OCR. | Coordinates outside the latest screenshot are rejected; coordinates require a prior state capture. |
 | Dispatch ladder | Left click prefers AX actions first, then window-routed process events, then per-pid CoreGraphics events. AX-backed text/value/menu/window operations use Accessibility directly. Scroll and drag use targeted event delivery. | `allow_global_cursor:true` enables the real-cursor/session-tap path for clicks. `press_key` can use global keyboard delivery only when the target app is already foreground. | Background event posting is app-dependent and has no reliable success signal, so global escalation is explicit rather than automatic. |
 | Foreground guarantee | Default pointer and key delivery does not activate the target app, move the real cursor, or steal user focus. `open_app` also avoids activation by default. | `open_app activate:true`, `manage_window raise`, or explicit global cursor/keyboard modes can affect focus or visible ordering. | Global keyboard delivery fails if requested while the target app is not foreground. Apps that require real focus may ignore background events. |
@@ -41,8 +41,8 @@ window metadata, and a shared local daemon in one trusted user session.
 - enables Chromium/Electron web accessibility flags when needed;
 - emits element ids, roles, labels, values, actions, and boxes in screenshot
   pixels;
-- persists the snapshot so later calls can resolve ids across `serve`, `call`,
-  and daemon boundaries.
+- keeps the current live snapshot in the daemon so later calls can resolve ids
+  across `serve` and `call` clients while that daemon remains alive.
 
 Action tools return fresh state by default. Reduced screenshots keep the loop
 cheap after actions; explicit `get_app_state` returns full-detail pixels. If an
@@ -64,14 +64,13 @@ actions.
 ## Element Identity Across UI Changes
 
 Element ids remain generation-tagged (`e12@s3`), but id validity is membership
-in the latest snapshot, not a generation-tag comparison. When the UI changes,
-an element that still resolves to the same locator path with the same role and
-label is the same control and carries its previous id forward, so everything
-the caller already holds stays valid across the change. An id fails only when
-its element did not survive into the latest snapshot, and the error says to
-retry with fresh state. Actions still re-resolve the stored locator against
-the live AX tree before acting, so an id never silently operates a different
-control.
+in a current in-memory snapshot. During capture, Core Foundation equality and
+hashing match the same live `AXUIElement` handle to its earlier id. Screenshot
+scale does not participate in that identity. Before an action, the daemon reads
+the handle's live role, compares its captured semantic facts, and proves that it
+still belongs to the captured process and window. A recreated or detached
+control fails stale and tells the caller to fetch fresh state; the runtime does
+not search for a similar replacement or act on a structural neighbor.
 
 ## Coordinate Spaces
 
@@ -130,10 +129,10 @@ arbitration coherent, and `batch` cannot nest itself.
 
 `save_skill`, `run_skill`, `list_skills`, and `delete_skill` form a
 teach/replay surface. An agent performs a task once and saves it as a named,
-parameterized skill; `element_id` anchors are frozen into durable locators
-(role + label + tree path) at save time, and every run re-resolves them
-against the live tree — exact path first, unique role+label as the
-layout-shift fallback — so skills survive app restarts. `{{param}}`
+parameterized skill; `element_id` anchors are frozen as role plus stable label
+at save time, and every run requires one unique role+label match in the live
+tree, so skills can survive app restarts without inheriting the runtime's live
+AX handles. `{{param}}`
 placeholders substitute into any string argument, and steps may assert their
 effect with `expect` (in `wait_for` terms).
 
@@ -305,7 +304,7 @@ Useful next hooks should stay split by risk tier:
   - snapshot diff shaping and element-id survival across UI changes
     (covered by `SnapshotDiffTests`);
   - interference-yield decisions, URL policy matching, batch validation, and
-    skill validation/templating/locator resolution (covered by the
+    skill validation/templating/unique-anchor resolution (covered by the
     corresponding deterministic suites in `Tests/`);
   - daemon fallback classification for read-only versus mutating tools;
   - safety-policy confirmation coverage.
@@ -330,11 +329,11 @@ coverage.
 - `Sources/computer-use-mcp/Tools/Catalog.swift`: public tool schemas and model
   descriptions.
 - `Sources/computer-use-mcp/Tools/Perception.swift`: canonical state result,
-  snapshot persistence, screenshot detail, OCR, and sparse-web retry.
+  live snapshot capture, screenshot detail, OCR, and sparse-web retry.
 - `Sources/computer-use-mcp/Core/Screenshot.swift`: ScreenCaptureKit window
   capture, permission gate, capture timeout, and replayd recovery language.
-- `Sources/computer-use-mcp/Core/Snapshot.swift`: element ids, locator
-  re-resolution, tree diffs, and id survival across snapshots.
+- `Sources/computer-use-mcp/Core/Snapshot.swift`: live AX-handle identity,
+  attachment validation, tree diffs, and id survival across snapshots.
 - `Sources/computer-use-mcp/Core/FocusTelemetry.swift`: focus/cursor/delivery
   telemetry including `ui_changed`.
 - `Sources/computer-use-mcp/Core/InterferenceGuard.swift`: HID-idle yield gate.
@@ -346,7 +345,7 @@ coverage.
   stop-at-first-failure execution.
 - `Sources/computer-use-mcp/Skills/SkillStore.swift` and
   `Sources/computer-use-mcp/Skills/SkillTools.swift`: skill persistence,
-  validation, templating, locator anchoring, and replay.
+  validation, templating, unique semantic anchoring, and replay.
 - `Sources/computer-use-mcp/Core/HitTest.swift`: screenshot-pixel to
   global-point conversion and coordinate bounds.
 - `Sources/computer-use-mcp/Core/Input.swift`: dispatch ladder, per-window and

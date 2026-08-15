@@ -1,3 +1,4 @@
+import ApplicationServices
 import Foundation
 import Testing
 
@@ -42,7 +43,11 @@ private func fakeAccessors() -> TreeNodeAccessors<FakeNode> {
         children: { $0.children },
         visibleCollectionChildren: { $0.visibleChildren },
         collectionTotal: { $0.collectionTotal },
-        equals: { $0 === $1 }
+        equals: { $0 === $1 },
+        handle: { node in
+            let token = UInt(bitPattern: ObjectIdentifier(node)) % UInt(Int32.max)
+            return AXUIElementCreateApplication(pid_t(token))
+        }
     )
 }
 
@@ -69,13 +74,13 @@ private func rowListTree(rowCount: Int, visible: Range<Int>? = nil, total: Int? 
 
 private func build(
     _ root: FakeNode, generation: String, maxElements: Int = defaultMaxTreeElements,
-    skeleton: Bool = false, windowCollections: Bool = true, pathPrefix: [LocatorStep] = []
+    skeleton: Bool = false, windowCollections: Bool = true
 ) -> BuiltTree {
     buildTreeCore(
         root: root, accessors: fakeAccessors(),
         windowOrigin: .zero, pixelsPerPoint: 1, generation: generation,
-        pathPrefix: pathPrefix, maxElements: maxElements,
-        skeleton: skeleton, windowCollections: windowCollections)
+        maxElements: maxElements, skeleton: skeleton,
+        windowCollections: windowCollections)
 }
 
 @Suite struct ViewportVisibleIndicesTests {
@@ -102,7 +107,7 @@ private func build(
 }
 
 @Suite struct DenseCollectionWindowingTests {
-    @Test func visibleRowsSliceIsMaterializedWithAbsoluteLocatorIndices() {
+    @Test func visibleRowsSliceIsMaterializedAsCapturedChildren() {
         // 500 rows, app reports rows 200..212 (0-based) on screen.
         let tree = rowListTree(rowCount: 500, visible: 200..<213, total: 500)
         let built = build(tree, generation: "s1")
@@ -122,11 +127,7 @@ private func build(
         #expect(values.first == "Row 201")
         #expect(values.last == "Row 213")
 
-        // Locator indices stay absolute: the first materialized row is the
-        // 201st AXRow among its siblings (index 200), so it re-resolves.
-        let rowStep = rows.first!.path.last!
-        #expect(rowStep.role == "AXRow")
-        #expect(rowStep.indexOfRole == 200)
+        #expect(rows.first?.parent?.role == "AXOutline")
 
         // Off-screen rows are summarized, not silently dropped.
         #expect(built.text.contains("487 more rows off-screen"))
@@ -148,8 +149,7 @@ private func build(
         let rows = built.elements.filter { $0.role == "AXRow" }
         #expect(rows.count < 300)  // windowed
         #expect(rows.count > 0)
-        // First on-screen row keeps absolute index 0.
-        #expect(rows.first!.path.last!.indexOfRole == 0)
+        #expect(rows.first?.parent?.role == "AXOutline")
         #expect(built.text.contains("off-screen"))
     }
 
@@ -161,8 +161,8 @@ private func build(
         let built = build(tree, generation: "s1", maxElements: 5000, windowCollections: false)
         let rows = built.elements.filter { $0.role == "AXRow" }
         #expect(rows.count == 500)
-        // The last row keeps its absolute locator index and is present in text.
-        #expect(rows.last!.path.last!.indexOfRole == 499)
+        // The last row is present in the nested captured tree and text.
+        #expect(rows.last?.parent?.role == "AXOutline")
         #expect(built.text.contains("Row 500"))
         #expect(!built.text.contains("off-screen"))
     }
@@ -196,36 +196,28 @@ private func build(
     @Test func skeletonThenScopedRoundTripYieldsValidDeepIDs() {
         let tree = rowListTree(rowCount: 500, visible: 200..<213, total: 500)
 
-        // 1) Skeleton overview: find the collapsed container and its path.
+        // 1) Skeleton overview: find the collapsed captured container.
         let skeleton = build(tree, generation: "s1", skeleton: true)
         let outline = try! #require(skeleton.elements.first { $0.role == "AXOutline" })
-        #expect(outline.path.last?.role == "AXOutline")
+        #expect(outline.parent?.role == "AXScrollArea")
 
-        // 2) Scope to that container by its locator path, as get_app_state does
-        //    when handed scope_element_id — resolve the same subtree node.
-        var scopeRoot: FakeNode = tree
-        for step in outline.path {
-            let matching = scopeRoot.children.filter { $0.role == step.role }
-            scopeRoot = matching[step.indexOfRole]
-        }
+        // 2) Scope to the retained handle's corresponding source subtree.
+        let scopeRoot = tree.children[0].children[0].children[0]
         #expect(scopeRoot.role == "AXOutline")
 
-        let scoped = build(
-            scopeRoot, generation: "s2", pathPrefix: outline.path)
+        let scoped = build(scopeRoot, generation: "s2")
 
         // 3) A row is now materialized under a valid current-generation id, and
-        //    its path extends the container's path (locator identity intact).
+        //    it is a child of the scoped root.
         let row = try! #require(scoped.elements.first { $0.role == "AXRow" })
         #expect(row.id.hasSuffix("@s2"))
-        #expect(Array(row.path.prefix(outline.path.count)) == outline.path)
-        #expect(row.path.count == outline.path.count + 1)
+        #expect(row.parent === scoped.root)
     }
 }
 
 @Suite struct WindowedResnapshotIdentityTests {
     /// Re-snapshotting an unchanged windowed list must carry every id forward
-    /// so references the agent already holds stay valid — the stale-identity
-    /// re-check keys on locator path, which windowing must not perturb.
+    /// so references the agent already holds stay valid by AX handle identity.
     @Test func unchangedWindowedListKeepsIDs() throws {
         let tree = rowListTree(rowCount: 500, visible: 100..<113, total: 500)
         let first = build(tree, generation: "s1")
@@ -245,7 +237,7 @@ private func build(
         #expect(result.tree.elements.count == first.elements.count)
         for (new, old) in zip(result.tree.elements, first.elements) {
             #expect(new.id == old.id)
-            #expect(new.path == old.path)
+            #expect(CFEqual(new.handle, old.handle))
         }
         #expect(result.diff.entryCount == 0)
     }
@@ -274,25 +266,17 @@ private func snapshot(from tree: BuiltTree) -> AppSnapshot {
         #expect(!matchingLines.isEmpty)
     }
 
-    /// The correctness-critical case: a skill recorded on a deep row stores its
-    /// locator path; on replay, resolveSkillLocator looks the row up by path in
-    /// the freshly captured (non-windowed) snapshot. If the row were capped out,
-    /// resolution would fail — this proves it re-resolves.
-    @Test func skillRecordedOnDeepRowReResolves() {
+    @Test func unlabeledDeepRowsRemainAmbiguousForDurableSkills() {
         let tree = rowListTree(rowCount: 500, total: 500)
         let built = build(tree, generation: "s1", maxElements: 5000, windowCollections: false)
 
-        // The row the agent "recorded" on: the 300th AXRow (index 299).
-        let recorded = try! #require(
-            built.elements.first { $0.role == "AXRow" && $0.path.last?.indexOfRole == 299 })
-        let locator = SkillLocator(role: "AXRow", label: recorded.label, path: recorded.path)
-
-        let resolution = resolveSkillLocator(locator, in: snapshot(from: built))
-        guard case .found(let element, _) = resolution else {
-            Issue.record("deep-row locator did not resolve: \(resolution)")
+        let resolution = resolveSkillLocator(
+            SkillLocator(role: "AXRow"), in: snapshot(from: built))
+        guard case .failed(let reason) = resolution else {
+            Issue.record("expected unlabeled rows to remain ambiguous")
             return
         }
-        #expect(element.path == recorded.path)
+        #expect(reason.contains("ambiguous"))
     }
 
     /// The regression guard: with the old per-node cap a row past 150 would be
@@ -302,13 +286,7 @@ private func snapshot(from tree: BuiltTree) -> AppSnapshot {
     @Test func windowedSnapshotCannotResolveAnOffscreenRow() {
         let tree = rowListTree(rowCount: 500, visible: 0..<13, total: 500)
         let windowed = build(tree, generation: "s1")  // windowed: only 13 rows
-        let deepPath = [
-            LocatorStep(role: "AXScrollArea", indexOfRole: 0),
-            LocatorStep(role: "AXScrollArea", indexOfRole: 0),
-            LocatorStep(role: "AXOutline", indexOfRole: 0),
-            LocatorStep(role: "AXRow", indexOfRole: 299),
-        ]
-        let locator = SkillLocator(role: "AXRow", path: deepPath)
+        let locator = SkillLocator(role: "AXRow", label: "Row 300")
         guard case .failed = resolveSkillLocator(locator, in: snapshot(from: windowed)) else {
             Issue.record("windowed snapshot unexpectedly resolved an off-screen row")
             return

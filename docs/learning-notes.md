@@ -119,8 +119,8 @@ state, and executable information. It is not the Accessibility tree.
    product's main/focused/window fallback rules.
 5. ScreenCaptureKit finds and captures the corresponding visual window.
 6. The tree builder recursively reads the live AX hierarchy for that window.
-7. It records compact elements containing ID, role, label, value/state hints,
-   screenshot-relative frame, supported semantics as needed, and a locator path.
+7. It records nested nodes containing ID, the live AX handle, semantic facts,
+   screenshot-relative frame, parent/children, and model-facing state hints.
 8. `SnapshotStore` commits the snapshot and calculates stable IDs/diffs against
    the previous compatible snapshot.
 9. The MCP result returns the semantic outline and element IDs plus the
@@ -187,14 +187,14 @@ If no snapshot exists, an element-ID action fails with guidance to call
 `get_app_state`. Coordinate-only tools can use their own documented path, but
 they provide weaker target identity and verification.
 
-## Why re-resolve and reread after an action?
+## Why validate and reread after an action?
 
-A snapshot contains durable metadata, not a permanently valid live
-`AXUIElement`. Applications frequently destroy and recreate AX objects during a
-relayout.
+A current snapshot retains the exact live `AXUIElement`. Applications can
+destroy and recreate AX objects during a relayout, so retention alone is not
+proof that a target remains safe.
 
-- **Re-resolve** means select the current window and walk the saved locator
-  against the live AX hierarchy again to obtain the current AX object.
+- **Validate** means read the retained handle's role and semantic fingerprint,
+  check its PID, and prove it is still attached to the captured window.
 - **Reread** means ask that live object for current fields such as `AXValue`,
   `AXSelected`, or `AXFocused`.
 
@@ -204,7 +204,7 @@ This answers two separate questions:
 2. Did its meaningful state actually change as requested?
 
 For example, a checkbox click is stronger when the current checkbox can be
-reacquired and `AXValue` changed from `0` to `1`. If the app replaced or removed
+validated and `AXValue` changed from `0` to `1`. If the app replaced or removed
 the target, the verifier reports ambiguity instead of claiming success.
 
 ## Main Accessibility APIs
@@ -226,28 +226,21 @@ The tree is formed by repeatedly reading attributes such as `AXWindows` and
 
 ## Snapshot identity, storage, and cleanup
 
-- Snapshots are keyed by **PID**.
+- Snapshots are keyed by **process identity plus window identity**.
 - `SnapshotStore` holds:
-  - `[pid: AppSnapshot]` latest in-memory snapshots;
-  - `[pid: Int]` generation counters;
-  - `[pid: [AppSnapshot]]` bounded history.
+  - one current in-memory snapshot per process/window;
+  - per-PID generation counters;
+  - ID→node and AX-handle→ID indexes.
 - Generations are therefore per PID: app A may have `s3` while app B also has
   its own `s3`.
 - Element IDs include generation, for example `e12@s3`. The app/PID supplied to
   the tool scopes which app's `s3` is meant.
-- Compatible elements can retain earlier IDs when a new tree is stabilized
-  against the old one.
-- Latest files are stored as
-  `~/Library/Caches/computer-use-mcp/snapshot-<pid>.json`.
-- Historical generations use
-  `snapshot-<pid>-<generation>.json`, with at most 32 retained per PID.
-- Persistence uses atomic file replacement. The `SnapshotStore` actor
-  serializes in-process allocation and cache mutation.
-- Files older than one hour are deleted **best effort whenever another snapshot
-  is persisted**. The cache directory does not independently clear them on an
-  exact timer.
-- In-memory snapshots remain until evicted by bounded history, explicitly reset
-  in tests, or the owning process exits.
+- The same Core Foundation AX handle can retain its earlier ID across captures.
+  Recreated handles become remove/add entries.
+- Scoped or incomplete captures keep unobserved live nodes only in private
+  lookup indexes; they do not add those nodes to the new model-facing tree.
+- The `SnapshotStore` actor serializes generation allocation and cache updates.
+- Snapshots are not written to disk. A daemon restart starts with fresh state.
 
 ## Cursor overlay: transport, animation, and locking
 
@@ -436,9 +429,10 @@ Important differences:
 - **Human interruption:** Codex continuously monitors controlled sessions,
   invalidates state, and requires requery. We primarily check recent physical
   input at dispatch preflight.
-- **Perception:** Codex keeps incremental in-memory Skyshot revisions, lineage,
-  caches, and AX-driven invalidation. We use persisted per-PID JSON snapshots,
-  locator paths, stabilized IDs, and tree diffs.
+- **Perception:** Codex keeps incremental Skyshot revisions and can rebuild and
+  uniquely refetch a replacement after invalidation. We keep simpler current
+  in-memory snapshots, validate exact retained AX handles, and fail stale rather
+  than search for replacements.
 - **Verification:** our explicit read-act-read reducer provides strong outcome
   classes. The inspected Codex bundle settles/refetches state, but a universal
   deterministic classifier was not proven.
@@ -562,7 +556,7 @@ model chooses app
 → read supported AX actions
 → create treeText for the model
 → create locator elements for targeting
-→ SnapshotStore persists the generation
+→ SnapshotStore installs the current in-memory generation
 → return tree + element IDs + screenshot
 ```
 
@@ -573,9 +567,9 @@ treeText:
 ID + role + label + frame
 + value/state + AX actions
 
-SnapshotElement:
-ID + role + label + frame
-+ locator path
+CapturedNode:
+ID + live AX handle + role/subrole/identifier/stable label + frame
++ parent + children
 ```
 
 Large-tree reminder:
@@ -605,10 +599,9 @@ model passes app + element ID
    URL policy
 → click-specific safety runs
 → resolve current app + PID
-→ load compatible snapshot element
-→ reselect current live AX window
-→ replay role/index locator path
-→ verify live role + label
+→ load current snapshot node by ID
+→ validate retained AX handle and live semantic facts
+→ verify owning PID + captured window attachment
 → stale mismatch: request fresh state
 → valid match: obtain live AXUIElement
 ```
@@ -688,7 +681,7 @@ the main narrative.
 1. Single-agent computer use
    AX application/window/element model
    screenshot + semantic snapshot
-   stable element IDs and locator replay
+   stable element IDs backed by validated live AX handles
    AX-first action delivery with CoreGraphics fallback
    read-act-read outcome verification
 

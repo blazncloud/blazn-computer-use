@@ -160,7 +160,7 @@ The current architecture starts off with the MCP compatible agent harnesses at t
 
 The requests go through the server over a local Unix socket to the shared daemon instance, which is the central coordination service. It owns tool dispatch, finding the right tool and handler, snapshots of different app's state in tree like structures, and per-application lease ownerships so that each application only has one agent mutating it at one time.
 
-Each snapshot preserves the state of an application and window in an accessibility tree structure, representing the structure of the app's elements, stable IDs for each element, and locator paths that save the traversal path from the root of the app to each individual element.
+Each current in-memory snapshot preserves one application's window as an accessibility tree. It gives every node a model-facing ID and retains the exact live AX handle plus semantic facts needed to validate that handle before an action.
 
 Below the daemon are the macOS services that perform the operations on the computer. AppKit, Apple's native GUI framework, helps identify running GUI applications. The Accessibility APIs expose app elements and element accessibility actions, like clicking a button or setting the text value of a text box. ScreenCaptureKit captures the screenshot for the selected window. Core Graphics provides a fallback coordinate-based input path when an application does not expose enough useful accessibility behavior. Basically sending mouse and keystroke events at specific coordinates.
 
@@ -187,9 +187,9 @@ Model-facing tree
 e0@s1 AXWindow "Settings"
   e1@s1 AXCheckBox "Email alerts" value="0" actions=[AXPress]
 
-Persisted snapshot element
+Daemon snapshot element
 e1@s1 · AXCheckBox · "Email alerts"
-AXGroup[0] → AXCheckBox[0] · frame=[48,120,160,24]
+handle=<AXUIElement> · role/subrole/identifier/label · frame=[48,120,160,24]
 ```
 
 ### Draft speaker notes
@@ -206,17 +206,15 @@ ScreenCaptureKit is then used to capture a screenshot of that window, which late
 
 Next, the daemon constructs the Accessibility tree. Starting from the selected window, it reads each element's AXChildren attribute and recursively visits those children. For every visited element it reads fields such as role, label, value, and saves them for the snapshot as well.
 
-As it walks from the selected window root, each element also records the traversal path used to reach it.
-
-In this example, the checkbox is represented by the path AXGroup zero, then AXCheckBox zero, where the traversal path indicates the index among siblings within the same role.
+As it walks from the selected window root, each node keeps its exact `AXUIElement` handle, semantic fingerprint, parent, and children. A Core Foundation handle key lets the next capture recognize the same live AX object and keep its element ID.
 
 The model receives the text representation of the AX tree and screenshot to provide the context for deciding the next actions.
 
-The persisted snapshot serves a different purpose. Its element entry keeps the ID, role, label and tree traversal path, so that we can use the paths to relocate the same element in future states.
+The daemon snapshot serves a different purpose from the compact tree text. The text is for the model; the structured nodes let the runtime map an element ID back to the exact AX object selected during perception.
 
-Before a mutating operation, the daemon finds the element's path in the latest snapshot, and replays that path against the current live window, obtaining a fresh ax element reference, and checks its role and label. If the element at that path doesn't have the same role and label as the one saved in the snapshot, the operation fails with a stale error, telling the LLM it needs to re-query get_app_state for the app's new state.
+Before a mutating operation, the daemon looks up that retained handle. It reads `AXRole` to prove the handle is live, compares role, subrole, optional identifier, and stable label with the captured facts, checks the PID, and proves attachment to the same window through `AXWindow` or a bounded `AXParent` walk. Any failure returns a stale-element error and tells the model to call `get_app_state` again.
 
-The tradeoff with this design is I prioritized reliable snapshot reuse over the speed of caching live AX handles, since snapshot reuse helps prevent addiitonal agent turns and token use from having stale app states. AX handles are temporary references that can become invalid when an application rebuilds its accessibility hierarchy. A locator instead can be saved and replayed to acquire the current AX element. With The trade-off of walking the locator path when the app hasn't changed.
+The tradeoff is deliberate. This design is simpler and safer against list reordering than replaying a sibling-index path: a path can now point to a different control, while an exact handle cannot. If a framework recreates the AX object, the old ID expires even when a similar control exists. The model pays one fresh-state turn instead of the runtime guessing at a replacement. Snapshots and handles are process-local to the daemon; a daemon restart starts with fresh state.
 
 ---
 

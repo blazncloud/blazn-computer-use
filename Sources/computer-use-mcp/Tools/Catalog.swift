@@ -708,8 +708,8 @@ let toolCatalog: [ToolSpec] = [
         name: "save_skill",
         description: """
             Save a repeatable task as a named skill after performing it once. Steps are \
-            the normal action tools; element_id anchors are frozen into durable locators \
-            (role + label + tree path) that re-resolve on every run, so the skill \
+            the normal action tools; element_id anchors are frozen into durable, unique \
+            role + label locators that resolve against a fresh tree on every run, so the skill \
             survives app restarts. Prefer restart-durable primitives when teaching: \
             keyboard shortcuts (press_key) and menu commands (click_menu_item) over \
             positional clicks, set_value over click-then-type, and give steps an \
@@ -735,7 +735,7 @@ let toolCatalog: [ToolSpec] = [
                         "1-\(maxSkillSteps) steps, each {\"tool\": one of "
                             + skillStepToolNames.sorted().joined(separator: ", ")
                             + ", plus that tool's usual arguments}. Element-targeted steps: pass "
-                            + "\"element_id\" from the CURRENT state (frozen into a locator at save "
+                            + "\"element_id\" from the CURRENT state (frozen into role+label at save "
                             + "time) or an explicit \"locator\": {\"role\", \"label\"}. Optional "
                             + "\"expect\": {\"role\", \"label\", \"value_contains\", \"gone\", "
                             + "\"timeout_seconds\"} asserts the step's effect (wait_for terms)."),
@@ -751,10 +751,10 @@ let toolCatalog: [ToolSpec] = [
     ToolSpec(
         name: "run_skill",
         description: """
-            Replay a saved skill deterministically: each step re-resolves its locator \
+            Replay a saved skill deterministically: each step resolves its role+label locator \
             against the live tree, runs through the normal per-step safety checks, and \
-            verifies its expectation. Elements that moved are found by role+label and \
-            their saved address self-heals. No reasoning happens between steps, so \
+            verifies its expectation. A locator must match exactly one current element; \
+            ambiguity fails instead of guessing. No reasoning happens between steps, so \
             replay is fast; if a step cannot resolve or its expectation fails, the run \
             stops with a report of exactly which step broke — fix that step, re-save, \
             and rerun with start_at_step to continue. Returns final app state plus any \

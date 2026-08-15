@@ -18,7 +18,7 @@ func typeTextImpl(_ args: [String: Value]) async throws -> CallTool.Result {
 
     let element: AXUIElement
     let described: String
-    let snapshotElement: SnapshotElement?
+    let snapshotElement: CapturedNode?
     let windowTitle: String?
     let actedWindowID: CGWindowID?
     if let elementID = args.string("element_id") {

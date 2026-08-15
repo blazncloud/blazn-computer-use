@@ -1,3 +1,4 @@
+import ApplicationServices
 import CoreGraphics
 import Foundation
 import Testing
@@ -39,16 +40,17 @@ private func coverageTree(
     generation: String, labels: [String], coverage: SnapshotCoverage = .complete
 ) -> BuiltTree {
     let elements = labels.enumerated().map { index, label in
-        SnapshotElement(
+        CapturedNode(
             id: "e\(index)@\(generation)",
             role: index == 0 ? "AXWindow" : "AXButton",
             label: label,
-            path: index == 0 ? [] : [LocatorStep(role: "AXButton", indexOfRole: index - 1)],
-            frame: [Double(index * 20), 0, 80, 24])
+            frame: [Double(index * 20), 0, 80, 24],
+            handle: AXUIElementCreateApplication(pid_t(95_000 + index)))
     }
+    for child in elements.dropFirst() { elements[0].appendChild(child) }
     let text = elements.map { "\($0.id) \($0.role) \"\($0.label ?? "")\"" }
         .joined(separator: "\n")
-    return BuiltTree(text: text, elements: elements, coverage: coverage)
+    return BuiltTree(text: text, root: elements.first, elements: elements, coverage: coverage)
 }
 
 @Suite struct SnapshotCoverageTests {
@@ -77,7 +79,7 @@ private func coverageTree(
             accessors: oneNodeAccessors(
                 coverage: .degraded, diagnostic: "AX read failed"),
             windowOrigin: .zero, pixelsPerPoint: 1, generation: "s1",
-            pathPrefix: [], maxElements: 1, skeleton: false, windowCollections: true)
+            maxElements: 1, skeleton: false, windowCollections: true)
 
         #expect(tree.coverage == .degraded)
         #expect(tree.isPartial)
@@ -124,7 +126,7 @@ private func coverageTree(
         #expect(observedTreeChange(unchanged: false, coverage: .unstable) == nil)
     }
 
-    @Test func degradedCaptureCannotEmitRemovalDiffOrInvalidatePriorID() async throws {
+    @Test func degradedCaptureRetainsUnobservedLiveNodeOnlyInLookup() async throws {
         let pid: pid_t = -31_071
         await SnapshotStore.shared.resetForTesting(pid: pid)
         defer { Task { await SnapshotStore.shared.resetForTesting(pid: pid) } }
@@ -155,10 +157,8 @@ private func coverageTree(
         #expect(!degraded.unchanged)
         let resolved = await SnapshotStore.shared.resolveElementSnapshot(
             forPid: pid, elementID: saveID)
-        #expect(resolved?.element.label == "Save")
-
-        await SnapshotStore.shared.clearMemoryForTesting(pid: pid)
-        let reloaded = try #require(await SnapshotStore.shared.load(forPid: pid))
-        #expect(reloaded.effectiveCoverage == .degraded)
+        #expect(resolved != nil)
+        #expect(!degraded.snapshot.elements.contains { $0.id == saveID })
+        #expect(await SnapshotStore.shared.load(forPid: pid)?.effectiveCoverage == .degraded)
     }
 }

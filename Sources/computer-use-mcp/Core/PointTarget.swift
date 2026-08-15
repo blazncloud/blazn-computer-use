@@ -9,10 +9,10 @@ import MCP
 struct PointTarget {
     /// The element under the point (hit-tested or resolved from an id), if any.
     let element: AXUIElement?
-    /// The snapshot element (locator) when the target came from an element id,
-    /// so the outcome verifier can re-resolve and re-read it after the action.
-    /// nil for coordinate clicks — there is no locator to re-read.
-    let snapshotElement: SnapshotElement?
+    /// The captured node when the target came from an element id, so the
+    /// outcome verifier can revalidate and re-read its handle after the action.
+    /// nil for coordinate clicks.
+    let snapshotElement: CapturedNode?
     /// Global screen point (top-left origin). Nil when the element exposes no
     /// frame — such targets can only be driven by accessibility actions, and
     /// point-based delivery must fail loudly rather than act at (0,0).

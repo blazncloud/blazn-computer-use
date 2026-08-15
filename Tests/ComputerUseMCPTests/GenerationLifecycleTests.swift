@@ -1,374 +1,252 @@
-import CoreGraphics
+import ApplicationServices
 import Foundation
 import Testing
 
 @testable import computer_use_mcp
 
-private func lifecycleTree(
-    generation: String,
-    suffix: String = "",
-    paths: [[LocatorStep]] = [[], [LocatorStep(role: "AXTextField", indexOfRole: 0)]],
-    isPartial: Bool = false
+private func liveTestHandle(_ token: pid_t) -> AXUIElement {
+    AXUIElementCreateApplication(token)
+}
+
+private func liveTestFingerprint(role: String = "AXButton", label: String? = "Save") -> ElementFingerprint {
+    ElementFingerprint(role: role, subrole: nil, identifier: nil, stableLabel: label)
+}
+
+private func liveTestTree(
+    generation: String, handle: AXUIElement, role: String = "AXButton",
+    label: String? = "Save", value: String? = nil
 ) -> BuiltTree {
-    var elements: [SnapshotElement] = []
-    var lines: [String] = []
-    for (index, path) in paths.enumerated() {
-        let id = "e\(index)@\(generation)"
-        let role = path.last?.role ?? "AXWindow"
-        let label = index == 0 ? "Settings\(suffix)" : "Name\(suffix)"
-        let frame = index == 0 ? [0.0, 0.0, 400.0, 300.0] : [20.0, 20.0, 120.0, 24.0]
-        elements.append(SnapshotElement(id: id, role: role, label: label, path: path, frame: frame))
-        let indent = index == 0 ? "" : "\t"
-        lines.append("\(indent)\(id) \(role) \"\(label)\" (\(Int(frame[0])),\(Int(frame[1])),\(Int(frame[2])),\(Int(frame[3])))")
-    }
-    return BuiltTree(text: lines.joined(separator: "\n"), elements: elements, isPartial: isPartial)
+    let node = CapturedNode(
+        id: "e0@\(generation)", role: role, label: label,
+        fingerprint: liveTestFingerprint(role: role, label: label),
+        frame: [0, 0, 80, 24], handle: handle)
+    var line = "e0@\(generation) \(role)"
+    if let label { line += " \"\(label)\"" }
+    if let value { line += " value=\"\(value)\"" }
+    return BuiltTree(text: line, root: node, elements: [node])
 }
 
-private func captureLifecycleSnapshot(
-    pid: pid_t,
-    windowTitle: String? = "Settings",
-    windowOrigin: CGPoint = .zero,
-    scoped: Bool = false,
-    buildTree: @Sendable (String) -> BuiltTree
-) async -> (snapshot: AppSnapshot, tree: BuiltTree, unchanged: Bool, diff: TreeDiff?) {
-    let identityWindowID = (windowTitle ?? "untitled").utf8.reduce(UInt32(2_166_136_261)) {
-        ($0 ^ UInt32($1)) &* 16_777_619
-    }
-    let identity = SnapshotLineage(
+private func liveTestLineage(pid: pid_t, windowID: UInt32?) -> SnapshotLineage {
+    SnapshotLineage(
         process: SnapshotProcessIdentity(
-            pid: pid, bundleIdentifier: "com.example.lifecycle",
-            startTimeMicroseconds: 1_000_000),
-        windowID: identityWindowID)
-    return await SnapshotStore.shared.capture(
-        pid: pid,
-        bundleIdentifier: "com.example.lifecycle",
-        windowTitle: windowTitle,
-        windowID: identityWindowID,
-        windowOrigin: windowOrigin,
-        pixelsPerPoint: 2,
-        windowSize: [400, 300],
-        createdAt: Date(timeIntervalSince1970: 0),
-        lineageOverrideForTesting: identity,
-        scoped: scoped,
-        buildTree: buildTree
-    )
+            pid: pid, bundleIdentifier: "com.example.live-snapshot",
+            startTimeMicroseconds: 123),
+        windowID: windowID)
 }
 
-private func ids(in tree: BuiltTree) -> [String] {
-    tree.elements.map(\.id)
-}
+@Suite(.serialized) struct LiveSnapshotStoreTests {
+    @Test func captureIndexesNodesByIDAndHandle() async throws {
+        let pid: pid_t = 71_001
+        let handle = AXHandleKey(element: liveTestHandle(81_001))
+        let store = SnapshotStore.shared
+        await store.resetForTesting(pid: pid)
 
-@Suite struct GenerationLifecycleTests {
-    @Test func unchangedFullCaptureReturnsOnlyCommittedResolvableIDs() async throws {
-        let pid: pid_t = -10_001
-        await SnapshotStore.shared.resetForTesting(pid: pid)
-        defer { Task { await SnapshotStore.shared.resetForTesting(pid: pid) } }
-
-        let first = await captureLifecycleSnapshot(pid: pid) { lifecycleTree(generation: $0) }
-        #expect(first.unchanged == false)
-        #expect(ids(in: first.tree) == ["e0@s1", "e1@s1"])
-
-        let second = await captureLifecycleSnapshot(pid: pid) { lifecycleTree(generation: $0) }
-        #expect(second.unchanged == true)
-        #expect(second.snapshot.generation == "s1")
-        #expect(ids(in: second.tree) == ["e0@s1", "e1@s1"])
-        #expect(second.tree.text.contains("e1@s1 AXTextField"))
-        #expect(!second.tree.text.contains("e1@s2"))
-
-        for id in ids(in: second.tree) {
-            let resolved = await SnapshotStore.shared.resolveElementSnapshot(forPid: pid, elementID: id)
-            #expect(resolved?.element.id == id)
-            #expect(resolved?.isLatest == true)
+        let result = await store.capture(
+            pid: pid, bundleIdentifier: "com.example.live-snapshot", windowTitle: "Document",
+            windowID: 10, windowElement: liveTestHandle(pid),
+            windowOrigin: .zero, pixelsPerPoint: 2, windowSize: [800, 600],
+            createdAt: Date(), lineageOverrideForTesting: liveTestLineage(pid: pid, windowID: 10)
+        ) { generation in
+            liveTestTree(generation: generation, handle: handle.element)
         }
+
+        let node = try #require(result.snapshot.element(withID: result.tree.elements[0].id))
+        #expect(CFEqual(node.handle, handle.element))
+        #expect(result.snapshot.idsByHandle[handle] == node.id)
     }
 
-    @Test func unchangedStubGenerationClaimUsesSnapshotNumberingNotFreshBuildNumbering() async throws {
-        let pid: pid_t = -10_002
-        await SnapshotStore.shared.resetForTesting(pid: pid)
-        defer { Task { await SnapshotStore.shared.resetForTesting(pid: pid) } }
+    @Test func sameHandleCarriesIDAcrossCaptures() async throws {
+        let pid: pid_t = 71_002
+        let handle = AXHandleKey(element: liveTestHandle(81_002))
+        let store = SnapshotStore.shared
+        await store.resetForTesting(pid: pid)
+        let lineage = liveTestLineage(pid: pid, windowID: 11)
 
-        for suffix in 1...6 {
-            _ = await captureLifecycleSnapshot(pid: pid) { generation in
-                lifecycleTree(generation: generation, suffix: " \(suffix)")
-            }
+        let first = await store.capture(
+            pid: pid, bundleIdentifier: "com.example.live-snapshot", windowTitle: "Document",
+            windowID: 11, windowElement: liveTestHandle(pid),
+            windowOrigin: .zero, pixelsPerPoint: 2, windowSize: [800, 600],
+            createdAt: Date(), lineageOverrideForTesting: lineage
+        ) { generation in
+            liveTestTree(generation: generation, handle: handle.element, value: "before")
+        }
+        let second = await store.capture(
+            pid: pid, bundleIdentifier: "com.example.live-snapshot", windowTitle: "Document",
+            windowID: 11, windowElement: liveTestHandle(pid),
+            windowOrigin: .zero, pixelsPerPoint: 2, windowSize: [800, 600],
+            createdAt: Date(), lineageOverrideForTesting: lineage
+        ) { generation in
+            liveTestTree(generation: generation, handle: handle.element, value: "after")
         }
 
-        let carriedIDs = ["e42@s7", "e69@s7"]
-        _ = await captureLifecycleSnapshot(pid: pid) { generation in
-            var tree = lifecycleTree(generation: generation)
-            let rewritten = zip(tree.elements, carriedIDs).map { element, id in
-                SnapshotElement(id: id, role: element.role, label: element.label, path: element.path, frame: element.frame)
-            }
-            for (oldID, newID) in zip(tree.elements.map(\.id), carriedIDs) {
-                tree = BuiltTree(
-                    text: tree.text.replacingOccurrences(of: oldID, with: newID),
-                    elements: rewritten
-                )
-            }
-            return tree
-        }
-
-        let unchanged = await captureLifecycleSnapshot(pid: pid) { lifecycleTree(generation: $0) }
-        #expect(unchanged.unchanged == true)
-        #expect(unchanged.snapshot.generation == "s7")
-        #expect(ids(in: unchanged.tree) == carriedIDs)
-        #expect(unchanged.tree.text.contains("e69@s7 AXTextField"))
-        #expect(!unchanged.tree.text.contains("e1@s8"))
-
-        let idFromClaimedGeneration = "e69@s7"
-        let resolved = await SnapshotStore.shared.resolveElementSnapshot(forPid: pid, elementID: idFromClaimedGeneration)
-        #expect(resolved?.element.id == idFromClaimedGeneration)
-        #expect(resolved?.snapshot.generation == "s7")
+        #expect(second.tree.elements[0].id == first.tree.elements[0].id)
+        #expect(second.diff?.changed.count == 1)
+        #expect(second.diff?.added.isEmpty == true)
+        #expect(second.diff?.removed.isEmpty == true)
     }
 
-    @Test func changedCaptureAfterMemoryClearKeepsDiffableCanonicalBaseline() async throws {
-        let pid: pid_t = -10_012
-        await SnapshotStore.shared.resetForTesting(pid: pid)
-        defer { Task { await SnapshotStore.shared.resetForTesting(pid: pid) } }
+    @Test func recreatedHandleIsRemoveAddAndOldIDExpires() async throws {
+        let pid: pid_t = 71_003
+        let store = SnapshotStore.shared
+        await store.resetForTesting(pid: pid)
+        let lineage = liveTestLineage(pid: pid, windowID: 12)
 
-        let original = await captureLifecycleSnapshot(pid: pid) { lifecycleTree(generation: $0) }
-        #expect(ids(in: original.tree) == ["e0@s1", "e1@s1"])
-
-        await SnapshotStore.shared.clearMemoryForTesting(pid: pid)
-        let buttonPath = [LocatorStep(role: "AXButton", indexOfRole: 0)]
-        let changed = await captureLifecycleSnapshot(pid: pid) { generation in
-            lifecycleTree(
-                generation: generation,
-                paths: [[], [LocatorStep(role: "AXTextField", indexOfRole: 0)], buttonPath]
-            )
+        let first = await store.capture(
+            pid: pid, bundleIdentifier: "com.example.live-snapshot", windowTitle: "Document",
+            windowID: 12, windowElement: liveTestHandle(pid),
+            windowOrigin: .zero, pixelsPerPoint: 1, windowSize: [400, 300],
+            createdAt: Date(), lineageOverrideForTesting: lineage
+        ) { generation in
+            liveTestTree(generation: generation, handle: liveTestHandle(81_003))
+        }
+        let oldID = first.tree.elements[0].id
+        let second = await store.capture(
+            pid: pid, bundleIdentifier: "com.example.live-snapshot", windowTitle: "Document",
+            windowID: 12, windowElement: liveTestHandle(pid),
+            windowOrigin: .zero, pixelsPerPoint: 1, windowSize: [400, 300],
+            createdAt: Date(), lineageOverrideForTesting: lineage
+        ) { generation in
+            liveTestTree(generation: generation, handle: liveTestHandle(81_004))
         }
 
-        #expect(changed.unchanged == false)
-        #expect(changed.diff?.added.isEmpty == false)
-        #expect(Array(ids(in: changed.tree).prefix(2)) == ["e0@s1", "e1@s1"])
+        #expect(second.tree.elements[0].id != oldID)
+        #expect(second.diff?.added.count == 1)
+        #expect(second.diff?.removed.count == 1)
+        #expect(await store.resolveElementSnapshot(forPid: pid, elementID: oldID) == nil)
     }
 
-    @Test func newerChangedFullCaptureInvalidatesHistoricalIDs() async throws {
-        let pid: pid_t = -10_004
-        await SnapshotStore.shared.resetForTesting(pid: pid)
-        defer { Task { await SnapshotStore.shared.resetForTesting(pid: pid) } }
+    @Test func screenshotScaleChangeKeepsHandleIdentityButReturnsFullTree() async throws {
+        let pid: pid_t = 71_005
+        let handle = AXHandleKey(element: liveTestHandle(81_005))
+        let store = SnapshotStore.shared
+        await store.resetForTesting(pid: pid)
+        let lineage = liveTestLineage(pid: pid, windowID: 13)
 
-        let before = await captureLifecycleSnapshot(pid: pid) { lifecycleTree(generation: $0) }
-        let oldID = try #require(before.tree.elements.last?.id)
-        #expect(oldID == "e1@s1")
-
-        let after = await captureLifecycleSnapshot(pid: pid) { lifecycleTree(generation: $0, suffix: " changed") }
-        #expect(after.unchanged == false)
-        #expect(after.snapshot.generation == "s2")
-        #expect(after.snapshot.element(withID: oldID) == nil)
-
-        await SnapshotStore.shared.clearMemoryForTesting(pid: pid)
-        let resolved = await SnapshotStore.shared.resolveElementSnapshot(forPid: pid, elementID: oldID)
-        #expect(resolved == nil)
-    }
-
-    @Test func newerPartialCaptureDoesNotInvalidateHistoricalIDsItDidNotObserve() async throws {
-        let pid: pid_t = -10_005
-        await SnapshotStore.shared.resetForTesting(pid: pid)
-        defer { Task { await SnapshotStore.shared.resetForTesting(pid: pid) } }
-
-        let before = await captureLifecycleSnapshot(pid: pid) { lifecycleTree(generation: $0) }
-        let oldID = try #require(before.tree.elements.last?.id)
-        #expect(oldID == "e1@s1")
-
-        let partial = await captureLifecycleSnapshot(pid: pid) { generation in
-            lifecycleTree(generation: generation, suffix: " partial", paths: [[]], isPartial: true)
+        let first = await store.capture(
+            pid: pid, bundleIdentifier: "com.example.live-snapshot", windowTitle: "Document",
+            windowID: 13, windowElement: liveTestHandle(pid),
+            windowOrigin: .zero, pixelsPerPoint: 1, windowSize: [400, 300],
+            createdAt: Date(), lineageOverrideForTesting: lineage
+        ) { generation in
+            liveTestTree(generation: generation, handle: handle.element)
         }
-        #expect(partial.unchanged == false)
-        #expect(partial.snapshot.generation == "s2")
-        #expect(partial.snapshot.element(withID: oldID) == nil)
-        #expect(partial.diff == nil)
-
-        await SnapshotStore.shared.clearMemoryForTesting(pid: pid)
-        let resolved = await SnapshotStore.shared.resolveElementSnapshot(forPid: pid, elementID: oldID)
-        #expect(resolved?.element.id == oldID)
-        #expect(resolved?.snapshot.generation == "s1")
-    }
-
-    @Test func newerSameFrameTitleChangeDoesNotRemapHistoricalIDs() async throws {
-        let pid: pid_t = -10_006
-        await SnapshotStore.shared.resetForTesting(pid: pid)
-        defer { Task { await SnapshotStore.shared.resetForTesting(pid: pid) } }
-
-        let before = await captureLifecycleSnapshot(pid: pid, windowTitle: "Settings") { lifecycleTree(generation: $0) }
-        let oldID = try #require(before.tree.elements.last?.id)
-        #expect(oldID == "e1@s1")
-
-        let renamed = await captureLifecycleSnapshot(pid: pid, windowTitle: "Renamed Settings") {
-            lifecycleTree(generation: $0)
+        let second = await store.capture(
+            pid: pid, bundleIdentifier: "com.example.live-snapshot", windowTitle: "Document",
+            windowID: 13, windowElement: liveTestHandle(pid),
+            windowOrigin: .zero, pixelsPerPoint: 2, windowSize: [800, 600],
+            createdAt: Date(), lineageOverrideForTesting: lineage
+        ) { generation in
+            liveTestTree(generation: generation, handle: handle.element)
         }
-        #expect(renamed.unchanged == false)
-        #expect(renamed.snapshot.generation == "s2")
-        #expect(renamed.snapshot.element(withID: oldID) == nil)
 
-        await SnapshotStore.shared.clearMemoryForTesting(pid: pid)
-        let resolved = await SnapshotStore.shared.resolveElementSnapshot(forPid: pid, elementID: oldID)
-        #expect(resolved?.element.id == oldID)
-        #expect(resolved?.snapshot.windowTitle == "Settings")
-    }
-
-    @Test func unrelatedWindowCaptureDoesNotRemapHistoricalIDs() async throws {
-        let pid: pid_t = -10_007
-        await SnapshotStore.shared.resetForTesting(pid: pid)
-        defer { Task { await SnapshotStore.shared.resetForTesting(pid: pid) } }
-
-        let firstWindow = await captureLifecycleSnapshot(pid: pid, windowTitle: "Settings") {
-            lifecycleTree(generation: $0)
-        }
-        let idFromFirstWindow = try #require(firstWindow.tree.elements.last?.id)
-        #expect(idFromFirstWindow == "e1@s1")
-
-        let secondWindow = await captureLifecycleSnapshot(
-            pid: pid, windowTitle: "Other", windowOrigin: CGPoint(x: 100, y: 100)
-        ) { lifecycleTree(generation: $0) }
-        #expect(secondWindow.snapshot.generation == "s2")
-        #expect(secondWindow.snapshot.element(withID: idFromFirstWindow) == nil)
-
-        await SnapshotStore.shared.clearMemoryForTesting(pid: pid)
-        let resolved = await SnapshotStore.shared.resolveElementSnapshot(forPid: pid, elementID: idFromFirstWindow)
-        #expect(resolved?.element.id == idFromFirstWindow)
-        #expect(resolved?.snapshot.windowTitle == "Settings")
-    }
-
-    @Test func unchangedHistoricalWindowReusesPersistedBaselineAfterProcessMemoryClears() async throws {
-        let pid: pid_t = -10_010
-        await SnapshotStore.shared.resetForTesting(pid: pid)
-        defer { Task { await SnapshotStore.shared.resetForTesting(pid: pid) } }
-
-        let firstWindow = await captureLifecycleSnapshot(pid: pid, windowTitle: "Window A") {
-            lifecycleTree(generation: $0)
-        }
-        #expect(ids(in: firstWindow.tree) == ["e0@s1", "e1@s1"])
-
-        let secondWindow = await captureLifecycleSnapshot(
-            pid: pid, windowTitle: "Window B", windowOrigin: CGPoint(x: 50, y: 50)
-        ) { lifecycleTree(generation: $0) }
-        #expect(secondWindow.snapshot.generation == "s2")
-
-        await SnapshotStore.shared.clearMemoryForTesting(pid: pid)
-        let unchangedFirstWindow = await captureLifecycleSnapshot(pid: pid, windowTitle: "Window A") {
-            lifecycleTree(generation: $0)
-        }
-        #expect(unchangedFirstWindow.unchanged == true)
-        #expect(unchangedFirstWindow.snapshot.generation == "s1")
-        #expect(ids(in: unchangedFirstWindow.tree) == ["e0@s1", "e1@s1"])
-
-        await SnapshotStore.shared.clearMemoryForTesting(pid: pid)
-        let canonical = await SnapshotStore.shared.load(forPid: pid)
-        #expect(canonical?.generation == "s1")
-        #expect(canonical?.windowTitle == "Window A")
-    }
-
-    @Test func fullCaptureReusesCompleteBaselineAfterInterveningPartialSnapshot() async throws {
-        let pid: pid_t = -10_011
-        await SnapshotStore.shared.resetForTesting(pid: pid)
-        defer { Task { await SnapshotStore.shared.resetForTesting(pid: pid) } }
-
-        let full = await captureLifecycleSnapshot(pid: pid) { lifecycleTree(generation: $0) }
-        #expect(ids(in: full.tree) == ["e0@s1", "e1@s1"])
-
-        let partial = await captureLifecycleSnapshot(pid: pid) { generation in
-            lifecycleTree(generation: generation, paths: [[]], isPartial: true)
-        }
-        #expect(partial.unchanged == false)
-        #expect(partial.snapshot.generation == "s2")
-
-        let unchangedFull = await captureLifecycleSnapshot(pid: pid) { lifecycleTree(generation: $0) }
-        #expect(unchangedFull.unchanged == true)
-        #expect(unchangedFull.snapshot.generation == "s1")
-        #expect(ids(in: unchangedFull.tree) == ["e0@s1", "e1@s1"])
-    }
-
-    @Test func unchangedPartialCaptureDoesNotReusePotentiallyWindowedIDs() async throws {
-        let pid: pid_t = -10_008
-        await SnapshotStore.shared.resetForTesting(pid: pid)
-        defer { Task { await SnapshotStore.shared.resetForTesting(pid: pid) } }
-
-        let first = await captureLifecycleSnapshot(pid: pid) { generation in
-            lifecycleTree(generation: generation, paths: [[]], isPartial: true)
-        }
-        #expect(first.unchanged == false)
-        #expect(ids(in: first.tree) == ["e0@s1"])
-
-        let second = await captureLifecycleSnapshot(pid: pid) { generation in
-            lifecycleTree(generation: generation, paths: [[]], isPartial: true)
-        }
+        #expect(second.tree.elements[0].id == first.tree.elements[0].id)
+        #expect(second.diff == nil)
         #expect(second.unchanged == false)
-        #expect(second.snapshot.generation == "s2")
-        #expect(ids(in: second.tree) == ["e0@s2"])
     }
 
-    @Test func historicalResolutionKeepsCallerIDWhenRemappedThroughPartialSamePath() async throws {
-        let pid: pid_t = -10_013
-        await SnapshotStore.shared.resetForTesting(pid: pid)
-        defer { Task { await SnapshotStore.shared.resetForTesting(pid: pid) } }
+    @Test func partialCaptureRetainsUnobservedLiveIDsForLaterValidation() async throws {
+        let pid: pid_t = 71_007
+        let store = SnapshotStore.shared
+        await store.resetForTesting(pid: pid)
+        let lineage = liveTestLineage(pid: pid, windowID: 14)
+        let window = AXHandleKey(element: liveTestHandle(91_008))
+        let save = AXHandleKey(element: liveTestHandle(82_008))
+        let cancel = AXHandleKey(element: liveTestHandle(82_009))
 
-        let scopedPath = [LocatorStep(role: "AXTextField", indexOfRole: 0)]
-        let scoped = await captureLifecycleSnapshot(pid: pid, scoped: true) { generation in
-            lifecycleTree(generation: generation, paths: [scopedPath])
+        func tree(_ generation: String, includeCancel: Bool, coverage: SnapshotCoverage) -> BuiltTree {
+            let saveNode = CapturedNode(
+                id: "e0@\(generation)", role: "AXButton", label: "Save",
+                fingerprint: liveTestFingerprint(label: "Save"), frame: [0, 0, 80, 24],
+                handle: save.element)
+            var nodes = [saveNode]
+            if includeCancel {
+                nodes.append(CapturedNode(
+                    id: "e1@\(generation)", role: "AXButton", label: "Cancel",
+                    fingerprint: liveTestFingerprint(label: "Cancel"), frame: [90, 0, 80, 24],
+                    handle: cancel.element))
+            }
+            return BuiltTree(
+                text: nodes.map { "\($0.id) \($0.role) \"\($0.label!)\"" }.joined(separator: "\n"),
+                root: saveNode, elements: nodes, coverage: coverage)
         }
-        let oldID = try #require(scoped.tree.elements.first?.id)
-        #expect(oldID == "e0@s1")
 
-        let partialScoped = await captureLifecycleSnapshot(pid: pid, scoped: true) { generation in
-            lifecycleTree(generation: generation, paths: [scopedPath], isPartial: true)
-        }
-        #expect(partialScoped.snapshot.generation == "s2")
-        #expect(partialScoped.snapshot.element(withID: oldID) == nil)
+        let first = await store.capture(
+            pid: pid, bundleIdentifier: "com.example.live-snapshot", windowTitle: "Document",
+            windowID: 14, windowElement: window.element,
+            windowOrigin: .zero, pixelsPerPoint: 1, windowSize: [400, 300],
+            createdAt: Date(), lineageOverrideForTesting: lineage
+        ) { generation in tree(generation, includeCancel: true, coverage: .complete) }
+        let cancelID = first.tree.elements[1].id
 
-        await SnapshotStore.shared.clearMemoryForTesting(pid: pid)
-        let resolved = await SnapshotStore.shared.resolveElementSnapshot(forPid: pid, elementID: oldID)
-        #expect(resolved?.snapshot.generation == "s2")
-        #expect(resolved?.element.id == oldID)
+        _ = await store.capture(
+            pid: pid, bundleIdentifier: "com.example.live-snapshot", windowTitle: "Document",
+            windowID: 14, windowElement: window.element,
+            windowOrigin: .zero, pixelsPerPoint: 1, windowSize: [400, 300],
+            createdAt: Date(), lineageOverrideForTesting: lineage
+        ) { generation in tree(generation, includeCancel: false, coverage: .partial) }
+        #expect(await store.resolveElementSnapshot(forPid: pid, elementID: cancelID) != nil)
+
+        let completeAgain = await store.capture(
+            pid: pid, bundleIdentifier: "com.example.live-snapshot", windowTitle: "Document",
+            windowID: 14, windowElement: window.element,
+            windowOrigin: .zero, pixelsPerPoint: 1, windowSize: [400, 300],
+            createdAt: Date(), lineageOverrideForTesting: lineage
+        ) { generation in tree(generation, includeCancel: true, coverage: .complete) }
+        #expect(completeAgain.tree.elements[1].id == cancelID)
     }
 
-    @Test func newerFullCaptureInvalidatesHistoricalScopedIDsItObservesChanged() async throws {
-        let pid: pid_t = -10_009
-        await SnapshotStore.shared.resetForTesting(pid: pid)
-        defer { Task { await SnapshotStore.shared.resetForTesting(pid: pid) } }
+    @Test func processWindowPairsKeepIndependentCurrentSnapshots() async throws {
+        let pid: pid_t = 71_004
+        let store = SnapshotStore.shared
+        await store.resetForTesting(pid: pid)
 
-        let scopedPath = [LocatorStep(role: "AXTextField", indexOfRole: 0)]
-        let scoped = await captureLifecycleSnapshot(pid: pid, scoped: true) { generation in
-            lifecycleTree(generation: generation, paths: [scopedPath])
+        let first = await store.capture(
+            pid: pid, bundleIdentifier: "com.example.live-snapshot", windowTitle: "One",
+            windowID: 20, windowElement: liveTestHandle(91_001),
+            windowOrigin: .zero, pixelsPerPoint: 1, windowSize: [100, 100],
+            createdAt: Date(), lineageOverrideForTesting: liveTestLineage(pid: pid, windowID: 20)
+        ) { generation in
+            liveTestTree(generation: generation, handle: liveTestHandle(82_001), label: "One")
         }
-        let scopedID = try #require(scoped.tree.elements.first?.id)
-        #expect(scopedID == "e0@s1")
+        let second = await store.capture(
+            pid: pid, bundleIdentifier: "com.example.live-snapshot", windowTitle: "Two",
+            windowID: 21, windowElement: liveTestHandle(91_002),
+            windowOrigin: .zero, pixelsPerPoint: 1, windowSize: [100, 100],
+            createdAt: Date(), lineageOverrideForTesting: liveTestLineage(pid: pid, windowID: 21)
+        ) { generation in
+            liveTestTree(generation: generation, handle: liveTestHandle(82_002), label: "Two")
+        }
 
-        let full = await captureLifecycleSnapshot(pid: pid) { lifecycleTree(generation: $0, suffix: " changed") }
-        #expect(full.snapshot.generation == "s2")
-        #expect(full.snapshot.element(withID: scopedID) == nil)
-
-        await SnapshotStore.shared.clearMemoryForTesting(pid: pid)
-        let resolved = await SnapshotStore.shared.resolveElementSnapshot(forPid: pid, elementID: scopedID)
-        #expect(resolved == nil)
+        #expect(await store.load(forPid: pid)?.generation == second.snapshot.generation)
+        #expect(await store.resolveElementSnapshot(
+            forPid: pid, elementID: first.tree.elements[0].id) != nil)
     }
 
-    @Test func interleavedScopedCaptureDoesNotInvalidateIDsReturnedToAnotherSession() async throws {
-        let pid: pid_t = -10_003
-        await SnapshotStore.shared.resetForTesting(pid: pid)
-        defer { Task { await SnapshotStore.shared.resetForTesting(pid: pid) } }
+    @Test func windowsWithoutCGIDsUseTheirExactWindowHandlesAsKeys() async throws {
+        let pid: pid_t = 71_006
+        let store = SnapshotStore.shared
+        await store.resetForTesting(pid: pid)
+        let lineage = liveTestLineage(pid: pid, windowID: nil)
 
-        let sessionA = await captureLifecycleSnapshot(pid: pid) { lifecycleTree(generation: $0) }
-        let idReturnedToSessionA = try #require(sessionA.tree.elements.last?.id)
-        #expect(idReturnedToSessionA == "e1@s1")
-
-        let scopedPath = [LocatorStep(role: "AXTextField", indexOfRole: 0)]
-        let sessionB = await captureLifecycleSnapshot(pid: pid, scoped: true) { generation in
-            lifecycleTree(generation: generation, paths: [scopedPath])
+        let first = await store.capture(
+            pid: pid, bundleIdentifier: "com.example.live-snapshot", windowTitle: "One",
+            windowID: nil, windowElement: liveTestHandle(91_006),
+            windowOrigin: .zero, pixelsPerPoint: 1, windowSize: [100, 100],
+            createdAt: Date(), lineageOverrideForTesting: lineage
+        ) { generation in
+            liveTestTree(generation: generation, handle: liveTestHandle(82_006), label: "One")
         }
-        #expect(sessionB.unchanged == false)
-        #expect(sessionB.snapshot.generation == "s2")
-        #expect(sessionB.snapshot.element(withID: idReturnedToSessionA) == nil)
+        let second = await store.capture(
+            pid: pid, bundleIdentifier: "com.example.live-snapshot", windowTitle: "Two",
+            windowID: nil, windowElement: liveTestHandle(91_007),
+            windowOrigin: .zero, pixelsPerPoint: 1, windowSize: [100, 100],
+            createdAt: Date(), lineageOverrideForTesting: lineage
+        ) { generation in
+            liveTestTree(generation: generation, handle: liveTestHandle(82_007), label: "Two")
+        }
 
-        let resolved = await SnapshotStore.shared.resolveElementSnapshot(forPid: pid, elementID: idReturnedToSessionA)
-        #expect(resolved?.element.id == idReturnedToSessionA)
-        #expect(resolved?.snapshot.generation == "s1")
-        #expect(resolved?.isLatest == false)
-
-        await SnapshotStore.shared.clearMemoryForTesting(pid: pid)
-        let crossProcessResolved = await SnapshotStore.shared.resolveElementSnapshot(forPid: pid, elementID: idReturnedToSessionA)
-        #expect(crossProcessResolved?.element.id == idReturnedToSessionA)
-        #expect(crossProcessResolved?.snapshot.generation == "s1")
-        #expect(crossProcessResolved?.isLatest == false)
+        #expect(await store.load(forPid: pid)?.generation == second.snapshot.generation)
+        #expect(await store.resolveElementSnapshot(
+            forPid: pid, elementID: first.tree.elements[0].id) != nil)
     }
 }
