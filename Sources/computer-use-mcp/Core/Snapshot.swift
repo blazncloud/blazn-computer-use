@@ -245,7 +245,6 @@ actor SnapshotStore {
         {
             let committedTree = Self.committedTree(from: previous, matching: tree)
             var committedSnapshot = previous
-            committedSnapshot.elements = committedTree.elements
             if committedSnapshot.treeText == nil {
                 committedSnapshot.treeText = committedTree.text
             }
@@ -500,7 +499,7 @@ actor SnapshotStore {
                 guard snapshotElementsMatchIdentity(samePath, expected) else { return nil }
                 let stableIDElement = SnapshotElement(
                     id: expected.id, role: samePath.role, label: samePath.label,
-                    fingerprint: samePath.fingerprint,
+                    fingerprint: expected.fingerprint,
                     path: samePath.path, frame: samePath.frame)
                 current = (newer, stableIDElement)
                 continue
@@ -542,30 +541,19 @@ actor SnapshotStore {
     }
 
     private static func committedTree(from snapshot: AppSnapshot, matching freshTree: BuiltTree) -> BuiltTree {
-        let committedElements: [SnapshotElement]
-        if snapshot.elements.count == freshTree.elements.count {
-            committedElements = zip(snapshot.elements, freshTree.elements).map { previous, fresh in
-                SnapshotElement(
-                    id: previous.id, role: fresh.role, label: fresh.label,
-                    fingerprint: fresh.fingerprint ?? previous.fingerprint,
-                    path: fresh.path, frame: fresh.frame)
-            }
-        } else {
-            committedElements = snapshot.elements
-        }
         guard let text = snapshot.treeText else {
             var lines = freshTree.text.components(separatedBy: "\n")
-            for index in freshTree.elements.indices where index < committedElements.count && index < lines.count {
+            for index in freshTree.elements.indices where index < snapshot.elements.count && index < lines.count {
                 lines[index] = lines[index].replacingOccurrences(
-                    of: freshTree.elements[index].id, with: committedElements[index].id)
+                    of: freshTree.elements[index].id, with: snapshot.elements[index].id)
             }
             return BuiltTree(
-                text: lines.joined(separator: "\n"), elements: committedElements,
+                text: lines.joined(separator: "\n"), elements: snapshot.elements,
                 coverage: snapshot.effectiveCoverage,
                 elementsVisited: freshTree.elementsVisited)
         }
         return BuiltTree(
-            text: text, elements: committedElements,
+            text: text, elements: snapshot.elements,
             coverage: snapshot.effectiveCoverage,
             elementsVisited: freshTree.elementsVisited)
     }
@@ -696,7 +684,7 @@ func stabilizeTree(_ tree: BuiltTree, against previous: AppSnapshot) -> (tree: B
             newLines[index] = newLines[index].replacingOccurrences(of: element.id, with: prior.element.id)
             elements[index] = SnapshotElement(
                 id: prior.element.id, role: element.role, label: element.label,
-                fingerprint: element.fingerprint,
+                fingerprint: prior.element.fingerprint,
                 path: element.path, frame: element.frame
             )
             if prior.line != newLines[index] {
@@ -730,7 +718,7 @@ func resolveElement(
         guard let fingerprint = element.fingerprint, fingerprint.hasIdentityEvidence else {
             throw ToolError.failed(
                 "Element \(element.id) cannot be safely used for mutation because it has no "
-                    + "AXIdentifier. Element-id mutation is unavailable "
+                    + "AXIdentifier or meaningful stable label. Element-id mutation is unavailable "
                     + "for this control; choose a better-identified target."
             )
         }
@@ -792,7 +780,8 @@ extension ElementFingerprintValidation {
     fileprivate var description: String {
         switch self {
         case .match: return "matched"
-        case .insufficientEvidence: return "the captured fingerprint had no AXIdentifier"
+        case .insufficientEvidence:
+            return "the captured fingerprint had no AXIdentifier or meaningful stable label"
         case .mismatch(let reason): return reason
         }
     }

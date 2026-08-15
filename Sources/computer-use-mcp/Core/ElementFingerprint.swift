@@ -10,8 +10,13 @@ struct ElementFingerprint: Codable, Equatable, Sendable {
     let identifier: String?
     let stableLabel: String?
 
-    var hasIdentityEvidence: Bool {
+    var hasIdentifierEvidence: Bool {
         identifier?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
+    var hasIdentityEvidence: Bool {
+        hasIdentifierEvidence
+            || stableLabel?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 }
 
@@ -43,7 +48,10 @@ func validateElementFingerprint(
         return .mismatch(
             "AXIdentifier changed from \(identifier) to \(live.identifier ?? "none")")
     }
-    if comparePresentationEvidence,
+    // A matching identifier lets post-delivery verification tolerate a label
+    // changed by the action itself. Label-only targets must keep their label;
+    // otherwise no identity evidence would remain.
+    if (comparePresentationEvidence || !expected.hasIdentifierEvidence),
         let label = expected.stableLabel, live.stableLabel != label
     {
         return .mismatch(
@@ -52,8 +60,8 @@ func validateElementFingerprint(
     return .match
 }
 
-/// Conservative comparison evidence. Labels and subroles can detect drift but
-/// are not unique enough to authorize mutation without AXIdentifier.
+/// Conservative identity/comparison evidence. Generic containers and mutable
+/// text contents are excluded; repeated identical labels remain ambiguous.
 func stableIdentityLabel(
     role: String, title: String?, description: String?, associatedTitle: String? = nil
 ) -> String? {

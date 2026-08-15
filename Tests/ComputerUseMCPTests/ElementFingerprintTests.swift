@@ -89,17 +89,24 @@ private func fingerprintTree(
             expected: expected, live: changed,
             requireIdentityEvidence: true,
             comparePresentationEvidence: false) == .match)
+
+        let labelOnly = ElementFingerprint(
+            role: "AXButton", subrole: nil, identifier: nil, stableLabel: "Play")
+        let changedLabelOnly = ElementFingerprint(
+            role: "AXButton", subrole: nil, identifier: nil, stableLabel: "Pause")
+        #expect(validateElementFingerprint(
+            expected: labelOnly, live: changedLabelOnly,
+            requireIdentityEvidence: true,
+            comparePresentationEvidence: false) != .match)
     }
 
-    @Test func identifierIsRequiredToAuthorizeMutation() {
+    @Test func identifierOrStableLabelCanAuthorizeMutationButSubroleCannot() {
         let weakFingerprints = [
             ElementFingerprint(
                 role: "AXButton", subrole: nil, identifier: nil, stableLabel: nil),
             ElementFingerprint(
                 role: "AXButton", subrole: "AXDefaultButton", identifier: nil,
                 stableLabel: nil),
-            ElementFingerprint(
-                role: "AXButton", subrole: nil, identifier: nil, stableLabel: "Delete"),
         ]
 
         for weak in weakFingerprints {
@@ -110,6 +117,12 @@ private func fingerprintTree(
                 expected: weak, live: weak,
                 requireIdentityEvidence: false) == .match)
         }
+
+        let labeled = ElementFingerprint(
+            role: "AXButton", subrole: nil, identifier: nil, stableLabel: "Delete")
+        #expect(validateElementFingerprint(
+            expected: labeled, live: labeled,
+            requireIdentityEvidence: true) == .match)
     }
 
     @Test func stableLabelPolicyExcludesMutableTextAndGenericGroups() {
@@ -266,6 +279,43 @@ private func fingerprintTree(
         await SnapshotStore.shared.clearMemoryForTesting(pid: pid)
         let reloaded = try #require(await SnapshotStore.shared.load(forPid: pid))
         #expect(reloaded.elements[1].fingerprint?.identifier == "save-button")
+    }
+
+    @Test func existingLabelOnlyIDDoesNotSilentlyAcquireIdentifier() async {
+        let pid: pid_t = -32_075
+        await SnapshotStore.shared.resetForTesting(pid: pid)
+        defer { Task { await SnapshotStore.shared.resetForTesting(pid: pid) } }
+        let lineage = SnapshotLineage(
+            process: SnapshotProcessIdentity(
+                pid: pid, bundleIdentifier: "com.example.fingerprint",
+                startTimeMicroseconds: 5_000_004),
+            windowID: 85)
+        let labelOnly = fingerprint(identifier: nil, label: "Save")
+
+        let first = await SnapshotStore.shared.capture(
+            pid: pid, bundleIdentifier: "com.example.fingerprint", windowTitle: "Document",
+            windowID: 85, windowOrigin: .zero, pixelsPerPoint: 1,
+            windowSize: [400, 300], createdAt: Date(timeIntervalSince1970: 1),
+            lineageOverrideForTesting: lineage
+        ) { generation in
+            fingerprintTree(generation: generation, buttonFingerprint: labelOnly)
+        }
+        let originalID = first.snapshot.elements[1].id
+
+        let second = await SnapshotStore.shared.capture(
+            pid: pid, bundleIdentifier: "com.example.fingerprint", windowTitle: "Document",
+            windowID: 85, windowOrigin: .zero, pixelsPerPoint: 1,
+            windowSize: [400, 300], createdAt: Date(timeIntervalSince1970: 2),
+            lineageOverrideForTesting: lineage
+        ) { generation in
+            fingerprintTree(
+                generation: generation,
+                buttonFingerprint: fingerprint(identifier: "save-button", label: "Save"))
+        }
+
+        #expect(second.unchanged)
+        #expect(second.snapshot.elements[1].id == originalID)
+        #expect(second.snapshot.elements[1].fingerprint == labelOnly)
     }
 
     @Test func historicalLegacyIDCannotInheritLaterFingerprint() async {
