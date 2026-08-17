@@ -19,15 +19,13 @@ import Testing
         let response = DaemonResponse(
             id: 1, sessionID: UUID().uuidString, resumeToken: "resume",
             operationID: operationID, cancellationDisposition: "cancellation_requested",
-            daemonIncarnationID: "daemon-a",
-            operationDeduplicationSupported: true)
+            daemonIncarnationID: "daemon-a")
         let decodedResponse = try JSONDecoder().decode(
             DaemonResponse.self, from: JSONEncoder().encode(response))
         #expect(decodedResponse.sessionID == response.sessionID)
         #expect(decodedResponse.resumeToken == "resume")
         #expect(decodedResponse.operationID == operationID)
         #expect(decodedResponse.daemonIncarnationID == "daemon-a")
-        #expect(decodedResponse.operationDeduplicationSupported == true)
         #expect(decodedResponse.cancellationDisposition == "cancellation_requested")
     }
 
@@ -42,19 +40,13 @@ import Testing
             originalIncarnationID: nil, currentIncarnationID: nil, connectionChanged: false))
     }
 
-    @Test func legacyDaemonNeverRetriesMutationButReadOnlyMayRetry() {
+    @Test func mutationRetryRequiresDaemonIncarnationButReadOnlyDoesNot() {
         #expect(!daemonRetryPermitted(
-            isMutating: true, deduplicationSupported: false,
-            daemonIncarnationID: nil))
-        #expect(!daemonRetryPermitted(
-            isMutating: true, deduplicationSupported: true,
-            daemonIncarnationID: nil))
+            isMutating: true, daemonIncarnationID: nil))
         #expect(daemonRetryPermitted(
-            isMutating: true, deduplicationSupported: true,
-            daemonIncarnationID: "current"))
+            isMutating: true, daemonIncarnationID: "current"))
         #expect(daemonRetryPermitted(
-            isMutating: false, deduplicationSupported: false,
-            daemonIncarnationID: nil))
+            isMutating: false, daemonIncarnationID: nil))
     }
 
     @Test func helloResumeTokenRestoresLogicalSession() {

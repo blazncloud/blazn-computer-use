@@ -104,9 +104,6 @@ struct DaemonResponse: Codable, Sendable {
     var cancellationDisposition: String? = nil
     /// Changes on every daemon process start; retries must not cross it.
     var daemonIncarnationID: String? = nil
-    /// True only when this daemon supports operation-id fingerprinting,
-    /// in-flight deduplication, and completed-result replay.
-    var operationDeduplicationSupported: Bool? = nil
 }
 
 /// Whether a shim should keep this daemon ("newest build wins"). Same semantic
@@ -115,11 +112,13 @@ func daemonHandshakeAccepts(
     replyVersion: String?,
     replyAuthenticated: Bool?,
     replyBuildStamp: Double?,
+    replyDaemonIncarnationID: String?,
     localVersion: String,
     localBuildStamp: Double
 ) -> Bool {
     replyVersion == localVersion
         && replyAuthenticated == true
+        && replyDaemonIncarnationID?.isEmpty == false
         && (replyBuildStamp ?? 0) >= localBuildStamp
 }
 

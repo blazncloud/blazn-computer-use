@@ -30,11 +30,13 @@ import Testing
         #expect(
             daemonHandshakeAccepts(
                 replyVersion: "0.2.0", replyAuthenticated: true, replyBuildStamp: 100,
+                replyDaemonIncarnationID: "daemon-a",
                 localVersion: "0.2.0", localBuildStamp: 100
             ))
         #expect(
             daemonHandshakeAccepts(
                 replyVersion: "0.2.0", replyAuthenticated: true, replyBuildStamp: 200,
+                replyDaemonIncarnationID: "daemon-a",
                 localVersion: "0.2.0", localBuildStamp: 100
             ))
     }
@@ -44,12 +46,14 @@ import Testing
         #expect(
             !daemonHandshakeAccepts(
                 replyVersion: "0.2.0", replyAuthenticated: true, replyBuildStamp: 50,
+                replyDaemonIncarnationID: "daemon-a",
                 localVersion: "0.2.0", localBuildStamp: 100
             ))
         // Pre-buildStamp daemons report nothing: retire once, then converge.
         #expect(
             !daemonHandshakeAccepts(
                 replyVersion: "0.2.0", replyAuthenticated: true, replyBuildStamp: nil,
+                replyDaemonIncarnationID: "daemon-a",
                 localVersion: "0.2.0", localBuildStamp: 100
             ))
     }
@@ -58,11 +62,22 @@ import Testing
         #expect(
             !daemonHandshakeAccepts(
                 replyVersion: "0.1.0", replyAuthenticated: true, replyBuildStamp: 100,
+                replyDaemonIncarnationID: "daemon-a",
                 localVersion: "0.2.0", localBuildStamp: 100
             ))
         #expect(
             !daemonHandshakeAccepts(
                 replyVersion: "0.2.0", replyAuthenticated: nil, replyBuildStamp: 100,
+                replyDaemonIncarnationID: "daemon-a",
+                localVersion: "0.2.0", localBuildStamp: 100
+            ))
+    }
+
+    @Test func handshakeRejectsDaemonWithoutIncarnationIdentity() {
+        #expect(
+            !daemonHandshakeAccepts(
+                replyVersion: "0.2.0", replyAuthenticated: true, replyBuildStamp: 100,
+                replyDaemonIncarnationID: nil,
                 localVersion: "0.2.0", localBuildStamp: 100
             ))
     }

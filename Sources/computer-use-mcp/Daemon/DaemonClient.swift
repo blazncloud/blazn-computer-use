@@ -16,7 +16,6 @@ actor DaemonClient {
     private var pendingTimeouts: [Int: Task<Void, Never>] = [:]
     private var resumeToken: String?
     private var daemonIncarnationID: String?
-    private var operationDeduplicationSupported = false
     private var connectionGeneration = 0
     /// Keeps a spawned daemon Process alive so Foundation reaps it on exit.
     private var spawnedDaemon: Process?
@@ -26,7 +25,6 @@ actor DaemonClient {
         try await ensureConnected()
         let originalIncarnationID = daemonIncarnationID
         let originalConnectionGeneration = connectionGeneration
-        let deduplicationWasNegotiated = operationDeduplicationSupported
         let mutation = isMutatingTool(tool)
         do {
             return try await sendOperation(
@@ -37,7 +35,6 @@ actor DaemonClient {
         } catch {
             guard daemonRetryPermitted(
                 isMutating: mutation,
-                deduplicationSupported: deduplicationWasNegotiated,
                 daemonIncarnationID: originalIncarnationID)
             else {
                 if mutation { throw unknownMutationResultError("daemon transport failure: \(error)") }
@@ -45,8 +42,8 @@ actor DaemonClient {
             }
         }
 
-        // One bounded retry. Read-only calls remain safe against legacy
-        // daemons; mutations require a negotiated dedupe capability.
+        // One bounded retry. Mutations reuse the operation id and must remain
+        // on the same daemon incarnation, where deduplication is guaranteed.
         do {
             try await ensureConnected()
         } catch {
@@ -137,13 +134,11 @@ actor DaemonClient {
         if daemonHandshakeAccepts(
             replyVersion: reply.version, replyAuthenticated: reply.authenticated,
             replyBuildStamp: reply.buildStamp,
+            replyDaemonIncarnationID: reply.daemonIncarnationID,
             localVersion: version, localBuildStamp: executableBuildStamp
         ) {
             resumeToken = reply.resumeToken ?? resumeToken
             daemonIncarnationID = reply.daemonIncarnationID
-            operationDeduplicationSupported =
-                reply.operationDeduplicationSupported == true
-                && reply.daemonIncarnationID != nil
             return true
         }
         guard let replyVersion = reply.version else {
@@ -348,7 +343,7 @@ func daemonRetryAllowed(
 }
 
 func daemonRetryPermitted(
-    isMutating: Bool, deduplicationSupported: Bool, daemonIncarnationID: String?
+    isMutating: Bool, daemonIncarnationID: String?
 ) -> Bool {
-    !isMutating || (deduplicationSupported && daemonIncarnationID != nil)
+    !isMutating || daemonIncarnationID != nil
 }

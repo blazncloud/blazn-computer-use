@@ -370,8 +370,7 @@ private func handle(
             DaemonResponse(
                 id: request.id, version: version, authenticated: true,
                 buildStamp: executableBuildStamp, sessionID: session.id.uuidString,
-                resumeToken: session.resumeToken, daemonIncarnationID: daemonIncarnationID,
-                operationDeduplicationSupported: true
+                resumeToken: session.resumeToken, daemonIncarnationID: daemonIncarnationID
             ))
         return .keepOpen
     case "cancel":
