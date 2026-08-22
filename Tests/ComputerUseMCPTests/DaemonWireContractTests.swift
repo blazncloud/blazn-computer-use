@@ -253,7 +253,11 @@ private final class DaemonWireFixture: @unchecked Sendable {
         guard socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets) == 0 else {
             throw WireFixtureError.systemCall("socketpair", errno)
         }
-        var timeout = timeval(tv_sec: 2, tv_usec: 0)
+        // Hosted arm64 runners can pause a test thread for more than two
+        // seconds while the async coordination task is runnable. Keep a
+        // bounded socket deadline without misclassifying scheduler delay as a
+        // closed daemon connection.
+        var timeout = timeval(tv_sec: 10, tv_usec: 0)
         guard setsockopt(
             sockets[0], SOL_SOCKET, SO_RCVTIMEO, &timeout,
             socklen_t(MemoryLayout<timeval>.size)) == 0
