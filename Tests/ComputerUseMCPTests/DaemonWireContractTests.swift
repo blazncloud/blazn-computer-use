@@ -689,9 +689,12 @@ private func readJSONLine(from fd: Int32) -> Data? {
 private func waitUntilWire(
     _ predicate: @escaping @Sendable () async -> Bool
 ) async {
-    for _ in 0..<2_000 {
+    // Polling with millisecond sleeps can consume the socket's entire bounded
+    // receive deadline on a throttled hosted runner before the handler task is
+    // scheduled. Yield directly to the coordination actors instead.
+    for _ in 0..<10_000 {
         if await predicate() { return }
-        try? await Task.sleep(for: .milliseconds(1))
+        await Task.yield()
     }
     Issue.record("wire fixture condition was not reached")
 }
