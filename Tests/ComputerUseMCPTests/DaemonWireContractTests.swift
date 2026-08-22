@@ -61,7 +61,14 @@ import Testing
         #expect(!fixture.traceContains("finished:first"))
 
         await fixture.openGate("first")
-        #expect(responseText(try await first.value) == "first")
+        let firstResponse: DaemonResponse
+        do {
+            firstResponse = try await first.value
+        } catch {
+            Issue.record("first held response failed; trace=\(fixture.traceValues())")
+            throw error
+        }
+        #expect(responseText(firstResponse) == "first")
         #expect(responseText(try await second.value) == "second")
         #expect(
             fixture.traceIndex("started:first")
@@ -146,7 +153,14 @@ import Testing
                 cancelOperationID: queuedID.uuidString))
         #expect(responseText(cancelQueued) == "cancelled")
         #expect(cancelQueued.cancellationDisposition == "cancelled")
-        #expect(responseText(try await queued.value) == "cancelled")
+        let queuedResponse: DaemonResponse
+        do {
+            queuedResponse = try await queued.value
+        } catch {
+            Issue.record("queued cancellation response failed; trace=\(fixture.traceValues())")
+            throw error
+        }
+        #expect(responseText(queuedResponse) == "cancelled")
         #expect(!fixture.traceContains("started:queued"))
 
         let cancelRunning = try await controlClient.exchange(
@@ -335,6 +349,10 @@ private final class DaemonWireFixture: @unchecked Sendable {
 
     func traceIndex(_ value: String) -> Int {
         state.traceIndex(value)
+    }
+
+    func traceValues() -> [String] {
+        state.traceValues()
     }
 
     func waitForTrace(_ value: String) async {
@@ -595,6 +613,12 @@ private final class LockedWireFixtureState: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return trace.firstIndex(of: value) ?? .max
+    }
+
+    func traceValues() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return trace
     }
 
     func recordDisconnected(_ sessionID: String) {
