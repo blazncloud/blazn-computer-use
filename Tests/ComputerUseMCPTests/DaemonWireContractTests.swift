@@ -276,7 +276,12 @@ private final class DaemonWireFixture: @unchecked Sendable {
                     DaemonRequest.self, from: line)
                 else { continue }
                 handlerGroup.enter()
-                Task { [self] in
+                // The wire fixture is entered from a blocking POSIX reader
+                // thread. Use an explicit detached task so held requests on
+                // one connection cannot inherit and monopolize the test
+                // runner's serial executor while another connection must
+                // deliver a cancel, busy response, or gate release.
+                Task.detached { [self] in
                     defer { handlerGroup.leave() }
                     let response = await handle(
                         request, connection: connection)
