@@ -32,7 +32,17 @@ jobs:
         # GUI-dependent paths (AX, ScreenCaptureKit, overlay) need a logged-in
         # desktop session and TCC grants, so hosted CI stays on the pure,
         # non-mutating path.
-        run: python3 scripts/preflight.py
+        run: python3 qualification/run_m0.py
+
+      - name: Build release app bundle
+        run: python3 scripts/build_app_bundle.py --configuration release
+
+      - name: Upload M0 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m0-qualification-${{ github.sha }}
+          path: artifacts/m0/${{ github.sha }}/
 
   # Non-blocking style check: does not gate build-and-test. Prefer the
   # toolchain-bundled `swift format lint` over adding a SwiftLint dependency.

@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "project": "blazncloud/blazn-computer-use",
+  "upstreamCommit": "82dd8093e44819c51537f489059e172777d7f1d7",
+  "capturedAt": "2026-08-22T12:17:11Z",
+  "unitTests": {
+    "passed": 476,
+    "failed": 0
+  },
+  "mcp": {
+    "protocolVersion": "2025-11-25",
+    "startupMs": 35.888,
+    "toolCount": 17,
+    "toolSchemaBytes": 23893,
+    "stdoutNoise": []
+  },
+  "backgroundTrials": [
+    {
+      "id": "normal-home-2",
+      "durationMs": 3595.778,
+      "passed": true,
+      "effectObserved": true,
+      "frontmostUnchanged": true
+    },
+    {
+      "id": "normal-home-3b",
+      "durationMs": 3917.238,
+      "passed": true,
+      "effectObserved": true,
+      "frontmostUnchanged": true
+    },
+    {
+      "id": "normal-home-4",
+      "durationMs": 3640.825,
+      "passed": true,
+      "effectObserved": true,
+      "frontmostUnchanged": true
+    }
+  ],
+  "evidenceClass": "pre-fork-local-bakeoff",
+  "notes": [
+    "D4 trials used the fixture-owned state as effect evidence.",
+    "Foreground application identity was observed before and after each trial.",
+    "These pre-fork trials did not record cursor invariance; the M0 self-hosted lane now requires it before labeling a new trial D4."
+  ]
+}

@@ -11,4 +11,5 @@ DerivedData/
 __pycache__/
 # Local-only demo kit (AcmeBilling + run-of-show); not part of the shipped server.
 /demo/
+/artifacts/
 .devin/

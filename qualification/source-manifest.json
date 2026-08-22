@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "fork": "blazncloud/blazn-computer-use",
+  "upstream": "minghinmatthewlam/computer-use-mcp",
+  "baselineCommit": "82dd8093e44819c51537f489059e172777d7f1d7",
+  "license": "MIT",
+  "primaryAgentInterface": "mcp-stdio",
+  "canonicalExecutableInterface": "json-cli",
+  "optionalRemoteInterface": "mcp-streamable-http",
+  "requiredExternalServices": [],
+  "requiredModelProviders": []
+}

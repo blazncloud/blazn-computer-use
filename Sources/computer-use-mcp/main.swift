@@ -51,7 +51,8 @@ func printUsage() {
         USAGE:
           computer-use-mcp serve                 Run the MCP server over stdio
           computer-use-mcp daemon                Run the shared engine daemon (spawned on demand)
-          computer-use-mcp call <tool> [<json>]  Invoke a single tool (dev harness)
+          computer-use-mcp call [--json] <tool> [<json>]
+                                                 Invoke one tool; --json preserves the MCP result shape
           computer-use-mcp doctor [--prompt]     Check required macOS permissions
           computer-use-mcp health_report [--json] [--probe-capture]
                                                  Report identity, permissions, capture, and daemon diagnostics

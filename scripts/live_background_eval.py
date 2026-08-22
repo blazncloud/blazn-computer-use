@@ -10,6 +10,7 @@ through MCP, and assert foreground focus did not change.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
 import re
@@ -27,6 +28,30 @@ LIVE_ENV = "COMPUTER_USE_MCP_RUN_LIVE_BACKGROUND_EVAL"
 FIXTURE_NAME = "BackgroundControlFixture"
 FIXTURE_BUNDLE_ID = "dev.computer-use-mcp.background-fixture"
 TOOL_BIN = resolve_binary()
+
+
+class CGPoint(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+
+def cursor_position() -> dict[str, float]:
+    application_services = ctypes.CDLL(
+        "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices")
+    core_foundation = ctypes.CDLL(
+        "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+    application_services.CGEventCreate.argtypes = [ctypes.c_void_p]
+    application_services.CGEventCreate.restype = ctypes.c_void_p
+    application_services.CGEventGetLocation.argtypes = [ctypes.c_void_p]
+    application_services.CGEventGetLocation.restype = CGPoint
+    core_foundation.CFRelease.argtypes = [ctypes.c_void_p]
+    event = application_services.CGEventCreate(None)
+    if not event:
+        raise RuntimeError("could not observe physical cursor position")
+    try:
+        point = application_services.CGEventGetLocation(event)
+        return {"x": point.x, "y": point.y}
+    finally:
+        core_foundation.CFRelease(event)
 
 
 def run(args: list[str], *, timeout: int = 30, capture: bool = True) -> subprocess.CompletedProcess[str]:
@@ -165,6 +190,7 @@ def live_eval() -> dict[str, object]:
     run(["swift", "build"], timeout=120)
     bundle = build_fixture()
     before = frontmost_app()
+    cursor_before = cursor_position()
     cleanup_fixture()
     run(["open", "-gj", str(bundle)], timeout=10)
     wait_for_fixture()
@@ -241,6 +267,7 @@ def live_eval() -> dict[str, object]:
     )
 
     after = require_frontmost(before, "live background eval")
+    cursor_after = cursor_position()
     verification = mcp_call("get_app_state", {"app": FIXTURE_NAME, "max_elements": 200})
     all_steps_passed = all(step["passed"] for step in steps)
 
@@ -251,9 +278,12 @@ def live_eval() -> dict[str, object]:
         "frontmost_before": before,
         "frontmost_after": after,
         "frontmost_unchanged": before == after,
+        "cursor_before": cursor_before,
+        "cursor_after": cursor_after,
+        "cursor_unchanged": cursor_before == cursor_after,
         "steps": steps,
         "value_observed": expected in verification or typed in verification,
-        "passed": before == after and all_steps_passed,
+        "passed": before == after and cursor_before == cursor_after and all_steps_passed,
     }
 
 

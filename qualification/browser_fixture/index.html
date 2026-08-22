@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Blazn computer-use fixture</title>
+</head>
+<body>
+  <main>
+    <h1>Blazn browser qualification</h1>
+    <p>Challenge value: <strong id="challenge">cobalt-otter-417</strong></p>
+    <button id="replace" type="button">Replace form</button>
+    <button id="drift" type="button">Apply layout drift</button>
+    <section id="mount"></section>
+    <p id="status" role="status" aria-live="polite"></p>
+  </main>
+  <template id="form-template">
+    <form id="profile-form">
+      <label>Full name <input name="name" autocomplete="off"></label>
+      <label>Email address <input name="email" type="email" autocomplete="off"></label>
+      <label>Plan
+        <select name="plan">
+          <option value="">Choose one</option>
+          <option value="portable">Portable</option>
+          <option value="integrated">Integrated</option>
+        </select>
+      </label>
+      <label><input name="updates" type="checkbox"> Receive benchmark updates</label>
+      <button type="submit">Save benchmark profile</button>
+    </form>
+  </template>
+  <script>
+    const mount = document.querySelector('#mount');
+    const status = document.querySelector('#status');
+    function installForm() {
+      mount.replaceChildren(document.querySelector('#form-template').content.cloneNode(true));
+      mount.querySelector('form').addEventListener('submit', async event => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const response = await fetch('/api/submit', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            name: form.elements.name.value,
+            email: form.elements.email.value,
+            plan: form.elements.plan.value,
+            updates: form.elements.updates.checked,
+            challenge: document.querySelector('#challenge').textContent
+          })
+        });
+        status.textContent = response.ok ? 'Saved with verified server state' : 'Save failed';
+      });
+    }
+    document.querySelector('#replace').addEventListener('click', installForm);
+    document.querySelector('#drift').addEventListener('click', () => {
+      mount.style.display = mount.style.display === 'flex' ? 'block' : 'flex';
+      mount.style.flexDirection = 'column-reverse';
+      const button = mount.querySelector('button[type=submit]');
+      if (button) button.textContent = 'Commit profile';
+    });
+    installForm();
+  </script>
+</body>
+</html>

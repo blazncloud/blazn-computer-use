@@ -1,0 +1,31 @@
+{
+  "interfaces": {
+    "canonicalExecutable": "json-cli",
+    "optionalRemote": "mcp-streamable-http",
+    "primaryAgent": "mcp-stdio"
+  },
+  "requiredExternalServices": [],
+  "requiredModelProviders": [],
+  "schemaVersion": 1,
+  "source": "Sources/computer-use-mcp/Tools/Catalog.swift",
+  "toolCount": 17,
+  "tools": [
+    "list_apps",
+    "get_app_state",
+    "click",
+    "type_text",
+    "press_key",
+    "scroll",
+    "drag",
+    "set_value",
+    "select_text",
+    "perform_secondary_action",
+    "open_app",
+    "open_url",
+    "list_windows",
+    "manage_window",
+    "read_clipboard",
+    "health_report",
+    "write_clipboard"
+  ]
+}

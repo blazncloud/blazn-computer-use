@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "browser": [
+    {"id": "B1-read", "oracle": "exact challenge text"},
+    {"id": "B2-form", "oracle": "server-side JSON state"},
+    {"id": "B3-drift", "oracle": "server-side JSON state after layout drift"},
+    {"id": "B4-stale", "oracle": "old reference rejected, refreshed action verified"}
+  ],
+  "desktop": [
+    {"id": "D1-observe", "oracle": "fixture control inventory"},
+    {"id": "D2-form", "oracle": "fixture-owned state file"},
+    {"id": "D3-ambiguity", "oracle": "structured ambiguity refusal"},
+    {"id": "D4-background", "oracle": "state effect plus unchanged focus and cursor"}
+  ]
+}

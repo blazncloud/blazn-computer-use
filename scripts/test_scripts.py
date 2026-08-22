@@ -9,6 +9,7 @@ bundle scaffolding suitable for hosted CI.
 from __future__ import annotations
 
 import os
+import math
 import unittest
 
 import tempfile
@@ -20,6 +21,7 @@ import check_version_consistency
 import common
 import deploy_app_bundle
 import preflight
+import live_background_eval
 
 
 class ScriptHelperTests(unittest.TestCase):
@@ -32,6 +34,11 @@ class ScriptHelperTests(unittest.TestCase):
         for name in preflight.LIVE_ENV_VARS:
             self.assertEqual(env[name], "0")
         self.assertEqual(env["COMPUTER_USE_MCP_BIN"], "/tmp/tool")
+
+    def test_cursor_position_has_finite_coordinates(self) -> None:
+        position = live_background_eval.cursor_position()
+        self.assertTrue(set(position) == {"x", "y"})
+        self.assertTrue(all(math.isfinite(value) for value in position.values()))
 
     def test_default_preflight_binary_ignores_ambient_env(self) -> None:
         old = os.environ.get("COMPUTER_USE_MCP_BIN")

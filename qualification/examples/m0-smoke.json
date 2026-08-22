@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "project": "blazncloud/blazn-computer-use",
+  "commit": "82dd8093e44819c51537f489059e172777d7f1d7",
+  "taskId": "D1-observe",
+  "evidenceClass": "protocol",
+  "backend": "macos-accessibility",
+  "client": "m0-qualifier",
+  "model": null,
+  "startedAt": "2026-08-22T00:00:00Z",
+  "durationMs": 1,
+  "actionOutcome": "read_only",
+  "oracle": {
+    "type": "schema-fixture",
+    "status": "passed",
+    "evidence": {"fixture": true}
+  },
+  "artifacts": [],
+  "environment": {"os": "macOS", "architecture": "arm64"}
+}
