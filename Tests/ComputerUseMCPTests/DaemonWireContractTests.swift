@@ -636,27 +636,32 @@ private final class LockedWireFixtureState: @unchecked Sendable {
 
 private actor WireGate {
     private var opened = false
-    private let stream: AsyncStream<Void>
-    private let continuation: AsyncStream<Void>.Continuation
-
-    init() {
-        var continuation: AsyncStream<Void>.Continuation!
-        stream = AsyncStream<Void> { continuation = $0 }
-        self.continuation = continuation
-    }
+    private var waiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
 
     func wait() async -> Bool {
-        if opened { return true }
-        for await _ in stream {
-            return !Task.isCancelled
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await suspend(id: id)
+        } onCancel: {
+            Task { await self.cancel(id: id) }
         }
-        return opened && !Task.isCancelled
+    }
+
+    private func suspend(id: UUID) async -> Bool {
+        if opened { return true }
+        if Task.isCancelled { return false }
+        return await withCheckedContinuation { waiters[id] = $0 }
+    }
+
+    private func cancel(id: UUID) {
+        waiters.removeValue(forKey: id)?.resume(returning: false)
     }
 
     func open() {
         opened = true
-        continuation.yield()
-        continuation.finish()
+        let pending = waiters.values
+        waiters.removeAll()
+        pending.forEach { $0.resume(returning: true) }
     }
 }
 
