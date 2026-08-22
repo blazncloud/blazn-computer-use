@@ -51,13 +51,16 @@ def main() -> int:
     output = Path(args.output) if args.output else ROOT / "artifacts/m0" / commit / "qualification.json"
     parity_output = output.parent / "mcp-cli-parity.json"
     commands: list[tuple[str, list[str], int]] = [
-        ("qualification_tests", [sys.executable, "qualification/test_qualification.py"], 30),
+        ("qualification_tests", [sys.executable, "qualification/test_qualification.py"], 60),
         ("capability_inventory", [sys.executable, "scripts/generate_capability_inventory.py", "--check"], 30),
     ]
     if not args.skip_build:
         commands += [
             ("swift_build", ["swift", "build"], 600),
-            ("swift_test", ["swift", "test"], 600),
+            ("swift_test", ["swift", "test", "--no-parallel"], 600),
+            ("dependency_lock_unchanged", [
+                "git", "diff", "--exit-code", "--", "Package.resolved",
+            ], 30),
         ]
     commands += [
         ("cli_version", [args.bin, "version"], 30),

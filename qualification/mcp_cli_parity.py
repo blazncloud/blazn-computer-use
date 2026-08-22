@@ -21,9 +21,10 @@ PROVIDER_ENV = {
 
 def child_env() -> dict[str, str]:
     env = {key: value for key, value in os.environ.items() if key not in PROVIDER_ENV}
-    home = ROOT / ".build/m0-home"
+    home = Path("/tmp") / f"blazn-m0-home-{os.getuid()}"
     home.mkdir(parents=True, exist_ok=True)
     env["CFFIXED_USER_HOME"] = str(home)
+    env["TMPDIR"] = str(home)
     env["COMPUTER_USE_MCP_NO_TELEMETRY"] = "1"
     return env
 

@@ -38,8 +38,15 @@ class QualificationTests(unittest.TestCase):
 
     def test_browser_fixture_has_independent_server_oracle(self) -> None:
         server = make_server("127.0.0.1", 0)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        serving = threading.Event()
+
+        def serve() -> None:
+            serving.set()
+            server.serve_forever(poll_interval=0.01)
+
+        thread = threading.Thread(target=serve, daemon=True)
         thread.start()
+        self.assertTrue(serving.wait(timeout=1), "browser fixture server did not start")
         base = f"http://127.0.0.1:{server.server_address[1]}"
         try:
             page = urlopen(base, timeout=3).read().decode()
@@ -62,6 +69,7 @@ class QualificationTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=3)
+            self.assertFalse(thread.is_alive(), "browser fixture server did not stop")
 
     def test_capability_inventory_is_current(self) -> None:
         subprocess.check_call([
