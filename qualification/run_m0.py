@@ -27,6 +27,12 @@ def run(name: str, command: list[str], timeout: int) -> dict[str, object]:
             line for line in result.stdout.splitlines()
             if any(marker in line for marker in issue_markers)
         ]
+        stdout_lines = result.stdout.splitlines()
+        issue_contexts = [
+            "\n".join(stdout_lines[max(0, index - 2):index + 5])
+            for index, line in enumerate(stdout_lines)
+            if any(marker in line for marker in issue_markers)
+        ]
         return {
             "name": name,
             "passed": result.returncode == 0,
@@ -35,6 +41,7 @@ def run(name: str, command: list[str], timeout: int) -> dict[str, object]:
             "stdoutTail": result.stdout[-40000:],
             "stderrTail": result.stderr[-40000:],
             "issueLines": issue_lines,
+            "issueContexts": issue_contexts,
         }
     except (OSError, subprocess.TimeoutExpired) as error:
         return {
