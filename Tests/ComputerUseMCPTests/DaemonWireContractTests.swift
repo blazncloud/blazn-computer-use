@@ -529,7 +529,9 @@ private final class WireClient: @unchecked Sendable {
         descriptorLock.lock()
         let descriptor = fd
         descriptorLock.unlock()
-        guard descriptor >= 0 else { throw WireFixtureError.closed }
+        guard descriptor >= 0 else {
+            throw WireFixtureError.closed(requestID: request.id)
+        }
         var data = try JSONEncoder().encode(request)
         data.append(0x0A)
         let written = data.withUnsafeBytes { buffer in
@@ -539,7 +541,7 @@ private final class WireClient: @unchecked Sendable {
             throw WireFixtureError.systemCall("send", errno)
         }
         guard let line = readJSONLine(from: descriptor) else {
-            throw WireFixtureError.closed
+            throw WireFixtureError.closed(requestID: request.id)
         }
         let response = try JSONDecoder().decode(
             DaemonResponse.self, from: line)
@@ -624,7 +626,7 @@ private actor WireGate {
 }
 
 private enum WireFixtureError: Error {
-    case closed
+    case closed(requestID: Int)
     case systemCall(String, Int32)
     case unexpectedResponseID(expected: Int, actual: Int)
 }
