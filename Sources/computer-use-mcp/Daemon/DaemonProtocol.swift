@@ -2,6 +2,7 @@
 // JSON over a unix domain socket. Logical sessions survive reconnects and
 // identify operation ownership in AppMutationCoordinator.
 
+import Darwin
 import Foundation
 import Security
 import MCP
@@ -33,6 +34,10 @@ func daemonRuntimePaths(createRuntimeDirectory: Bool = true) -> DaemonRuntimePat
     )
 }
 
+func daemonSocketPathFits(_ path: String) -> Bool {
+    path.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path)
+}
+
 func runtimeDirectory() -> URL {
     runtimeDirectoryURL(create: true)
 }
@@ -46,9 +51,13 @@ struct DaemonRuntimePaths: Codable {
 }
 
 private func runtimeDirectoryURL(create: Bool) -> URL {
-    let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-        ?? FileManager.default.temporaryDirectory
-    let directory = base.appendingPathComponent("computer-use-mcp", isDirectory: true)
+    // The cache directory is derived from the effective home and can exceed
+    // sockaddr_un.sun_path. Darwin's user temp directory is OS-managed,
+    // per-user, and independent of home spelling or length.
+    let base = darwinUserTemporaryDirectory()
+        ?? URL(fileURLWithPath: "/tmp", isDirectory: true)
+    let directory = base.appendingPathComponent(
+        "blazn-cu-\(geteuid())", isDirectory: true)
     if create {
         try? FileManager.default.createDirectory(
             at: directory,
@@ -58,6 +67,19 @@ private func runtimeDirectoryURL(create: Bool) -> URL {
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
     }
     return directory
+}
+
+private func darwinUserTemporaryDirectory() -> URL? {
+    let length = confstr(_CS_DARWIN_USER_TEMP_DIR, nil, 0)
+    guard length > 1 else { return nil }
+    var buffer = [CChar](repeating: 0, count: length)
+    let written = buffer.withUnsafeMutableBufferPointer {
+        confstr(_CS_DARWIN_USER_TEMP_DIR, $0.baseAddress, length)
+    }
+    guard written > 0 else {
+        return nil
+    }
+    return URL(fileURLWithPath: String(cString: buffer), isDirectory: true)
 }
 
 private enum DaemonPathComponent {

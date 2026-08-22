@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import MCP
 import Testing
@@ -5,6 +6,21 @@ import Testing
 @testable import computer_use_mcp
 
 @Suite struct DaemonSafetyTests {
+    @Test func daemonRuntimeSocketIsShortAndIndependentOfHome() {
+        let paths = daemonRuntimePaths(createRuntimeDirectory: false)
+
+        #expect(daemonSocketPathFits(paths.socket))
+        #expect(paths.directory.contains("blazn-cu-\(geteuid())"))
+        #expect(!paths.directory.contains(FileManager.default.homeDirectoryForCurrentUser.path))
+    }
+
+    @Test func socketPathValidationCountsUTF8Bytes() {
+        let capacity = MemoryLayout.size(ofValue: sockaddr_un().sun_path)
+        #expect(daemonSocketPathFits(String(repeating: "a", count: capacity - 1)))
+        #expect(!daemonSocketPathFits(String(repeating: "a", count: capacity)))
+        #expect(!daemonSocketPathFits(String(repeating: "é", count: capacity / 2)))
+    }
+
     @Test func daemonRequestCarriesAuthToken() throws {
         let request = DaemonRequest(id: 7, method: "hello", version: "test-version", authToken: "secret")
         let data = try JSONEncoder().encode(request)
