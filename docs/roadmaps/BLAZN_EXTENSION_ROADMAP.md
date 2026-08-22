@@ -19,6 +19,27 @@ Codex, Claude, Gemini, Open Interpreter, Agent TARS, Pydantic AI, and custom
 Blazn runtimes must be clients of the same core rather than separate execution
 implementations.
 
+## Architecture decision
+
+- MCP over stdio is the primary local agent interface because it gives any
+  harness typed discovery, structured actions, screenshots, and outcomes.
+- A structured JSON CLI is the canonical executable contract and universal
+  fallback. CI, debugging, shell-capable agents, and MCP adapters invoke the
+  same core behavior through this contract.
+- MCP is an adapter, not the runtime. The engine, daemon, sessions, policies,
+  backend drivers, and effect verification do not depend on an MCP host.
+- MCP Streamable HTTP is optional for self-hosted remote workers. Local use has
+  no network-service requirement.
+- MCP and CLI expose the same versioned action, observation, outcome, error,
+  idempotency, and artifact schemas. Neither interface may invent a second
+  execution path.
+- The core has no model loop and requires no external service, cloud browser,
+  hosted model, telemetry endpoint, or API key. Optional clients and remote
+  backends remain replaceable and self-hostable.
+- Browser automation uses a local backend by default. External browser or
+  sandbox services may be added only as optional adapters and never become a
+  required dependency.
+
 ## Delivery rules
 
 - Keep `main` releasable. Each milestone lands through small, independently
@@ -81,6 +102,9 @@ Deliverables:
 - add a source/commit manifest and generated capability inventory;
 - establish CI lanes for unit, build, protocol smoke, browser fixture, package,
   and self-hosted macOS live proof.
+- establish MCP/JSON-CLI parity checks against the same operation fixtures;
+- add a dependency-boundary test proving the local core starts and runs without
+  model, cloud-browser, telemetry, or external-service configuration.
 
 End-to-end acceptance:
 
@@ -88,9 +112,13 @@ End-to-end acceptance:
    tracked dependency files.
 2. `swift test`, CLI version/help/health, and MCP initialize/tools-list pass.
 3. The benchmark runner rejects a result missing its independent oracle.
-4. A retained baseline report records 17 tools, MCP startup, schema bytes, and
+4. MCP and JSON CLI return equivalent structured outcomes for the same
+   read-only and mutating fixture operations.
+5. The local core completes D1/D2 with outbound network disabled and no API
+   keys or provider configuration.
+6. A retained baseline report records 17 tools, MCP startup, schema bytes, and
    three clean D4 trials.
-5. Upstream-sync dry-run proves no accidental force push or default-branch
+7. Upstream-sync dry-run proves no accidental force push or default-branch
    divergence.
 
 Exit artifact: `artifacts/m0/<commit>/qualification.json`.
@@ -361,4 +389,3 @@ A milestone is complete only when:
 - documentation and capability claims match observed evidence;
 - cleanup and rollback are proven;
 - the next consumer or milestone is explicitly activated.
-
