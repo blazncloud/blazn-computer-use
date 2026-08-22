@@ -22,6 +22,11 @@ def run(name: str, command: list[str], timeout: int) -> dict[str, object]:
     try:
         result = subprocess.run(
             command, cwd=ROOT, text=True, capture_output=True, timeout=timeout)
+        issue_markers = ("recorded an issue", "Caught error", "Expectation failed", "✘")
+        issue_lines = [
+            line for line in result.stdout.splitlines()
+            if any(marker in line for marker in issue_markers)
+        ]
         return {
             "name": name,
             "passed": result.returncode == 0,
@@ -29,6 +34,7 @@ def run(name: str, command: list[str], timeout: int) -> dict[str, object]:
             "durationMs": round((time.perf_counter() - started) * 1000, 3),
             "stdoutTail": result.stdout[-40000:],
             "stderrTail": result.stderr[-40000:],
+            "issueLines": issue_lines,
         }
     except (OSError, subprocess.TimeoutExpired) as error:
         return {

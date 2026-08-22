@@ -66,7 +66,10 @@ def invariants(result: dict[str, object]) -> dict[str, object]:
         "reportVersion": structured.get("reportVersion"),
         "accessibility": permissions.get("accessibility"),
         "screenRecording": permissions.get("screenRecording"),
-        "tccAttribution": structured.get("tccAttribution"),
+        # The responsible process legitimately differs: direct CLI calls are
+        # attributed to the executable while daemon-backed MCP calls are
+        # attributed to launchd. Presence is the stable contract.
+        "tccAttributionPresent": bool(structured.get("tccAttribution")),
     }
 
 
