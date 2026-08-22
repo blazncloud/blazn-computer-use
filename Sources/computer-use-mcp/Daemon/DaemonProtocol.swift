@@ -90,6 +90,7 @@ struct DaemonResponse: Codable, Sendable {
     var id: Int
     var isError: Bool? = nil
     var content: [DaemonContent]? = nil
+    var structuredContent: Value? = nil
     var _meta: Metadata? = nil
     var version: String? = nil
     /// Present and true only after the daemon accepted the auth token.
@@ -336,11 +337,20 @@ struct DaemonContent: Codable, Sendable {
 
 extension DaemonResponse {
     static func from(_ result: CallTool.Result, id: Int) -> DaemonResponse {
-        DaemonResponse(id: id, isError: result.isError, content: result.content.map(DaemonContent.from), _meta: result._meta)
+        DaemonResponse(
+            id: id,
+            isError: result.isError,
+            content: result.content.map(DaemonContent.from),
+            structuredContent: result.structuredContent,
+            _meta: result._meta)
     }
 
     var asCallToolResult: CallTool.Result {
-        .init(content: (content ?? []).map(\.asToolContent), isError: isError, _meta: _meta)
+        .init(
+            content: (content ?? []).map(\.asToolContent),
+            structuredContent: structuredContent,
+            isError: isError,
+            _meta: _meta)
     }
 }
 

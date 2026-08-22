@@ -27,8 +27,8 @@ def run(name: str, command: list[str], timeout: int) -> dict[str, object]:
             "passed": result.returncode == 0,
             "returncode": result.returncode,
             "durationMs": round((time.perf_counter() - started) * 1000, 3),
-            "stdoutTail": result.stdout[-4000:],
-            "stderrTail": result.stderr[-4000:],
+            "stdoutTail": result.stdout[-40000:],
+            "stderrTail": result.stderr[-40000:],
         }
     except (OSError, subprocess.TimeoutExpired) as error:
         return {

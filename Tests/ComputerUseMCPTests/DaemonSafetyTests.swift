@@ -158,6 +158,7 @@ import Testing
     @Test func daemonResponsePreservesCallToolMetadata() throws {
         let result = CallTool.Result(
             content: [.text(text: "ok", annotations: nil, _meta: nil)],
+            structuredContent: .object(["status": .string("ready")]),
             _meta: Metadata(additionalFields: ["computer-use-mcp/focus": .object(["focus_changed": .bool(false)])])
         )
         let response = DaemonResponse.from(result, id: 9)
@@ -169,6 +170,7 @@ import Testing
             return
         }
         #expect(fields["focus_changed"]?.boolValue == false)
+        #expect(decoded.structuredContent?.objectValue?["status"]?.stringValue == "ready")
     }
 
     @Test func constantTimeEqualityChecksValueAndLength() {

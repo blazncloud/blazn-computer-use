@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 import threading
 import unittest
@@ -14,7 +13,9 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "qualification"))
 sys.path.insert(0, str(ROOT / "qualification" / "browser_fixture"))
+sys.path.insert(0, str(ROOT / "scripts"))
 
+from generate_capability_inventory import inventory  # noqa: E402
 from server import make_server  # noqa: E402
 from validate_result import validate_result  # noqa: E402
 
@@ -72,9 +73,9 @@ class QualificationTests(unittest.TestCase):
             self.assertFalse(thread.is_alive(), "browser fixture server did not stop")
 
     def test_capability_inventory_is_current(self) -> None:
-        subprocess.check_call([
-            sys.executable, "scripts/generate_capability_inventory.py", "--check"
-        ], cwd=ROOT)
+        expected = json.dumps(inventory(), indent=2, sort_keys=True) + "\n"
+        actual = (ROOT / "qualification/capabilities.json").read_text(encoding="utf-8")
+        self.assertEqual(expected, actual)
 
     def test_baseline_retains_three_clean_background_trials(self) -> None:
         baseline = json.loads(
