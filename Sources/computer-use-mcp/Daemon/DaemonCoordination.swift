@@ -335,10 +335,7 @@ actor DaemonOperationRegistry {
         // Keep the handler behind a synchronous registration barrier so the
         // entry is visible before any operation code can execute.
         let registration = RegistrationGate()
-        // The operation must not inherit this registry actor's executor. A
-        // held mutation awaiting external state would otherwise prevent the
-        // actor from admitting a different-app request or processing cancel.
-        let task = Task.detached {
+        let task = Task {
             await registration.wait()
             guard !Task.isCancelled else { return operationCancelledResult() }
             return await operation()

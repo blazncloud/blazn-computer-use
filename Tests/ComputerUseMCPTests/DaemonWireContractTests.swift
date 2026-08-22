@@ -268,9 +268,8 @@ private final class DaemonWireFixture: @unchecked Sendable {
             throw WireFixtureError.systemCall("socketpair", errno)
         }
         // Keep a bounded deadline for a deliberately held operation while
-        // leaving enough room for the hosted runner to schedule the sibling
-        // connection that releases or cancels it.
-        var timeout = timeval(tv_sec: 60, tv_usec: 0)
+        // leaving enough room for the sibling connection to release it.
+        var timeout = timeval(tv_sec: 10, tv_usec: 0)
         guard setsockopt(
             sockets[0], SOL_SOCKET, SO_RCVTIMEO, &timeout,
             socklen_t(MemoryLayout<timeval>.size)) == 0
@@ -527,9 +526,18 @@ private final class WireClient: @unchecked Sendable {
     }
 
     func exchange(_ request: DaemonRequest) async throws -> DaemonResponse {
-        try await Task.detached { [self] in
-            try exchangeSynchronously(request)
-        }.value
+        // read(2) is blocking and uncancellable. Running two held exchanges on
+        // Task.detached can exhaust a two-core Swift cooperative executor and
+        // starve the task that releases them. GCD owns blocking worker threads.
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global().async { [self] in
+                do {
+                    continuation.resume(returning: try exchangeSynchronously(request))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
     }
 
     func close() {
