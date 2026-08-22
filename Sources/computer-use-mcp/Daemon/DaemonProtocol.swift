@@ -79,7 +79,11 @@ private func darwinUserTemporaryDirectory() -> URL? {
     guard written > 0 else {
         return nil
     }
-    return URL(fileURLWithPath: String(cString: buffer), isDirectory: true)
+    let terminator = buffer.firstIndex(of: 0) ?? buffer.endIndex
+    let bytes = buffer[..<terminator].map { UInt8(bitPattern: $0) }
+    return URL(
+        fileURLWithPath: String(decoding: bytes, as: UTF8.self),
+        isDirectory: true)
 }
 
 private enum DaemonPathComponent {
